@@ -91,6 +91,10 @@ class DesignIn(BaseModel):
     glassId: str = "temp10"
     overPanel: bool = False
     doorH: int = 2100
+    flSystem: str = "klpatches"     # swing hardware: klpatches|nondigging|sanhe|spider
+    slideSystem: str = "scl"        # sliding hardware: scl|sh005
+    cornerAfter: int = -1           # L-shape: last bay on the main wall (-1 = straight)
+    scene: str = "shopfront"        # realistic 3D context: shopfront|bathroom
 
     def engine_dict(self) -> dict:
         """Map to the pricing-engine payload (snake_case section arrays)."""
@@ -100,6 +104,9 @@ class DesignIn(BaseModel):
         d["glass_id"] = d.pop("glassId")
         d["over_panel"] = d.pop("overPanel")
         d["door_h"] = d.pop("doorH")
+        d["fl_system"] = d.pop("flSystem")
+        d["slide_system"] = d.pop("slideSystem")
+        d["corner_after"] = d.pop("cornerAfter")
         return d
 
 

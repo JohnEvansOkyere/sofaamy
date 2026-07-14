@@ -5,12 +5,13 @@ import CurtainWallCanvas from './CurtainWallCanvas.jsx'
 import CutPlan from './CutPlan.jsx'
 import GlassOrder from './GlassOrder.jsx'
 
-// 3D view is heavy (three.js) — loaded only when first opened
+// 3D views are heavy (three.js) — loaded only when first opened
 const Design3D = lazy(() => import('./Design3D.jsx'))
+const Frameless3D = lazy(() => import('./Frameless3D.jsx'))
 import { DESIGN_GROUPS, DIVIDER_LAYOUTS, templateById, buildDesign, resizeGrid, setSize, setSectionSize, moveDivider, designLayout } from '../../lib/designs.js'
 import { FL_GROUPS, flTemplateById, buildFrameless } from '../../lib/frameless.js'
 import { CW_GROUPS, cwTemplateById, buildCurtainWall } from '../../lib/curtainwall.js'
-import { CATEGORIES, OPENINGS, OPENING_DESIGNS, openingDesignById, GLASS, FRAMES, SYSTEMS, FINISH_TYPES, FL_GLASS, FL_PANEL_TYPES, FL_FAB, CW_CELL_TYPES } from '../../lib/products.js'
+import { CATEGORIES, OPENINGS, OPENING_DESIGNS, openingDesignById, GLASS, FRAMES, SYSTEMS, FINISH_TYPES, FL_GLASS, FL_PANEL_TYPES, FL_FAB, FL_SYSTEMS, FL_SYSTEM_CHOICES, CW_CELL_TYPES } from '../../lib/products.js'
 import { calcQuote, designBOMAny, GHS } from '../../lib/pricing.js'
 import { downloadQuotePdf, createJobFromDesign, downloadReport, saveDesign, listDesigns } from '../../lib/api.js'
 import { IconCube, IconDownload, IconWhatsApp, IconCheck, IconFile, IconPlus, IconLayers } from '../icons.jsx'
@@ -264,6 +265,21 @@ export default function Configurator() {
     try { await downloadReport(kind, client, design); fire(`📄 ${label} downloaded`) }
     catch (e) { apiFail(e) }
   }
+  // save + copy a public client link (2D/3D/Real viewer) — the thing
+  // Sofaamy WhatsApps to their customer
+  const onShareLink = async () => {
+    try {
+      const r = await saveDesign(client, design)
+      refreshSaved()
+      const url = `${window.location.origin}/share/${r.share_token}`
+      try {
+        await navigator.clipboard.writeText(url)
+        fire('🔗 Client link copied — paste it into WhatsApp')
+      } catch {
+        window.prompt('Client link — copy it:', url)
+      }
+    } catch (e) { apiFail(e) }
+  }
 
   const [saved, setSaved] = useState([])
   const refreshSaved = () => listDesigns().then(setSaved).catch(() => {})
@@ -457,15 +473,18 @@ export default function Configurator() {
                   : <DesignCanvas design={design} stageW={dims.w} stageH={dims.h} selected={selected} onSelect={setSelected} onDividerMove={onDividerMove} />)
             : <div style={{ width: dims.w, height: dims.h }}>
                 <Suspense fallback={<div className="drop-zone"><div className="dz-title">Loading 3D…</div></div>}>
-                  <Design3D design={design} wall={wall} />
+                  {design.category === 'frameless'
+                    ? <Frameless3D design={design} scene={wall} />
+                    : <Design3D design={design} wall={wall} />}
                 </Suspense>
               </div>}
 
-          {design && design.category === 'frame' && (
+          {design && (design.category === 'frame' || design.category === 'frameless') && (
             <div className="view-switch">
               <button className={view==='2d'?'on':''} onClick={() => setView('2d')}>2D</button>
               <button className={view==='3d'&&!wall?'on':''} onClick={() => { setView('3d'); setWall(false) }}>3D</button>
-              <button className={view==='3d'&&wall?'on':''} onClick={() => { setView('3d'); setWall(true) }}>Wall</button>
+              <button className={view==='3d'&&wall?'on':''} onClick={() => { setView('3d'); setWall(true) }}>
+                {design.category === 'frameless' ? 'Real' : 'Wall'}</button>
             </div>
           )}
         </div>
@@ -572,13 +591,42 @@ export default function Configurator() {
                   {Object.entries(FL_GLASS).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}
                 </select>
 
+                {/* hardware system options — from Sofaamy's frameless list */}
+                {design.cells.some(c => c.type === 'door') && <>
+                  <div className="cfg-label">Swing System</div>
+                  <select className="cfg-select" value={design.flSystem || 'klpatches'}
+                    onChange={e => patch({ flSystem:e.target.value })}>
+                    {FL_SYSTEM_CHOICES.door.map(k => <option key={k} value={k}>{FL_SYSTEMS[k].label}</option>)}
+                  </select>
+                </>}
+                {design.cells.some(c => c.type === 'slider') && <>
+                  <div className="cfg-label">Sliding System</div>
+                  <select className="cfg-select" value={design.slideSystem || 'scl'}
+                    onChange={e => patch({ slideSystem:e.target.value })}>
+                    {FL_SYSTEM_CHOICES.slider.map(k => <option key={k} value={k}>{FL_SYSTEMS[k].label}</option>)}
+                  </select>
+                </>}
+
                 <div className="cfg-label">Panels</div>
                 <Stepper label="Panels in run" value={design.cols} min={1} max={8} onChange={setPanelCount} />
                 <label className="check-row">
                   <input type="checkbox" checked={design.overPanel}
                     onChange={e => patch({ overPanel:e.target.checked })}/>
-                  <span>Over-panel above doors (transom lite)</span>
+                  <span>Fanlight above doors (over-panel)</span>
                 </label>
+
+                <div className="cfg-label">Layout</div>
+                <select className="cfg-select" value={design.cornerAfter >= 0 ? design.cornerAfter : -1}
+                  onChange={e => patch({ cornerAfter:+e.target.value })}>
+                  <option value={-1}>Straight run</option>
+                  {Array.from({ length: design.cols - 1 }).map((_, k) =>
+                    <option key={k} value={k}>L-shape — corner after P{k + 1}</option>)}
+                </select>
+                <select className="cfg-select" value={design.scene || 'shopfront'}
+                  onChange={e => patch({ scene:e.target.value })} title="Context used by the Real 3D view">
+                  <option value="shopfront">Real view: Shopfront / building</option>
+                  <option value="bathroom">Real view: Bathroom / shower room</option>
+                </select>
                 {design.overPanel && (
                   <div className="dim-row">
                     <label>Door height</label>
@@ -678,6 +726,7 @@ export default function Configurator() {
               <div className="q-sum" style={{ borderTop:'2px solid var(--line)', marginTop:4, paddingTop:10, fontSize:15 }}><b>Total</b><b style={{ color:'var(--navy-600)' }}>{GHS(quote.total)}</b></div>
               <div className="q-actions">
                 <button className="btn btn-gold btn-block" onClick={() => fire(`✅ Quote sent to ${client||'client'} on WhatsApp`)}><IconWhatsApp style={{ width:16, height:16 }} /> Send Quote on WhatsApp</button>
+                <button className="btn btn-ghost btn-block" onClick={onShareLink}><IconCube style={{ width:16, height:16 }} /> Copy Client Link — 2D/3D view</button>
                 <button className="btn btn-ghost btn-block" onClick={onDownloadPdf}><IconDownload style={{ width:16, height:16 }} /> Download Quote PDF</button>
                 <button className="btn btn-primary btn-block" onClick={onSaveJob}><IconCheck style={{ width:16, height:16 }} /> Save & Create Job</button>
               </div>

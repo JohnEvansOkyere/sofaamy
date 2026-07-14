@@ -62,11 +62,13 @@ export default function FramelessCanvas({ design, stageW, stageH, selected, onSe
   const isLeaf = (t) => t === 'door' || t === 'hinged'
   const bd = framelessBreakdown(design)
   const feats = panelFeatures(design, bd.panels)   // feats[i] ↔ cells[i]; over-panel last
-  const leafIdx = cells.map((c, i) => isLeaf(c.type) ? i : -1).filter(i => i >= 0)
-  const hasOver = design.overPanel && leafIdx.length > 0
+  const overIdx = bd.overIdx                       // fanlight bays (leaves, or sliders)
+  const hasOver = overIdx.length > 0
   const overH = height - FL_FAB.floorGapMm - doorH - FL_FAB.overGapMm
   const showOver = hasOver && overH > 60
   const doorTopY = showOver ? mmY(overH + FL_FAB.overGapMm) : oy + gapPx
+  const cornerAt = design.cornerAfter >= 0 && design.cornerAfter < design.cols - 1
+    ? design.cornerAfter : -1                      // L-shape corner joint index
 
   const setCursor = (e, cur) => { const st = e.target.getStage(); if (st) st.container().style.cursor = cur }
 
@@ -85,9 +87,11 @@ export default function FramelessCanvas({ design, stageW, stageH, selected, onSe
           const w = x1 - x0
           const ty = cell.type || 'fixed'
           const leaf = isLeaf(ty)
-          // sliders hang from a top track, so the glass starts below it
+          // sliders hang from a top track (below the fanlight, if any)
+          const slideTop = (showOver && overIdx.includes(i) ? doorTopY : oy + gapPx / 2)
+            + FL_FAB.slideTrackMm * scale
           const top = leaf ? doorTopY
-            : ty === 'slider' ? oy + gapPx / 2 + FL_FAB.slideTrackMm * scale
+            : ty === 'slider' ? slideTop
             : oy + gapPx / 2
           const bot = botY
           const h = bot - top
@@ -135,10 +139,22 @@ export default function FramelessCanvas({ design, stageW, stageH, selected, onSe
           )
         })}
 
-        {/* over-panel band spanning the leaf bays */}
+        {/* L-shape: the run turns 90° at this joint (see 3D view) */}
+        {cornerAt >= 0 && (() => {
+          const cx = ox + cumX[cornerAt + 1] * scale
+          return (
+            <Group listening={false}>
+              <Line points={[cx, oy - 14, cx, floorY + 8]} stroke="#8a5a2b" strokeWidth={2} dash={[8, 5]}/>
+              <Rect x={cx - 32} y={oy - 30} width={64} height={16} fill="#8a5a2b" cornerRadius={3}/>
+              <Text x={cx - 32} y={oy - 27} width={64} align="center" text="CORNER 90°" fontSize={8.5} fontStyle="bold" fill="#fff"/>
+            </Group>
+          )
+        })()}
+
+        {/* fanlight band spanning the leaf (or slider) bays */}
         {showOver && (() => {
-          const xs = ox + cumX[leafIdx[0]] * scale + gapPx / 2
-          const xe = ox + cumX[leafIdx[leafIdx.length - 1] + 1] * scale - gapPx / 2
+          const xs = ox + cumX[overIdx[0]] * scale + gapPx / 2
+          const xe = ox + cumX[overIdx[overIdx.length - 1] + 1] * scale - gapPx / 2
           const yb = mmY(overH)
           const overPanel = bd.panels.find(p => p.type === 'over')
           const overFeats = feats[feats.length - 1]

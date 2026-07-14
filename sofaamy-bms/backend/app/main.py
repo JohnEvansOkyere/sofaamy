@@ -9,11 +9,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 
+import hashlib
+import hmac
 import json
 
 from .database import Base, engine, get_db
 from . import models, schemas
-from .pricing import calc_quote, calc_any_quote, extract_pieces_any
+from .pricing import calc_quote, calc_any_quote, extract_pieces_any, frameless_breakdown
 from .optimizer import optimize
 from .pdf import quote_pdf
 from .reports import (boq_pdf, cutting_list_pdf, work_order_pdf,
@@ -181,6 +183,44 @@ def design_report(kind: str, req: schemas.DesignQuoteIn):
     raise HTTPException(404, f"Unknown report: {kind}")
 
 
+# ── CLIENT SHARE LINKS ──
+# Stateless signed tokens (design id + HMAC) — no schema change, and every
+# saved design is shareable retroactively. Demo secret; env-var in prod.
+SHARE_SECRET = b"sofaamy-demo-share-secret"
+
+
+def share_token(design_id: int) -> str:
+    sig = hmac.new(SHARE_SECRET, str(design_id).encode(), hashlib.sha256).hexdigest()[:12]
+    return f"{design_id}-{sig}"
+
+
+def _shared_design(token: str, db: Session) -> models.DesignRecord:
+    did, _, sig = token.partition("-")
+    if not did.isdigit() or not hmac.compare_digest(share_token(int(did)), token):
+        raise HTTPException(404, "Invalid share link")
+    rec = db.get(models.DesignRecord, int(did))
+    if rec is None:
+        raise HTTPException(404, "Design not found")
+    return rec
+
+
+@app.get("/api/share/{token}")
+def get_shared_design(token: str, db: Session = Depends(get_db)):
+    """Public, read-only view of a saved design — what the client opens
+    from the WhatsApp link. No internal costs, just the quoted totals."""
+    rec = _shared_design(token, db)
+    design = json.loads(rec.design_json)
+    d = schemas.DesignIn(**design).engine_dict()
+    result = calc_any_quote(d)
+    panels = frameless_breakdown(d)["panels"] if d.get("category") == "frameless" else []
+    return {"ref": rec.ref, "name": rec.name, "qty": rec.qty,
+            "location": rec.location, "client_name": rec.client_name,
+            "created_at": rec.created_at.isoformat(),
+            "design": design, "panels": panels,
+            "total": result["total"], "grand_total": result["grand_total"],
+            "area": result["area"], "currency": "GHS"}
+
+
 @app.post("/api/designs")
 def save_design(req: schemas.DesignQuoteIn, db: Session = Depends(get_db)):
     """Save a design so it can be reopened / reused (EvA's saved templates)."""
@@ -192,7 +232,8 @@ def save_design(req: schemas.DesignQuoteIn, db: Session = Depends(get_db)):
         total=result["grand_total"], design_json=req.design.model_dump_json(),
     )
     db.add(rec); db.commit(); db.refresh(rec)
-    return {"id": rec.id, "ref": rec.ref, "name": rec.name, "total": rec.total}
+    return {"id": rec.id, "ref": rec.ref, "name": rec.name, "total": rec.total,
+            "share_token": share_token(rec.id)}
 
 
 @app.get("/api/designs")
@@ -202,6 +243,7 @@ def list_designs(db: Session = Depends(get_db)):
     return [{"id": r.id, "ref": r.ref, "name": r.name, "qty": r.qty,
              "location": r.location, "total": r.total,
              "created_at": r.created_at.isoformat(),
+             "share_token": share_token(r.id),
              "design": json.loads(r.design_json)} for r in recs]
 
 

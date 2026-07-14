@@ -69,6 +69,13 @@ export async function listDesigns() {
   return res.json()
 }
 
+// Public client view of a shared design (no auth — signed token)
+export async function getSharedDesign(token) {
+  const res = await fetch(`${BASE}/api/share/${token}`)
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
 export async function listJobs() {
   const res = await fetch(`${BASE}/api/jobs`)
   if (!res.ok) throw new Error(`API ${res.status}`)

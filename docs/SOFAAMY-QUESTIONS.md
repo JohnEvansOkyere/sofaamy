@@ -101,3 +101,27 @@
 | Frameless gap rules | 5/8/10/10 mm (derived from your job) | K38 |
 | CW profiles & rates | CW Mullion 140, CW Transom 130 GHS/m, plates 35, gaskets 12 GHS/m, anchors 120, spandrel 260 GHS/m² | K39 |
 | Frameless processing | 55 GHS/panel | K40 |
+
+---
+
+## L. Frameless product list (added 14 Jul 2026, after receiving frameless.docx)
+
+Your full frameless list (Hinged / Sliding / Swing systems, 25 configurations) is now built into the configurator, including fanlights and L-shapes. To replace the placeholders it created:
+
+41. **Swing-door system hardware sets & prices** for the options named on your list — **Non-Digging**, **San He**, **Spider** (we have real KL-Patches prices from SGP/4462-26A). Which parts make up each set, and when do you choose one over another?
+42. **SCL SET and SH005 sliding sets** — component codes, unit prices, and which glass thicknesses each accepts.
+43. **L-shape corner joint**: what deduction/gap do you allow where two panels meet at 90° (currently we use the standard 5 mm joint), and is the corner siliconed butt-joint or fitted with a corner profile/clamp?
+44. **Default sizes** per configuration (e.g. standard shower door 800×2000?) — ours are sensible guesses.
+45. **WhatsApp business number** to wire into the client share page's "Chat with us" button (currently a placeholder number).
+
+### Additional placeholders in the build (frameless list)
+| Value in system | Placeholder | Replace with |
+|---|---|---|
+| Non-Digging set | ND-SET · GHS 690 | L41 |
+| San He set | SANHE-SET · GHS 650 | L41 |
+| Spider set | SPIDER-SET · GHS 780 | L41 |
+| SCL sliding set | SCL SET · GHS 950 | L42 |
+| SH005 sliding set | SH005 SET · GHS 850 | L42 |
+| L-corner joint gap | 5 mm (same as inline joint) | L43 |
+| Template default dims | per-template guesses | L44 |
+| Share-page WhatsApp | wa.me/233000000000 | L45 |

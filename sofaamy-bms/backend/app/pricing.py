@@ -200,6 +200,12 @@ FL_HARDWARE = {
     "SH-KNOB":       {"desc": "Shower knob / towel bar — PLACEHOLDER code",     "finish": "Chrome", "price": 60.0},
     "SL-ROLLER":     {"desc": "Sliding roller set — PLACEHOLDER code", "finish": "Stainless Steel", "price": 220.0},
     "SL-TRACK":      {"desc": "Top sliding track, per m — PLACEHOLDER code", "finish": "Aluminium", "price": 180.0},
+    # swing-system alternatives from Sofaamy's frameless list — PLACEHOLDER prices
+    "ND-SET":        {"desc": "Non-digging spring door set (top+bottom patch, no floor cut) — PLACEHOLDER price", "finish": "Stainless Steel", "price": 690.0},
+    "SANHE-SET":     {"desc": "San He patch fitting set — PLACEHOLDER price",   "finish": "Stainless Steel", "price": 650.0},
+    "SPIDER-SET":    {"desc": "Spider fitting door set — PLACEHOLDER price",    "finish": "Stainless Steel", "price": 780.0},
+    "SCL SET":       {"desc": "SCL sliding set — track, rollers, guides — PLACEHOLDER price", "finish": "Stainless Steel", "price": 950.0},
+    "SH005 SET":     {"desc": "SH005 sliding set — track, rollers, guides — PLACEHOLDER price", "finish": "Stainless Steel", "price": 850.0},
 }
 
 FL_SETS = {
@@ -210,6 +216,25 @@ FL_SETS = {
     "slider": [("SL-ROLLER", 1)],
 }
 FL_OVERPANEL_SET = [("BL 203", 2), ("KL-M402", 2)]
+
+# hardware SYSTEM options (mirror of frontend FL_SYSTEMS): the docx's
+# bracket choices swap the pivot/roller part of the set; handle+lock stay.
+FL_SYSTEM_SETS = {
+    "klpatches":  FL_SETS["door"],
+    "nondigging": [("ND-SET", 1), ("JQ 104(900MM)", 1), ("CSM-50W", 1)],
+    "sanhe":      [("SANHE-SET", 1), ("JQ 104(900MM)", 1), ("CSM-50W", 1)],
+    "spider":     [("SPIDER-SET", 1), ("JQ 104(900MM)", 1), ("CSM-50W", 1)],
+    "scl":        [("SCL SET", 1)],
+    "sh005":      [("SH005 SET", 1)],
+}
+
+
+def _fl_panel_set(design: dict, ty: str):
+    if ty == "door":
+        return FL_SYSTEM_SETS.get(design.get("fl_system") or "", FL_SETS["door"])
+    if ty == "slider":
+        return FL_SYSTEM_SETS.get(design.get("slide_system") or "", FL_SETS["slider"])
+    return FL_SETS.get(ty, FL_SETS["fixed"])
 
 # gap rules derived from Sofaamy's real job SGP/4462-26A
 FL_FAB = {"joint": 5, "door_gap": 8, "floor_gap": 10, "over_gap": 10,
@@ -237,9 +262,12 @@ def frameless_breakdown(design: dict) -> dict:
             hw[code] = hw.get(code, 0) + n
 
     full_h = design["height"] - F["floor_gap"]
+    # fanlight spans the leaf bays — or the slider bays when no leaves
     leaf_idx = [i for i, c in enumerate(cells) if _is_leaf(c.get("type") or "fixed")]
+    slider_idx = [i for i, c in enumerate(cells) if (c.get("type") or "fixed") == "slider"]
+    over_idx = (leaf_idx or slider_idx) if design.get("over_panel") else []
     door_h = design.get("door_h") or 2100
-    has_over = bool(design.get("over_panel")) and leaf_idx
+    has_over = bool(over_idx)
     leaf_h = door_h if has_over else full_h - F["joint"]
 
     for i, cell in enumerate(cells):
@@ -249,22 +277,23 @@ def frameless_breakdown(design: dict) -> dict:
             panels.append({"mark": f"P{i + 1}", "type": ty, "w_mm": round(bay - F["joint"]),
                            "h_mm": round(full_h),
                            "holes": "4 × ø18 corner + 1 × ø18 mid (clamps)"})
-            add_hw(FL_SETS["fixed"])
+            add_hw(_fl_panel_set(design, ty))
         elif _is_leaf(ty):
             panels.append({"mark": f"P{i + 1}", "type": ty, "w_mm": round(bay - F["door_gap"]),
                            "h_mm": round(door_h if has_over else leaf_h),
                            "holes": "2 × ø16 handle · patch cutouts top+bottom · lock notch 80×60"
                            if ty == "door" else "2 hinge cutouts · 1 × ø12 knob"})
-            add_hw(FL_SETS[ty])
+            add_hw(_fl_panel_set(design, ty))
         else:
+            slide_h = (door_h if has_over and i in over_idx else full_h) - F["slide_track"]
             panels.append({"mark": f"P{i + 1}", "type": "slider",
                            "w_mm": round(bay + F["slide_overlap"]),
-                           "h_mm": round(full_h - F["slide_track"]),
+                           "h_mm": round(slide_h),
                            "holes": "2 × ø14 roller fixings"})
-            add_hw(FL_SETS["slider"])
+            add_hw(_fl_panel_set(design, ty))
 
     if has_over:
-        span = sum(cw[i % design["cols"]] for i in leaf_idx)
+        span = sum(cw[i % design["cols"]] for i in over_idx)
         over_h = design["height"] - F["floor_gap"] - door_h - F["over_gap"]
         if over_h > 60:
             panels.append({"mark": "TRN1", "type": "over",

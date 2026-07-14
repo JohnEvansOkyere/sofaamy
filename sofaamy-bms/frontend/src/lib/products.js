@@ -170,6 +170,13 @@ export const FL_HARDWARE = {
   'SH-KNOB':       { desc:'Shower knob / towel bar — PLACEHOLDER code',     finish:'Chrome', price:60 },
   'SL-ROLLER':     { desc:'Sliding roller set — PLACEHOLDER code', finish:'Stainless Steel', price:220 },
   'SL-TRACK':      { desc:'Top sliding track, per m — PLACEHOLDER code', finish:'Aluminium', price:180 },
+  // swing-system alternatives from Sofaamy's frameless list (docs/reference/
+  // frameless.docx): NON-DIGGING / SAN HE / SPIDER — prices PLACEHOLDER
+  'ND-SET':        { desc:'Non-digging spring door set (top+bottom patch, no floor cut) — PLACEHOLDER price', finish:'Stainless Steel', price:690 },
+  'SANHE-SET':     { desc:'San He patch fitting set — PLACEHOLDER price',   finish:'Stainless Steel', price:650 },
+  'SPIDER-SET':    { desc:'Spider fitting door set — PLACEHOLDER price',    finish:'Stainless Steel', price:780 },
+  'SCL SET':       { desc:'SCL sliding set — track, rollers, guides — PLACEHOLDER price', finish:'Stainless Steel', price:950 },
+  'SH005 SET':     { desc:'SH005 sliding set — track, rollers, guides — PLACEHOLDER price', finish:'Stainless Steel', price:850 },
 }
 
 // Hardware set auto-attached per panel type (per leaf).
@@ -183,6 +190,27 @@ export const FL_SETS = {
   slider: [['SL-ROLLER', 1]],
 }
 export const FL_OVERPANEL_SET = [['BL 203', 2], ['KL-M402', 2]]
+
+// ── Hardware SYSTEM options — from Sofaamy's frameless list
+// (docs/reference/frameless.docx). Swing doors: NON-DIGGING / SAN HE /
+// SPIDER / KL-PATCHES. Sliding: SCL SET / SH005. Each choice swaps the
+// pivot/roller part of the per-leaf set; handle + lock stay.
+// Only KL-Patches carries REAL prices (from job SGP/4462-26A).
+export const FL_SYSTEMS = {
+  klpatches:  { label:'KL Patches',            kinds:['door'],   set:[['KL-M102/T',1],['KL-M202',1],['KL-HD 203-6',1],['JQ 104(900MM)',1],['CSM-50W',1]] },
+  nondigging: { label:'Non-Digging',           kinds:['door'],   set:[['ND-SET',1],['JQ 104(900MM)',1],['CSM-50W',1]] },
+  sanhe:      { label:'San He',                kinds:['door'],   set:[['SANHE-SET',1],['JQ 104(900MM)',1],['CSM-50W',1]] },
+  spider:     { label:'Spider',                kinds:['door'],   set:[['SPIDER-SET',1],['JQ 104(900MM)',1],['CSM-50W',1]] },
+  scl:        { label:'SCL Set',               kinds:['slider'], set:[['SCL SET',1]] },
+  sh005:      { label:'SH005',                 kinds:['slider'], set:[['SH005 SET',1]] },
+  shower:     { label:'Shower Hinge Set',      kinds:['hinged'], set:[['SH-90',2],['SH-KNOB',1]] },
+}
+// which system choices apply to a leaf/slider panel type
+export const FL_SYSTEM_CHOICES = {
+  door:   ['klpatches','nondigging','sanhe','spider'],
+  slider: ['scl','sh005'],
+  hinged: ['shower'],
+}
 
 export const FL_PANEL_TYPES = {
   fixed:  { label:'Fixed Panel' },

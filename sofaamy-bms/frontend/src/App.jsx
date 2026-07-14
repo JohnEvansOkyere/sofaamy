@@ -11,10 +11,13 @@ import Dispatch from './pages/Dispatch.jsx'
 import Quality from './pages/Quality.jsx'
 import Reports from './pages/Reports.jsx'
 import Settings from './pages/Settings.jsx'
+import ShareViewer from './pages/ShareViewer.jsx'
 
 export default function App() {
   return (
     <Routes>
+      {/* public client view — no app chrome, opened from a WhatsApp link */}
+      <Route path="share/:token" element={<ShareViewer />} />
       <Route element={<Layout />}>
         <Route index element={<Dashboard />} />
         <Route path="configurator" element={<ConfiguratorPage />} />
