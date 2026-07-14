@@ -37,3 +37,4 @@ SOFAAMY/
 Status: **Phase 0 prototype built and demo-ready** — three-category Design Configurator (Frame / Frameless / Curtain Wall) with live GHS pricing, cutting optimization, and SmartGlazier-style fabrication drawings (glass order, hardware list, installation sheet) generated parametrically from a hardware prep library. See `MEMORY.md` for the decision log and `sofaamy-bms/README.md` to run it.
 
 > ⚠️ **Confidential** — this repository contains client engagement documents, pricing, and a real customer job record (`sofaamy-bms/images/sofaamy.pdf`). Keep the repository **private**.
+# sofaamy
