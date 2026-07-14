@@ -1,0 +1,90 @@
+Maintain a file called MEMORY.md. After any significant decision, about direction, format, content, approach, or strategy, add an entry:
+
+## [Date], [Decision]
+**What was decided:** [the choice made]
+**Why:** [the reasoning]
+**What was rejected:** [alternatives considered and why they were ruled out]
+
+Read MEMORY.md at the start of every session before doing anything. Never contradict a logged decision without flagging it first.
+
+---
+
+## 2026-07-07, Competitive positioning vs EvA Cloud
+**What was decided:** Position the Sofaamy build as *tailored + owned + local* against EvA Cloud (off-the-shelf Indian fenestration ERP). Win themes: tailored not adapted, Ghana-native (WhatsApp/GHS/local support), Sofaamy owns it (no recurring foreign SaaS rent), feature parity where it counts, full product range.
+**Why:** Sofaamy is impressed by EvA and leaning toward buying it; we can't out-feature a mature product on day one, so we out-fit it and match parity on what they value.
+**What was rejected:** Competing purely on features/price (EvA is more mature); a generic ERP (loses the tailoring edge).
+
+## 2026-07-07, Tech stack fixed from the Architecture Blueprint
+**What was decided:** React+Vite+Tailwind PWA + react-konva; FastAPI backend; PostgreSQL via Supabase; Africa's Talking for WhatsApp/SMS; Vercel+Railway hosting.
+**Why:** Already proposed to the client in the Technical Architecture Blueprint, and the existing configurator demo already uses Vite/react-konva.
+**What was rejected:** Next.js / other stacks — would contradict what was proposed and discard the working demo.
+
+## 2026-07-07, Phased roadmap
+**What was decided:** Phase 0 demo-to-win → Phase 1 foundation+configurator → Phase 2 pipeline+commercial → Phase 3 optimization+inventory+analytics.
+**Why:** Immediate battle is winning the joint demo meeting; a working configurator is our strongest asset. Contractual Phase 1 is the configurator prototype.
+**What was rejected:** Building the full backend foundation first (too slow to produce a persuasive demo).
+
+## 2026-07-07, Repository reorganization
+**What was decided:** `docs/` holds all documentation (+ `docs/reference/` for client-facing originals, `docs/reference/source/` for editable .docx); `prototypes/` holds the configurator + static demo; `archive/` holds old zips and superseded proposal PDFs; `sofaamy-bms/` is the product monorepo; `README.md`/`CLAUDE.md`/`MEMORY.md` stay at root. Newest proposal PDF chosen as canonical.
+**Why:** User asked for a clean, structured directory with all docs grouped under `docs/`.
+**What was rejected:** Deleting duplicate PDFs/zips (kept in `archive/` pending confirmation — per CLAUDE.md destructive-actions rule).
+
+## 2026-07-07, Demo build stack — SQLite + curated CSS
+**What was decided:** For the demo prototype, use SQLite (not Postgres/Supabase) as the DB, and a hand-built CSS design system (not Tailwind) for the frontend.
+**Why:** User explicitly asked for SQLite. Curated CSS removes build-tool risk for the live demo and reuses the Architecture Blueprint's navy/gold palette for a bespoke, non-generic look. Frontend uses local seed data so the demo never breaks even if the backend is down.
+**What was rejected:** Postgres/Supabase (overridden by user for the demo — still the target for production, flagged against the earlier logged decision); Tailwind (reliability/brand-fit tradeoff).
+
+## 2026-07-07, Built Phase 0 prototype in `sofaamy-bms/`
+**What was decided:** Built the full dashboard UI (11 modules) + fully-interactive react-konva Design Configurator (multi-product, live GHS quote + BOM) on React+Vite, plus a FastAPI+SQLite backend (seeded, pricing + data endpoints). Frontend build verified (243 modules, clean); backend endpoints verified returning live data.
+**Why:** User asked to build now — full UI skeleton, all dashboard features, configurator as the centrepiece, something real and close to the EvA Cloud URL to show intent.
+**What was rejected:** Fully wiring every screen to the backend now (frontend runs on seed data for demo safety; API wiring is the next step).
+
+## 2026-07-07, Configurator reworked to match EvA's drag-and-drop model
+**What was decided:** Rebuilt the configurator to mirror EvA Cloud's actual UX (and the demo Evans already showed the client): empty slate on New Design → left sidebar is a **grouped design library** of draggable shape thumbnails → drag/click a shape to drop it onto the canvas with its **dividers** → click any **section** to edit its glass + opening in the properties panel → live GHS quote + BOM. Design model = a framed grid split by vertical/horizontal dividers into per-section cells (each with its own glass/opening). New files: `lib/designs.js`, `components/configurator/DesignCanvas.jsx`; `lib/pricing.js` now divider-aware (`calcDesignQuote`/`designBOM`).
+**Why:** Evans clarified EvA's configurator is drag-and-drop-with-dividers-and-per-section-properties, not the pick-a-product + sliders model first built. Matching their mental model is the whole point of the demo.
+**What was rejected:** The parametric single-product tile+slider configurator (replaced).
+
+## 2026-07-11, One-month proof build — configurator-centric spine + cutting optimizer
+**What was decided:** Sofaamy set a one-month bar: show something production-close and they build with Veloxa instead of buying EvA. Architecture = one data spine: canvas design → piece extractor (`lib/pieces.js`, design → cut list) → pricing/BOM/cutting-optimizer all derive from the same pieces. Built: profile catalog (Mollium/Transum/Sash — names + stock lengths 5800/5750/5700mm confirmed from their cutting-optimizer screenshot, meeting 2026-07-10), FFD kerf-aware optimizer (frontend `lib/optimize.js` + backend `/api/optimize`), live cut-plan panel in the configurator (demand table + bar diagrams + waste %). AutoCAD is NOT replaced (jobs attach DWGs); SmartGlazier frameless becomes configurator templates. Stack stays SQLite for the month (Postgres swap later touches only the data layer). Full write-up: `sofaamy-bms/docs/ARCHITECTURE.md`.
+**Why:** The winning demo moment is the DEMAND table (which they hand-type into their desktop optimizer today) filling itself from the design. Feed-path unification beats algorithm sophistication in month one.
+**What was rejected:** Rebuilding AutoCAD (explicitly out of scope per Evans); beating their optimizer's algorithm (FFD is enough); moving to Supabase now (infra risk for zero demo value).
+**Placeholders pending Sofaamy data:** kerf (5mm), min offcut (300mm), profile prices/m, grinding rules, mitre allowances — Evans has none of these yet.
+
+## 2026-07-12, EvA demo studied → design model v2 (EvA parity core)
+**What was decided:** Evans supplied 6 screenshots of EvA Cloud's configurator (`sofaamy-bms/images/`). Adopted EvA's project-item model: design = ref + qty + location + drawing; qty multiplies pricing/BOM/cutting demand (this is where their optimizer's demand quantities come from). Sections now have independent draggable sizes (`colWidths`/`rowHeights`, 150mm min, totals conserved), per-design profile system (placeholder brands) and surface finish type (powder/anodized/PVDF/wood/lamination) + colour. Canvas: EvA-style per-section dim lines + F1/F2 tags + drag-to-resize dividers. Reports rebuilt as a full document catalog (`lib/reports.js`, 6 groups ~32 reports, live/in-build/planned) above the analytics. Docs written for Evans: `docs/DOMAIN-GUIDE.md` (domain explainer — he's learning the industry) and `docs/SOFAAMY-QUESTIONS.md` (35 questions, blocking placeholders table).
+**Why:** Sofaamy said EvA "does most of what they do"; matching its configurator mental model is the bar for the one-month proof. Verified against EvA's own demo case (w3, 2000×1400, 500/1500 split, qty 5) — frontend and backend agree to the pesewa (unit 2,755.20 / grand 13,776.00 GHS).
+**What was rejected:** 3D/realistic/wall views, client share-link, template save/duplicate, drag-opening-into-section (logged as Phase 2 polish — 2D elevation is enough to prove the spine); building reports as fakes (catalog shows honest live/planned status instead).
+**Not yet built (next):** pricing page with manual overrides + add/delete cost lines (EvA demoed it, Evans flagged it), template save/duplicate, glass BOQ + factory work order reports, jobs persisting design JSON.
+
+## 2026-07-12 (later), EvA interaction flow + real proof loop
+**What was decided:** Evans pushed back twice: (a) the EvA *flow* wasn't implemented (tool panels, drag-into-section, create-project popup) and dividers were hard to find; (b) "if you were the customer you wouldn't accept this — reports are the proof." Built: left tool tabs (Shapes/Divider/Designs) matching EvA's panels; divider layout library; openable-design library dragged INTO a section (cell now has `panels` — double door in F2 → 4×750mm rails, matching image 5's dims); New Project modal (ref/qty/location/product); sticky canvas while scrolling; design persistence (`designs` table + save/list, Saved Projects group in Shapes tab, job creation stores design JSON); three REAL PDF reports via reportlab/platypus (`app/reports.py`): cutting list (bar-by-bar sequences + waste), factory work order (sections, per-unit pieces, stage sign-off, 50% deposit gate), BOQ (profiles/glass/hardware with bars-to-buy from the nest plan); Production board + Quotations page now read the live API (seed fallback + "backend offline" badge). Full loop verified: save design → 3 PDFs → create job → job appears in /api/jobs → saved design reopens.
+**Why:** The demo must survive a skeptical customer poking any step; a fake step kills trust vs a 20-year incumbent.
+**What was rejected:** marking Design register 'live' in the catalog (not a standalone doc yet — honesty rule).
+**Next:** multi-design projects (one project → many design items → aggregated quote/BOQ/cutting batch — the real EvA model), pricing manual overrides, elevation PDF, WhatsApp send.
+
+## 2026-07-12 (third round), Real fabrication breakdown — deductions, angles, glass cut sizes
+**What was decided:** Evans (correctly) rejected the naive piece list as "not a cutting list". Built the proper design breakdown engine (`designBreakdown` in lib/pieces.js + backend mirror): outer frame full-size mitred 45°/45°; mullions/transoms deducted −2× frame depth (50mm), square-cut; sliding sash W = section/n + interlock/2 (30mm), H = section − track clearance (30mm), casement/awning sashes mitred; glass cut sizes = opening −70mm (fixed) / sash −60mm. Constants in `products.js FAB`, formulas documented in-code and printed on the PDF itself, all flagged placeholder pending Sofaamy's system specs (questions doc §B9). CutPlan panel now shows Position/Profile/Length/Cuts/Qty + a glass-cutting-sizes table; cutting-list & work-order PDFs carry the same; BOQ glass table uses real cut sizes. Optimizer nests the deducted lengths. Verified by hand (mullion 1300, sash rail 765, glass 430×1330 / 705×1310) and frontend↔backend parity (3,622.56 / 18,112.80 GHS).
+**Why:** A 20-year fabricator instantly spots full-height mullions and missing glass sizes — the breakdown is exactly what makes the demo credible.
+**What was rejected:** Waiting for Sofaamy's real deduction specs before modeling (explicit placeholder formulas beat nothing); per-system deduction tables (Phase 2, once systems list arrives).
+
+## 2026-07-12 (fourth round), 3D view added
+**What was decided:** Evans asked "can we view this in 3D?" → built it with three.js/react-three-fiber v8 + drei v9 (React-18 pinned): `Design3D.jsx` derives extruded frame members, mullions/transoms, sash frames (sliding panels on alternating front/back tracks) and translucent glass from the same design JSON as everything else. View switch bottom-right of canvas (EvA-style): 2D / 3D / Wall — Wall view sets the window in a wall with sill 900mm above floor (EvA's "Floor Aperture Distance = 900"). Lazy-loaded chunk (~238KB gz) so main bundle unaffected. Section editing (drops) guarded to 2D mode.
+**Why:** EvA demoed 3D/realistic/wall views; matching it with "same record drives 2D, 3D, quote, cutting list" strengthens the one-spine story.
+**What was rejected:** realistic/textured rendering and 3D dimension labels (Phase 2 polish); drei Environment presets (fetch external HDRs — kept to plain lights, no external assets).
+
+## 2026-07-13, Three product categories + frameless engine from Sofaamy's own SmartGlazier print
+**What was decided:** Sofaamy's team confirmed the business splits into **Frame / Frameless / Curtain Wall**; the configurator was restructured category-first (pick family → its own design library, canvas, engine, documents). Evans supplied a real SmartGlazier job pack (`sofaamy-bms/images/sofaamy.pdf`, job SGP/4462-26A "SWING DOOR 10MM CL") — it became the spec: the frameless engine (`lib/frameless.js` + backend mirror) reproduces that job exactly (panels 1368×2520 / 900×2100 / over-panel 1805×410, 11.41 m², 285.3 kg, hardware GH₵3,076 to the cedi) using their REAL hardware codes/prices (BL 203, CSM-50W, JQ 104, KL-HD 203-6, KL-M102/T, KL-M202, KL-M402) and gap rules reverse-engineered from the print (fixed bay −5, door bay −8, floor 10, over-joint 10). Frameless model = panel run (fixed/door/hinged/slider) + optional over-panel; outputs = Glass Order PDF (with drawn elevation, processing/holes, weights at 2.5 kg/m²/mm), Hardware List PDF, frameless Work Order PDF. Curtain wall model = stick system (`lib/curtainwall.js` + mirror): continuous mullions, transoms cut between, vision/spandrel/vent bays, feeds the same cutting optimizer (cwmullion/cwtransom profiles). Frontend↔backend parity verified on all three categories (frameless 12,510.24 / CW 14,758.96 / frame 3,345.36 identical both sides); UI smoke-tested in headless Chrome (no JS errors). Industry research written up standalone in `docs/INDUSTRY-REPORT.md`; new blocking questions in `docs/SOFAAMY-QUESTIONS.md` §K.
+**Why:** Sofaamy already runs SmartGlazier for frameless — matching its document pack (quote → hardware list → glass order → installation sheet) is the credibility bar; "one system covering all three families" is the story neither SmartGlazier nor EvA can tell.
+**What was rejected:** Keeping frameless/curtain wall as grid-library entries in the frame model (fabrication is completely different — profiles/mitres vs panels/gaps/hardware vs continuous mullions); per-panel hole-position fabrication drawings à la SmartGlazier page 2-of-7 (Phase 2 — schedule-level processing notes ship now); 3D for frameless/CW (frame-only for now, honest omission); installation sheet PDF (Phase 2).
+
+## 2026-07-13 (second round), Parametric fabrication drawings — the SmartGlazier drawing engine replicated
+**What was decided:** Evans rejected schedule-only reports ("no drawings, nothing to convince them") and asked how SmartGlazier's drawings are generated → answered and built it: drawings are rendered parametrically from a **glass prep library** — every hardware code carries the holes/cutouts it needs in the glass, dimensioned from panel corners/edges, instantiated at any panel size in any project. New `app/preps.py` (+ frontend mirror `lib/preps.js`), calibrated from the SGP/4462-26A print: BL 203 → ø18 @ 200/20; JQ 104 handles → 2×ø16 @ 700 crs, 100 off stile; KL patches → Template A/B S-curve cutouts (135.5/155.5, r80/r55, ø20); CSM-50W → 80×60 notch; pivot-mate ø20 pair on adjacent fixed panels; pivot side derived per door (left unless previous bay is a leaf). Glass Order PDF is now cover elevation + **one dimensioned drawing page per panel** (overall dims both sides, hole locator dims, FP edge marks, TGS stamp corner, cutout curves) + **1:1 printable template pages** — 7 pages for the SGP job, mirroring their pack page-for-page. Added Installation Sheet PDF (centreline-void table, out-of-plumb box, hardware checklist, comments page) + `installation` report route; quote PDF now carries the frameless elevation and panel/kg meta (frame-meta and header-collision bugs fixed). FramelessCanvas renders the same preps live on the panels. Generality proven on three different projects (SGP shopfront, 2-leaf shower in 8 mm, single 12 mm door); UI smoke-tested headless, all API endpoints 200.
+**Why:** Fabricators trust drawings, not tables; "the pages match their own print, from OUR system, for ANY project" is the demo moment that wins the build decision.
+**What was rejected:** Hardcoding the SGP job's geometry (everything is parametric); exact r80/r55 arc geometry in the panel-page curves (bezier approximation drawn, true dims carried on the 1:1 template pages); DXF export (prep model now makes it a Phase-2 add-on).
+**Placeholders:** shower hinge/knob and slider roller prep geometry (codes SH-90/SH-KNOB/SL-ROLLER) pending Sofaamy's catalog — flagged in docs/SOFAAMY-QUESTIONS.md §K37.
+
+## 2026-07-13 (third round), Configurator opens on a Projects home screen
+**What was decided:** Evans flagged the Saved Projects list cluttering the Shapes library → removed it from the sidebar; the configurator now opens on a **Projects home screen**: saved-design cards (category-aware thumbnail, ref, product, dims, qty, location, category chip, total) + a "Create New Design" button (opens the existing category-tabbed New Project modal). Workspace gains a "‹ Projects" back button that refreshes the list. The old empty-slate canvas (category cards + drag-here drop zone) became unreachable and was removed along with its CSS; entry is now saved-card click or the modal.
+**Why:** Projects-first matches how a business user thinks (resume work → then design); the library panel stays purely a design library.
+**What was rejected:** Keeping both a slate and a home (duplicate entry paths); delete/rename of saved designs (not requested — Phase 2 candidate).
+**Note:** old saved records predating the category field show as "Frame" (design JSON has no `category`) — legacy data, opens as it was created.

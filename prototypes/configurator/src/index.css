@@ -1,0 +1,30 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: #F0F2F5;
+  color: #1C2833;
+  min-height: 100vh;
+}
+
+:root {
+  --brand: #1B4F72;
+  --brand-mid: #2E86C1;
+  --brand-light: #D6EAF8;
+  --gold: #D4AC0D;
+  --gold-light: #FEF9E7;
+  --green: #1E8449;
+  --green-light: #D5F5E3;
+  --orange: #CA6F1E;
+  --gray-1: #F8FAFD;
+  --gray-2: #EAF0F6;
+  --gray-3: #D0D8E4;
+  --gray-4: #7F8C8D;
+  --gray-5: #444;
+  --radius: 10px;
+  --shadow: 0 2px 12px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
+}
+
+button { font-family: 'Inter', sans-serif; cursor: pointer; }
+input, select { font-family: 'Inter', sans-serif; }
