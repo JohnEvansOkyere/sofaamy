@@ -624,6 +624,196 @@ def installation_sheet_pdf(design: dict, result: dict) -> bytes:
     return _build("INSTALLATION SHEET", _meta_line(design, result), flow)
 
 
+# ── PROJECT SUMMARY / ELEVATION / PRICE BREAKDOWN ────────────
+# Reports-page documents — generated for any saved project in any
+# of the three categories (frame / frameless / curtain wall).
+
+from .pricing import cw_breakdown, CW_TYPE_LABELS
+
+CAT_LABELS = {"frame": "Framed (aluminium)", "frameless": "Frameless glass",
+              "curtainwall": "Curtain wall"}
+
+
+def _grid_elevation(design: dict, width_pt: float = 165 * mm, max_h: float = 90 * mm) -> Drawing:
+    """Dimensioned elevation for frame / curtain-wall designs — outer
+    frame and divider grid, as drawn on the configurator canvas."""
+    W, H = design["width"], design["height"]
+    cw, rh = _col_widths(design), _row_heights(design)
+    cols = design["cols"]
+    is_cw = (design.get("category") or "frame") == "curtainwall"
+    scale = min((width_pt - 30 * mm) / W, (max_h - 16 * mm) / H)
+    dw, dh = W * scale, H * scale
+    d = Drawing(width_pt, dh + 18 * mm)
+    x0, y0 = (width_pt - dw) / 2, 10 * mm
+
+    d.add(Rect(x0 - 3, y0 - 3, dw + 6, dh + 6, fillColor=None,
+               strokeColor=colors.HexColor("#5d7387"), strokeWidth=1.4))
+    for i, c in enumerate(design["cells"]):
+        col, row = i % cols, i // cols
+        cx = x0 + sum(cw[:col]) * scale
+        cy = y0 + dh - sum(rh[:row + 1]) * scale   # rows counted from the top
+        bw, bh = cw[col] * scale, rh[row] * scale
+        ty = (c.get("type") or "vision") if is_cw else (c.get("opening") or "fixed")
+        spandrel = is_cw and ty == "spandrel"
+        d.add(Rect(cx + 1.2, cy + 1.2, bw - 2.4, bh - 2.4,
+                   fillColor=colors.Color(0.55, 0.60, 0.66, alpha=0.55) if spandrel else GLASS_FILL,
+                   strokeColor=colors.HexColor("#5d7387"), strokeWidth=0.7))
+        tag = f"B{i + 1}" if is_cw else f"F{i + 1}"
+        label = CW_TYPE_LABELS.get(ty, "Vision Glass") if is_cw else ty.title()
+        d.add(String(cx + bw / 2, cy + bh / 2 + 1, tag, fontName="Helvetica-Bold",
+                     fontSize=6.5, textAnchor="middle", fillColor=EDGE))
+        d.add(String(cx + bw / 2, cy + bh / 2 - 6, label, fontName="Helvetica",
+                     fontSize=5.5, textAnchor="middle", fillColor=MUTED))
+    x = x0
+    for w in cw:                                    # per-bay widths below
+        d.add(String(x + w * scale / 2, y0 - 5 * mm, f"{round(w)}", fontName="Helvetica",
+                     fontSize=6.5, textAnchor="middle", fillColor=DIM))
+        x += w * scale
+    yy = y0 + dh
+    for h in rh:                                    # per-row heights, right side
+        d.add(String(x0 + dw + 2 * mm, yy - h * scale / 2 - 2, f"{round(h)}",
+                     fontName="Helvetica", fontSize=6.5, fillColor=DIM))
+        yy -= h * scale
+    d.add(String(x0 + dw / 2, y0 + dh + 3 * mm, f"{W} mm", fontName="Helvetica-Bold",
+                 fontSize=7.5, textAnchor="middle", fillColor=DIM))
+    d.add(String(x0 - 2 * mm, y0 + dh / 2, f"{H}", fontName="Helvetica", fontSize=6.5,
+                 textAnchor="end", fillColor=DIM))
+    return d
+
+
+def any_elevation(design: dict, width_pt: float = 165 * mm, max_h: float = 90 * mm) -> Drawing:
+    if (design.get("category") or "frame") == "frameless":
+        return _fl_elevation(design, frameless_breakdown(design), width_pt=width_pt)
+    return _grid_elevation(design, width_pt, max_h)
+
+
+META_STYLE = TableStyle([
+    ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+    ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
+    ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+    ("TEXTCOLOR", (0, 0), (0, -1), NAVY),
+    ("TEXTCOLOR", (2, 0), (2, -1), NAVY),
+    ("GRID", (0, 0), (-1, -1), 0.4, LINE),
+    ("TOPPADDING", (0, 0), (-1, -1), 4),
+    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+])
+
+
+def _items_table(design: dict) -> Table:
+    """Per-category design-items schedule."""
+    cat = design.get("category") or "frame"
+    if cat == "frameless":
+        bd = frameless_breakdown(design)
+        rows = [["Mark", "Panel", "Cut size W × H (mm)", "Area (m²)", "Weight (kg)"]] + [
+            [p["mark"], FL_PANEL_LABELS.get(p["type"], p["type"]),
+             f"{p['w_mm']:,} × {p['h_mm']:,}", f"{p['area_m2']:.2f}", f"{p['kg']}"]
+            for p in bd["panels"]]
+        t = Table(rows, colWidths=[16 * mm, 36 * mm, 46 * mm, 28 * mm, 30 * mm])
+    elif cat == "curtainwall":
+        bd = cw_breakdown(design)
+        rows = [["Bay", "Type", "Glass", "Cut size W × H (mm)"]] + [
+            [g["section"], CW_TYPE_LABELS.get(g["type"], g["type"]),
+             GLASS_LABELS.get(g["glass"], g["glass"]), f"{g['w_mm']:,} × {g['h_mm']:,}"]
+            for g in bd["glass"]]
+        t = Table(rows, colWidths=[16 * mm, 40 * mm, 50 * mm, 50 * mm])
+    else:
+        cw, rh = _col_widths(design), _row_heights(design)
+        cols = design["cols"]
+        rows = [["Section", "Size (mm)", "Glass", "Opening", "Sash panels"]]
+        for i, c in enumerate(design["cells"]):
+            rows.append([f"F{i + 1}", f"{round(cw[i % cols])} × {round(rh[i // cols])}",
+                         GLASS_LABELS.get(c["glass"], c["glass"]), c["opening"].title(),
+                         "—" if c["opening"] == "fixed" else str(c.get("panels") or 1)])
+        t = Table(rows, colWidths=[20 * mm, 38 * mm, 45 * mm, 40 * mm, 30 * mm])
+    t.setStyle(BASE_STYLE)
+    return t
+
+
+def project_summary_pdf(design: dict, result: dict, client_name: str = "") -> bytes:
+    cat = design.get("category") or "frame"
+    qty = result["qty"]
+    flow = []
+
+    meta = [
+        ["Client", client_name or "Walk-in Client", "Category", CAT_LABELS.get(cat, cat)],
+        ["Design ref", design.get("ref") or "—", "Product", design["name"]],
+        ["Overall size", f"{design['width']} × {design['height']} mm", "Quantity", str(qty)],
+        ["Location", design.get("location") or "—", "Date", f"{datetime.now():%d %b %Y}"],
+    ]
+    t = Table(meta, colWidths=[28 * mm, 62 * mm, 26 * mm, 50 * mm])
+    t.setStyle(META_STYLE)
+    flow.append(t)
+
+    flow.append(Paragraph("Elevation", H2))
+    flow.append(any_elevation(design))
+
+    flow.append(Paragraph("Design items — PER UNIT", H2))
+    flow.append(_items_table(design))
+
+    flow.append(Paragraph("Commercial summary", H2))
+    rows = [["Per-unit total", ghs(result["total"])],
+            ["Quantity", f"× {qty}"],
+            ["Project total", ghs(result["grand_total"])],
+            ["50% production deposit", ghs(round(result["grand_total"] / 2, 2))],
+            ["50% balance on delivery", ghs(round(result["grand_total"] / 2, 2))]]
+    t = Table(rows, colWidths=[60 * mm, 50 * mm])
+    t.setStyle(META_STYLE)
+    flow.append(t)
+    flow.append(Paragraph(
+        "Payment terms: 50% deposit before production · 50% balance on delivery. "
+        "All amounts in Ghana Cedi (GHS), VAT exclusive.", NOTE))
+    return _build("PROJECT SUMMARY", _meta_line(design, result), flow)
+
+
+def elevation_pdf(design: dict, result: dict) -> bytes:
+    flow = [any_elevation(design, width_pt=170 * mm, max_h=150 * mm)]
+    cw, rh = _col_widths(design), _row_heights(design)
+    rows = [["Overall size", f"{design['width']} × {design['height']} mm"],
+            ["Bay widths (mm)", "  ·  ".join(str(round(w)) for w in cw)],
+            ["Row heights (mm)", "  ·  ".join(str(round(h)) for h in rh)]]
+    t = Table(rows, colWidths=[42 * mm, 124 * mm])
+    t.setStyle(META_STYLE)
+    flow.append(Spacer(0, 6 * mm))
+    flow.append(t)
+    flow.append(Paragraph(
+        "As designed on the configurator canvas — all dimensions in millimetres. "
+        "Cut sizes (with fabrication deductions) are on the cutting list / glass order.", NOTE))
+    return _build("ELEVATION DRAWING", _meta_line(design, result), flow)
+
+
+CELL = ParagraphStyle("cell", fontName="Helvetica", fontSize=8.5, textColor=colors.HexColor("#22303e"))
+CELL_MUTED = ParagraphStyle("cellm", fontName="Helvetica", fontSize=8, textColor=MUTED)
+
+
+def price_breakdown_pdf(design: dict, result: dict, client_name: str = "") -> bytes:
+    qty = result["qty"]
+    flow = []
+
+    flow.append(Paragraph("Cost lines — PER UNIT", H2))
+    rows = [["Description", "Basis", "Amount"]] + [
+        [Paragraph(l["key"], CELL), Paragraph(l["detail"], CELL_MUTED), ghs(l["amount"])]
+        for l in result["lines"]]
+    t = Table(rows, colWidths=[54 * mm, 76 * mm, 26 * mm])
+    t.setStyle(BASE_STYLE)
+    flow.append(t)
+
+    flow.append(Paragraph("Totals", H2))
+    rows = [["Subtotal (per unit)", ghs(result["subtotal"])],
+            [f"Margin ({result['margin_pct']:.0f}%)", ghs(result["margin"])],
+            ["Unit total", ghs(result["total"])],
+            ["Quantity", f"× {qty}"],
+            ["Project total", ghs(result["grand_total"])]]
+    t = Table(rows, colWidths=[60 * mm, 50 * mm])
+    t.setStyle(META_STYLE)
+    flow.append(t)
+
+    flow.append(Paragraph(
+        f"Client: {client_name or 'Walk-in Client'}. INTERNAL DOCUMENT — management only, "
+        "not for client distribution. Rates are placeholders until Sofaamy's price list is loaded.", NOTE))
+    return _build("PRICE BREAKDOWN (INTERNAL)", _meta_line(design, result), flow)
+
+
 # ── DELIVERY NOTE ────────────────────────────────────────────
 
 def delivery_note_pdf(job: dict, design: dict | None, site: str) -> bytes:

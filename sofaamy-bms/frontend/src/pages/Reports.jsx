@@ -1,33 +1,74 @@
+import { useEffect, useState } from 'react'
 import { PageHead, Card, Stat, Badge } from '../components/ui.jsx'
 import { AreaChart, Donut, BarList } from '../components/charts.jsx'
 import { REVENUE_TREND, PIPELINE_MIX, PRODUCT_DEMAND } from '../data/seed.js'
-import { REPORT_GROUPS, REPORT_STATUS } from '../lib/reports.js'
+import { REPORT_GROUPS, REPORT_STATUS, reportKind } from '../lib/reports.js'
+import { listDesigns, downloadReport } from '../lib/api.js'
 import { IconWallet, IconTrend, IconChart, IconFactory, IconDownload } from '../components/icons.jsx'
 
-function ReportRow({ r }) {
+function ReportRow({ r, project, busy, onDownload }) {
   const st = REPORT_STATUS[r.status]
+  const kind = project ? reportKind(r, project.design?.category || 'frame') : null
   return (
-    <div className="flex between items-center" style={{ padding:'8px 0', borderBottom:'1px solid var(--line-soft)' }}>
+    <div className="flex between items-center" style={{ padding:'8px 0', borderBottom:'1px solid var(--line-soft)', gap:10 }}>
       <div style={{ minWidth:0 }}>
         <div className="t-strong" style={{ fontSize:12.5 }}>{r.name}</div>
         <div className="muted" style={{ fontSize:11.5 }}>{r.desc}</div>
       </div>
-      <Badge tone={st.tone}>{st.label}</Badge>
+      {kind ? (
+        <button className="btn btn-ghost btn-sm" disabled={busy === r.name}
+          onClick={() => onDownload(kind, r.name)}>
+          <IconDownload style={{ width:13, height:13 }}/> {busy === r.name ? 'Preparing…' : 'PDF'}
+        </button>
+      ) : <Badge tone={st.tone}>{st.label}</Badge>}
     </div>
   )
 }
 
 export default function Reports() {
+  const [designs, setDesigns] = useState([])
+  const [selId, setSelId] = useState('')
+  const [busy, setBusy] = useState(null)
+  const [msg, setMsg] = useState('')
+  const [offline, setOffline] = useState(false)
+
+  useEffect(() => { listDesigns().then(setDesigns).catch(() => setOffline(true)) }, [])
+
+  const project = designs.find(d => String(d.id) === selId)
+
+  async function onDownload(kind, name) {
+    setBusy(name); setMsg('')
+    try {
+      await downloadReport(kind, project.client_name || '', project.design)
+      setMsg(`📄 ${name} — ${project.ref || project.name} downloaded`)
+    } catch (e) {
+      setMsg(`⚠️ ${String(e.message || e)}`)
+    }
+    setBusy(null)
+  }
+
   return (
     <>
       <PageHead title="Reports" subtitle="Every document the system produces — from quotation to factory floor to handover.">
-        <button className="btn btn-ghost"><IconDownload/> Export</button>
+        {offline
+          ? <Badge tone="orange">backend offline — start the API to download documents</Badge>
+          : <select className="rep-select" value={selId} onChange={e => { setSelId(e.target.value); setMsg('') }}>
+              <option value="">Select a project to download its documents…</option>
+              {designs.map(d => (
+                <option key={d.id} value={d.id}>
+                  {(d.ref || d.name)} — {d.name}{d.client_name ? ` · ${d.client_name}` : ''}
+                </option>
+              ))}
+            </select>}
       </PageHead>
+      {msg && <div className="muted mb" style={{ fontSize:12.5 }}>{msg}</div>}
 
       <div className="grid g-2 mb">
         {REPORT_GROUPS.map(g => (
           <Card key={g.id} title={g.title} sub={g.sub}>
-            {g.reports.map((r, i) => <ReportRow key={i} r={r} />)}
+            {g.reports.map((r, i) => (
+              <ReportRow key={i} r={r} project={project} busy={busy} onDownload={onDownload} />
+            ))}
           </Card>
         ))}
       </div>

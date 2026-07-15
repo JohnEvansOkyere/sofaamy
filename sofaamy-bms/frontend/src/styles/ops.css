@@ -91,3 +91,8 @@
 .wa-field input:focus { border-color: #25D366; }
 
 @media (max-width: 640px) { .wa-phone { display: none; } }
+
+/* ── Reports page project selector ── */
+.rep-select { padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; font-size: 13px;
+  background: var(--surface); color: var(--ink); max-width: min(360px, 90vw); outline: none; cursor: pointer; }
+.rep-select:focus { border-color: var(--navy-500); }

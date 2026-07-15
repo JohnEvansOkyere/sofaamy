@@ -20,7 +20,8 @@ from .optimizer import optimize
 from .pdf import quote_pdf
 from .reports import (boq_pdf, cutting_list_pdf, work_order_pdf,
                       glass_order_pdf, hardware_list_pdf, fl_work_order_pdf,
-                      installation_sheet_pdf, delivery_note_pdf)
+                      installation_sheet_pdf, delivery_note_pdf,
+                      project_summary_pdf, elevation_pdf, price_breakdown_pdf)
 
 Base.metadata.create_all(bind=engine)
 
@@ -419,7 +420,9 @@ def _pdf_response(pdf: bytes, filename: str) -> Response:
 
 @app.post("/api/reports/{kind}")
 def design_report(kind: str, req: schemas.DesignQuoteIn):
-    """Production/material reports for a design: cutting-list | work-order | boq."""
+    """Design documents. Any category: summary | elevation | quotation |
+    price-breakdown. Frame/curtain wall: cutting-list | work-order | boq.
+    Frameless: glass-order | hardware-list | work-order | installation."""
     d = req.design.engine_dict()
     result = calc_any_quote(d)
     pieces = extract_pieces_any(d)
@@ -427,6 +430,21 @@ def design_report(kind: str, req: schemas.DesignQuoteIn):
     demand = [{**p, "qty": p["qty"] * qty} for p in pieces]
     plan = optimize(demand)
     ref = (d.get("ref") or d["name"]).replace(" ", "-")
+
+    if kind == "summary":
+        return _pdf_response(project_summary_pdf(d, result, req.client_name),
+                             f"project-summary-{ref}.pdf")
+    if kind == "elevation":
+        return _pdf_response(elevation_pdf(d, result), f"elevation-{ref}.pdf")
+    if kind == "price-breakdown":
+        return _pdf_response(price_breakdown_pdf(d, result, req.client_name),
+                             f"price-breakdown-{ref}.pdf")
+    if kind == "quotation":
+        # document copy for the saved project — numbered by design ref, NOT
+        # persisted (quotes are issued from the configurator, which persists)
+        pdf = quote_pdf(d.get("ref") or "DRAFT", req.client_name, d["name"],
+                        d["width"], d["height"], result, design=d)
+        return _pdf_response(pdf, f"quotation-{ref}.pdf")
 
     if d.get("category") == "frameless":
         if kind == "glass-order":
@@ -506,6 +524,7 @@ def list_designs(db: Session = Depends(get_db)):
                       .order_by(models.DesignRecord.created_at.desc())).all()
     return [{"id": r.id, "ref": r.ref, "name": r.name, "qty": r.qty,
              "location": r.location, "total": r.total,
+             "client_name": r.client_name,
              "created_at": r.created_at.isoformat(),
              "share_token": share_token(r.id),
              "design": json.loads(r.design_json)} for r in recs]

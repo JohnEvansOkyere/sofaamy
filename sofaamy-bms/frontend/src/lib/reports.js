@@ -3,6 +3,11 @@
 // the way EvA Cloud groups them (validated against Sofaamy's
 // real workflow). status: 'live' = works today,
 // 'build' = being built this month, 'planned' = phase 2/3.
+//
+// kinds: the /api/reports/{kind} endpoint that generates the
+// document — a string when it applies to every category, or a
+// { frame, frameless, curtainwall } map when category-specific.
+// Rows without kinds are not downloadable yet.
 // ============================================================
 
 export const REPORT_GROUPS = [
@@ -10,9 +15,9 @@ export const REPORT_GROUPS = [
     id:'project', title:'Project & Basic Details',
     sub:'Who, where, and what is being made',
     reports:[
-      { name:'Project summary', desc:'Client, site, all design items with ref · location · qty', status:'build' },
+      { name:'Project summary', desc:'Client, site, all design items with ref · location · qty', status:'live', kinds:'summary' },
       { name:'Design register', desc:'Every design in the project: ref, dimensions, sections, finish', status:'build' },
-      { name:'Elevation drawings', desc:'Dimensioned drawing per design, as on the canvas', status:'build' },
+      { name:'Elevation drawings', desc:'Dimensioned drawing per design, as on the canvas', status:'live', kinds:'elevation' },
       { name:'Site survey sheet', desc:'Field measurements, photos, GPS — from the mobile capture', status:'planned' },
       { name:'Quote vs survey variance', desc:'Differences between quoted and surveyed dimensions', status:'planned' },
     ],
@@ -21,8 +26,8 @@ export const REPORT_GROUPS = [
     id:'quotation', title:'Quotation & Pricing',
     sub:'Client-facing commercial documents',
     reports:[
-      { name:'Client quotation (PDF)', desc:'Sofaamy-branded, GHS line items, 50/50 payment terms', status:'live' },
-      { name:'Detailed price breakdown', desc:'Per-design cost lines: profile, glass, hardware, labour', status:'live' },
+      { name:'Client quotation (PDF)', desc:'Sofaamy-branded, GHS line items, 50/50 payment terms', status:'live', kinds:'quotation' },
+      { name:'Detailed price breakdown', desc:'Per-design cost lines: profile, glass, hardware, labour', status:'live', kinds:'price-breakdown' },
       { name:'Proforma invoice', desc:'For the 50% production deposit', status:'planned' },
       { name:'Payment schedule', desc:'Deposit / balance milestones per job', status:'planned' },
       { name:'Margin analysis (internal)', desc:'Quoted margin per job — management only', status:'planned' },
@@ -32,9 +37,9 @@ export const REPORT_GROUPS = [
     id:'materials', title:'Material & Purchase Orders',
     sub:'What to buy before production can start',
     reports:[
-      { name:'Profile BOQ', desc:'Metres + stock bars needed per profile (Mollium/Transum/Sash)', status:'live' },
-      { name:'Glass BOQ', desc:'m² per glass type + individual panel sizes to order', status:'live' },
-      { name:'Hardware & accessories BOQ', desc:'Handles, locks, rollers, hinges per opening type', status:'live' },
+      { name:'Profile BOQ', desc:'Metres + stock bars needed per profile (Mollium/Transum/Sash)', status:'live', kinds:{ frame:'boq', curtainwall:'boq' } },
+      { name:'Glass BOQ', desc:'m² per glass type + individual panel sizes to order', status:'live', kinds:{ frame:'boq', curtainwall:'boq', frameless:'glass-order' } },
+      { name:'Hardware & accessories BOQ', desc:'Handles, locks, rollers, hinges per opening type', status:'live', kinds:{ frame:'boq', curtainwall:'boq', frameless:'hardware-list' } },
       { name:'Consumables BOQ', desc:'Gaskets, screws, silicone, packers', status:'planned' },
       { name:'Supplier purchase order', desc:'PO document per supplier from the BOQs', status:'planned' },
       { name:'Shortage vs stock', desc:'BOQ compared against store inventory — what to actually buy', status:'planned' },
@@ -44,9 +49,9 @@ export const REPORT_GROUPS = [
     id:'production', title:'Production Reports',
     sub:'What the factory floor works from',
     reports:[
-      { name:'Cutting list & optimization', desc:'Bar-by-bar nesting with waste % — live in the configurator', status:'live' },
-      { name:'Factory work order / job card', desc:'Per unit: stages, materials, drawings, QA boxes', status:'live' },
-      { name:'Glass order sheet', desc:'Panel cut sizes to send to the glass supplier/processor', status:'build' },
+      { name:'Cutting list & optimization', desc:'Bar-by-bar nesting with waste % — live in the configurator', status:'live', kinds:{ frame:'cutting-list', curtainwall:'cutting-list' } },
+      { name:'Factory work order / job card', desc:'Per unit: stages, materials, drawings, QA boxes', status:'live', kinds:'work-order' },
+      { name:'Glass order sheet', desc:'Panel cut sizes to send to the glass supplier/processor', status:'live', kinds:{ frameless:'glass-order' } },
       { name:'Assembly sheet', desc:'Per design: sash sizes, hardware positions, gasket runs', status:'planned' },
       { name:'Machining / prep sheet', desc:'Holes, routing, lock prep per piece', status:'planned' },
       { name:'Batch schedule', desc:'Grouped work orders across jobs for shared cutting', status:'planned' },
@@ -87,6 +92,14 @@ export const REPORT_GROUPS = [
     ],
   },
 ]
+
+// endpoint kind for a report row given the project's category — null
+// when the document doesn't exist (yet) for that category
+export function reportKind(report, category) {
+  const k = report.kinds
+  if (!k) return null
+  return typeof k === 'string' ? k : (k[category] || null)
+}
 
 export const REPORT_STATUS = {
   live:    { label:'Live',        tone:'green'  },
