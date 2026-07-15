@@ -167,6 +167,8 @@ export default function Configurator() {
   const [view, setView] = useState('2d')       // 2d | 3d
   const [wall, setWall] = useState(false)      // 3d wall view
   const [showNew, setShowNew] = useState(false)
+  const [showLib, setShowLib] = useState(true)     // left design-tools panel
+  const [showProps, setShowProps] = useState(true) // right properties/quote column
   const [newForm, setNewForm] = useState({ ref:'', qty:1, location:'', cat:'frame', templateId:'w-fixed' })
 
   // library + hints follow the user's explicit pick; falls back to the
@@ -235,11 +237,16 @@ export default function Configurator() {
 
   const wrapRef = useRef(null)
   const [dims, setDims] = useState({ w: 720, h: 480 })
+  // re-attach when the workspace mounts — on first render the Projects home
+  // is up and wrapRef is null, so observing only on mount never measures
   useEffect(() => {
     const el = wrapRef.current; if (!el) return
-    const ro = new ResizeObserver(([e]) => setDims({ w: Math.max(320, e.contentRect.width - 20), h: 480 }))
+    const ro = new ResizeObserver(([e]) => setDims({
+      w: Math.max(320, e.contentRect.width - 20),
+      h: Math.max(480, e.contentRect.height - 20),
+    }))
     ro.observe(el); return () => ro.disconnect()
-  }, [])
+  }, [!!design])
   const fire = (m) => { setToast(m); setTimeout(() => setToast(null), 2600) }
 
   const apiFail = (e) => {
@@ -374,10 +381,12 @@ export default function Configurator() {
 
   return (
     <>
-    <div className="cfg">
+    <div className={`cfg ${showLib ? '' : 'no-lib'} ${showProps ? '' : 'no-props'}`}>
       {/* ── TOOL PANELS ── */}
-      <div className="cfg-panel cfg-lib">
-        <h4><IconLayers style={{ width:16, height:16, color:'var(--navy-600)' }} /> Design Tools</h4>
+      {showLib && <div className="cfg-panel cfg-lib">
+        <h4><IconLayers style={{ width:16, height:16, color:'var(--navy-600)' }} /> Design Tools
+          <button className="panel-x" title="Hide the design library — more room to draw" onClick={() => setShowLib(false)}>«</button>
+        </h4>
 
         {/* category switch — Sofaamy's three businesses */}
         <div className="tool-tabs" style={{ marginBottom:8 }}>
@@ -461,7 +470,7 @@ export default function Configurator() {
             ))}
           </div>
         </>}
-      </div>
+      </div>}
 
       {/* ── CANVAS ── */}
       <div className="cfg-stage">
@@ -473,6 +482,10 @@ export default function Configurator() {
               : 'Empty canvas — choose a product family, then drop a design'}</div>
           </div>
           <div className="flex gap-sm">
+            <div className="panel-toggle" title="Show / hide the side panels — free up space for the drawing">
+              <button className={showLib ? 'on' : ''} onClick={() => setShowLib(v => !v)}>Library</button>
+              <button className={showProps ? 'on' : ''} onClick={() => setShowProps(v => !v)}>Properties</button>
+            </div>
             <button className="btn btn-ghost btn-sm" onClick={() => { setDesign(null); setSelected(null); refreshSaved() }}>‹ Projects</button>
             <button className="btn btn-ghost btn-sm" onClick={onSaveDesign}><IconCheck/> Save Design</button>
             <button className="btn btn-ghost btn-sm" onClick={newDesign}><IconPlus/> New Design</button>
@@ -522,9 +535,11 @@ export default function Configurator() {
       </div>
 
       {/* ── PROPERTIES + QUOTE ── */}
-      <div>
+      {showProps && <div>
         <div className="cfg-panel">
-          <h4><IconCube style={{ width:16, height:16, color:'var(--navy-600)' }} /> Properties</h4>
+          <h4><IconCube style={{ width:16, height:16, color:'var(--navy-600)' }} /> Properties
+            <button className="panel-x" title="Hide this panel — more room to draw" onClick={() => setShowProps(false)}>»</button>
+          </h4>
           <div className="cfg-body">
             {!design && <div className="prop-empty">Drop a design on the canvas and its properties will appear here.</div>}
 
@@ -767,7 +782,7 @@ export default function Configurator() {
             </div>
           </div>
         </>}
-      </div>
+      </div>}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

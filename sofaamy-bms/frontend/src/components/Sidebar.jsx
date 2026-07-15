@@ -27,15 +27,19 @@ const NAV = [
   ]},
 ]
 
-export default function Sidebar() {
+export default function Sidebar({ collapsed = false, onToggle }) {
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
       <div className="sb-brand">
         <div className="sb-logo">S</div>
         <div className="sb-brand-txt">
           <div className="n">Sofaamy Cloud</div>
           <div className="s">Fabrication ERP</div>
         </div>
+        <button className="sb-toggle" onClick={onToggle}
+          title={collapsed ? 'Expand menu' : 'Minimize menu'}>
+          {collapsed ? '»' : '«'}
+        </button>
       </div>
       <nav className="sb-scroll">
         {NAV.map(sec => (
@@ -44,7 +48,7 @@ export default function Sidebar() {
             {sec.items.map(it => {
               const Icon = it.icon
               return (
-                <NavLink key={it.to} to={it.to} end={it.end}
+                <NavLink key={it.to} to={it.to} end={it.end} title={it.label}
                   className={({isActive}) => `sb-link ${isActive?'active':''}`}>
                   <Icon /><span>{it.label}</span>
                   {it.tag && <span className="tag">{it.tag}</span>}

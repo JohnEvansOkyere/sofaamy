@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar.jsx'
 import Topbar from './Topbar.jsx'
@@ -19,12 +20,17 @@ const META = {
 export default function Layout() {
   const { pathname } = useLocation()
   const [title, subtitle] = META[pathname] || ['Sofaamy Cloud', '']
+  // the configurator needs every pixel for the drawing sheet:
+  // sidebar auto-minimizes (toggle re-expands it) and content goes full-width
+  const isCfg = pathname === '/configurator'
+  const [sbMin, setSbMin] = useState(isCfg)
+  useEffect(() => { setSbMin(isCfg) }, [isCfg])
   return (
     <div className="shell">
-      <Sidebar />
+      <Sidebar collapsed={sbMin} onToggle={() => setSbMin(v => !v)} />
       <div className="main-col">
         <Topbar title={title} subtitle={subtitle} />
-        <main className="content"><Outlet /></main>
+        <main className={`content${isCfg ? ' content-wide' : ''}`}><Outlet /></main>
       </div>
     </div>
   )
