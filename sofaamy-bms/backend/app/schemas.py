@@ -115,6 +115,51 @@ class DesignQuoteIn(BaseModel):
     design: DesignIn
 
 
+class PaymentIn(BaseModel):
+    amount: float
+    kind: str = "deposit"       # deposit|balance|other
+    method: str = "momo"        # momo|bank|cash|cheque
+    ref: str = ""
+    who: str = "Esi Quaye"      # accounts user (until auth lands)
+
+
+class QcIn(BaseModel):
+    result: str                 # pass|rework
+    score: int = 100
+    notes: str = ""
+    checklist: list[dict] = []
+    inspector: str = "Yaw Darko"
+
+
+class DispatchIn(BaseModel):
+    driver: str
+    vehicle: str = ""
+    who: str = "Kwame Mensah"
+
+
+class AdvanceIn(BaseModel):
+    who: str = "Kwame Mensah"
+
+
+class QuoteStatusIn(BaseModel):
+    status: str                 # Sent|Accepted|Declined
+    who: str = "Kwame Mensah"
+
+
+class ClientIn(BaseModel):
+    name: str
+    contact: str = ""
+    phone: str = ""
+    location: str = ""
+    type: str = "company"
+
+
+class ReceiveStockIn(BaseModel):
+    qty: float
+    note: str = ""
+    who: str = "Kojo Antwi"
+
+
 class DemandPiece(BaseModel):
     profile: str
     member: str = ""

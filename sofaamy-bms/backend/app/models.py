@@ -43,12 +43,66 @@ class Job(Base):
     job_number: Mapped[str] = mapped_column(String(30), unique=True)  # SOF-YYYY-NNN
     client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"))
     product: Mapped[str] = mapped_column(String(120))
-    stage: Mapped[str] = mapped_column(String(30), default="cutting")
+    stage: Mapped[str] = mapped_column(String(30), default="pending")
     progress: Mapped[int] = mapped_column(Integer, default=0)
-    paid: Mapped[str] = mapped_column(String(10), default="50%")
+    paid: Mapped[str] = mapped_column(String(10), default="0%")
+    value: Mapped[float] = mapped_column(Float, default=0.0)   # GHS contract value
+    driver: Mapped[str] = mapped_column(String(80), default="")
+    vehicle: Mapped[str] = mapped_column(String(40), default="")
+    dn_number: Mapped[str] = mapped_column(String(30), default="")  # delivery note
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     client = relationship("Client", back_populates="jobs")
     quotes = relationship("Quote", back_populates="job")
+
+
+class Payment(Base):
+    """A payment received against a job — deposit / balance / other.
+    The 50% deposit gate reads from here."""
+    __tablename__ = "payments"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
+    kind: Mapped[str] = mapped_column(String(20), default="deposit")   # deposit|balance|other
+    method: Mapped[str] = mapped_column(String(20), default="momo")    # momo|bank|cash|cheque
+    amount: Mapped[float] = mapped_column(Float, default=0.0)          # GHS
+    ref: Mapped[str] = mapped_column(String(60), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Event(Base):
+    """Activity log — every state change in the system, shown on the
+    dashboard feed and each job's timeline."""
+    __tablename__ = "events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
+    who: Mapped[str] = mapped_column(String(80), default="System")
+    kind: Mapped[str] = mapped_column(String(20), default="system")  # stage|payment|qc|dispatch|quote|stock|system
+    note: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class QcCheck(Base):
+    """Quality inspection at the QA stage — pass advances, rework holds."""
+    __tablename__ = "qc_checks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
+    result: Mapped[str] = mapped_column(String(10))                  # pass|rework
+    score: Mapped[int] = mapped_column(Integer, default=100)
+    notes: Mapped[str] = mapped_column(String(300), default="")
+    checklist: Mapped[str] = mapped_column(Text, default="[]")       # JSON list of {item, ok}
+    inspector: Mapped[str] = mapped_column(String(80), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class StockMove(Base):
+    """Inventory movement — negative = issued to a job, positive = received."""
+    __tablename__ = "stock_moves"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    material_id: Mapped[int] = mapped_column(ForeignKey("materials.id"))
+    delta: Mapped[float] = mapped_column(Float)
+    reason: Mapped[str] = mapped_column(String(120), default="")
+    job_number: Mapped[str] = mapped_column(String(30), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class DesignRecord(Base):

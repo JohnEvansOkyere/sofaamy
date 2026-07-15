@@ -13,16 +13,38 @@ import hashlib
 import hmac
 import json
 
-from .database import Base, engine, get_db
-from . import models, schemas
+from .database import Base, engine, get_db, SessionLocal
+from . import models, schemas, lifecycle as lc
 from .pricing import calc_quote, calc_any_quote, extract_pieces_any, frameless_breakdown
 from .optimizer import optimize
 from .pdf import quote_pdf
 from .reports import (boq_pdf, cutting_list_pdf, work_order_pdf,
                       glass_order_pdf, hardware_list_pdf, fl_work_order_pdf,
-                      installation_sheet_pdf)
+                      installation_sheet_pdf, delivery_note_pdf)
 
 Base.metadata.create_all(bind=engine)
+
+
+def _auto_migrate():
+    """Additive SQLite migration: create_all makes new TABLES but not new
+    COLUMNS — add any the models gained, so existing databases keep working."""
+    from sqlalchemy import text
+    wanted = {
+        "jobs": [("value", "FLOAT DEFAULT 0"), ("driver", "TEXT DEFAULT ''"),
+                 ("vehicle", "TEXT DEFAULT ''"), ("dn_number", "TEXT DEFAULT ''"),
+                 ("delivered_at", "DATETIME")],
+    }
+    with engine.begin() as conn:
+        for table, cols in wanted.items():
+            have = {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})"))}
+            for name, ddl in cols:
+                if name not in have:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+
+
+_auto_migrate()
+with SessionLocal() as _db:
+    lc.ensure_engine_materials(_db)
 
 app = FastAPI(title="Sofaamy Cloud API", version="0.1.0")
 app.add_middleware(
@@ -37,27 +59,266 @@ def root():
     return {"service": "Sofaamy Cloud API", "status": "ok", "db": "sqlite"}
 
 
-@app.get("/api/clients", response_model=list[schemas.ClientOut])
+@app.get("/api/clients")
 def list_clients(db: Session = Depends(get_db)):
-    return db.scalars(select(models.Client)).all()
+    out = []
+    for c in db.scalars(select(models.Client)).all():
+        jobs = c.jobs or []
+        out.append({"id": c.id, "name": c.name, "contact": c.contact,
+                    "phone": c.phone, "location": c.location, "type": c.type,
+                    "jobs": len(jobs), "value": round(sum(j.value for j in jobs), 2)})
+    return out
 
 
-@app.get("/api/materials", response_model=list[schemas.MaterialOut])
+@app.post("/api/clients")
+def create_client(c: schemas.ClientIn, db: Session = Depends(get_db)):
+    client = models.Client(name=c.name, contact=c.contact, phone=c.phone,
+                           location=c.location, type=c.type)
+    db.add(client)
+    lc.log(db, "system", f"added client {c.name}", who="Kwame Mensah")
+    db.commit(); db.refresh(client)
+    return {"id": client.id, "name": client.name}
+
+
+@app.get("/api/materials")
 def list_materials(db: Session = Depends(get_db)):
-    return db.scalars(select(models.Material)).all()
+    return [{"id": m.id, "code": m.code, "name": m.name, "category": m.category,
+             "unit": m.unit, "unit_price": m.unit_price, "stock": m.stock,
+             "reorder_level": m.reorder_level}
+            for m in db.scalars(select(models.Material)
+                                .order_by(models.Material.category, models.Material.code))]
+
+
+@app.post("/api/materials/{material_id}/receive")
+def receive_stock(material_id: int, req: schemas.ReceiveStockIn, db: Session = Depends(get_db)):
+    mat = db.get(models.Material, material_id)
+    if mat is None:
+        raise HTTPException(404, "Material not found")
+    if req.qty <= 0:
+        raise HTTPException(400, "Quantity must be positive")
+    mat.stock = round(mat.stock + req.qty, 2)
+    db.add(models.StockMove(material_id=mat.id, delta=req.qty,
+                            reason=req.note or "Goods received"))
+    lc.log(db, "stock", f"received {req.qty} {mat.unit} {mat.code} ({mat.name})", who=req.who)
+    db.commit()
+    return {"code": mat.code, "stock": mat.stock}
+
+
+@app.get("/api/stock-moves")
+def stock_moves(limit: int = 25, db: Session = Depends(get_db)):
+    moves = db.scalars(select(models.StockMove)
+                       .order_by(models.StockMove.created_at.desc()).limit(limit)).all()
+    out = []
+    for mv in moves:
+        mat = db.get(models.Material, mv.material_id)
+        out.append({"code": mat.code if mat else "?", "name": mat.name if mat else "?",
+                    "unit": mat.unit if mat else "", "delta": mv.delta,
+                    "reason": mv.reason, "job": mv.job_number,
+                    "at": mv.created_at.isoformat()})
+    return out
 
 
 @app.get("/api/jobs")
 def list_jobs(db: Session = Depends(get_db)):
-    jobs = db.scalars(select(models.Job)).all()
-    return [{"id": j.job_number, "client": j.client.name if j.client else "—",
-             "product": j.product, "stage": j.stage, "progress": j.progress,
-             "paid": j.paid, "due": j.created_at.strftime("%d %b")} for j in jobs]
+    jobs = db.scalars(select(models.Job).order_by(models.Job.created_at.desc())).all()
+    return [lc.job_summary(db, j) for j in jobs]
 
 
-@app.get("/api/quotes", response_model=list[schemas.QuoteOut])
+def _get_job(db: Session, job_number: str) -> models.Job:
+    job = db.scalar(select(models.Job).where(models.Job.job_number == job_number))
+    if job is None:
+        raise HTTPException(404, f"Job {job_number} not found")
+    return job
+
+
+@app.get("/api/jobs/{job_number}")
+def job_detail(job_number: str, db: Session = Depends(get_db)):
+    j = _get_job(db, job_number)
+    payments = db.scalars(select(models.Payment).where(models.Payment.job_id == j.id)
+                          .order_by(models.Payment.created_at.desc())).all()
+    events = db.scalars(select(models.Event).where(models.Event.job_id == j.id)
+                        .order_by(models.Event.created_at.desc()).limit(30)).all()
+    qcs = db.scalars(select(models.QcCheck).where(models.QcCheck.job_id == j.id)
+                     .order_by(models.QcCheck.created_at.desc())).all()
+    rec = db.scalars(select(models.DesignRecord)
+                     .where(models.DesignRecord.job_id == j.id)).first()
+    quote = db.scalars(select(models.Quote).where(models.Quote.job_id == j.id)).first()
+    return {
+        **lc.job_summary(db, j),
+        "stages": [{"key": k, "label": l} for k, l, _ in lc.STAGES],
+        "payments": [{"kind": p.kind, "method": p.method, "amount": p.amount,
+                      "ref": p.ref, "at": p.created_at.isoformat()} for p in payments],
+        "events": [lc.event_dict(e) for e in events],
+        "qc_checks": [{"result": q.result, "score": q.score, "notes": q.notes,
+                       "inspector": q.inspector, "at": q.created_at.isoformat(),
+                       "checklist": json.loads(q.checklist or "[]")} for q in qcs],
+        "design": json.loads(rec.design_json) if rec else None,
+        "design_ref": rec.ref if rec else "",
+        "share_token": share_token(rec.id) if rec else None,
+        "quote_number": quote.quote_number if quote else None,
+    }
+
+
+@app.post("/api/jobs/{job_number}/advance")
+def advance_job(job_number: str, req: schemas.AdvanceIn, db: Session = Depends(get_db)):
+    j = _get_job(db, job_number)
+    reason = lc.advance_block_reason(db, j)
+    if reason:
+        raise HTTPException(409, reason)
+    nxt = lc.STAGE_KEYS[lc.stage_index(j.stage) + 1]
+    j.stage = nxt
+    j.progress = lc.STAGE_PROGRESS[nxt]
+    note = f"moved {j.job_number} to {lc.STAGE_LABEL[nxt]}"
+    if nxt == "cutting":
+        issued = lc.issue_materials(db, j)
+        if issued:
+            note += f" — materials issued: {', '.join(issued[:4])}" \
+                    + (f" +{len(issued) - 4} more" if len(issued) > 4 else "")
+    if nxt == "done":
+        j.delivered_at = j.delivered_at or datetime.utcnow()
+    lc.log(db, "stage", note, job_id=j.id, who=req.who)
+    lc.refresh_paid(db, j)
+    db.commit()
+    return lc.job_summary(db, j)
+
+
+@app.post("/api/jobs/{job_number}/payments")
+def add_payment(job_number: str, p: schemas.PaymentIn, db: Session = Depends(get_db)):
+    j = _get_job(db, job_number)
+    if p.amount <= 0:
+        raise HTTPException(400, "Amount must be positive")
+    db.add(models.Payment(job_id=j.id, kind=p.kind, method=p.method,
+                          amount=p.amount, ref=p.ref))
+    lc.log(db, "payment",
+           f"recorded {p.kind} of GHS {p.amount:,.2f} ({p.method}) — {j.job_number}",
+           job_id=j.id, who=p.who)
+    db.flush()
+    lc.refresh_paid(db, j)
+    db.commit()
+    return lc.job_summary(db, j)
+
+
+@app.post("/api/jobs/{job_number}/qc")
+def add_qc(job_number: str, q: schemas.QcIn, db: Session = Depends(get_db)):
+    j = _get_job(db, job_number)
+    if q.result not in ("pass", "rework"):
+        raise HTTPException(400, "result must be pass|rework")
+    db.add(models.QcCheck(job_id=j.id, result=q.result, score=q.score, notes=q.notes,
+                          checklist=json.dumps(q.checklist), inspector=q.inspector))
+    verdict = "passed QA" if q.result == "pass" else "flagged for REWORK at QA"
+    lc.log(db, "qc", f"{j.job_number} {verdict} ({q.score}%)"
+           + (f" — {q.notes}" if q.notes else ""), job_id=j.id, who=q.inspector)
+    db.commit()
+    return lc.job_summary(db, j)
+
+
+@app.post("/api/jobs/{job_number}/dispatch")
+def assign_dispatch(job_number: str, d: schemas.DispatchIn, db: Session = Depends(get_db)):
+    j = _get_job(db, job_number)
+    if j.stage not in ("dispatch", "install", "done"):
+        raise HTTPException(409, "Job has not reached Dispatch yet")
+    if not j.dn_number:
+        n = db.scalar(select(func.count(models.Job.id)).where(models.Job.dn_number != "")) or 0
+        j.dn_number = f"SOF-DN-{datetime.now():%Y}-{n + 88:03d}"
+    j.driver, j.vehicle = d.driver, d.vehicle
+    lc.log(db, "dispatch",
+           f"delivery {j.dn_number} assigned to {d.driver} ({d.vehicle or 'vehicle TBC'})",
+           job_id=j.id, who=d.who)
+    db.commit()
+    return lc.job_summary(db, j)
+
+
+@app.get("/api/jobs/{job_number}/delivery-note")
+def delivery_note(job_number: str, db: Session = Depends(get_db)):
+    j = _get_job(db, job_number)
+    if not j.dn_number:
+        raise HTTPException(409, "Assign a driver first — no delivery note issued yet")
+    rec = db.scalars(select(models.DesignRecord)
+                     .where(models.DesignRecord.job_id == j.id)).first()
+    pdf = delivery_note_pdf(lc.job_summary(db, j),
+                            json.loads(rec.design_json) if rec else None,
+                            j.client.location if j.client else "")
+    return _pdf_response(pdf, f"{j.dn_number}.pdf")
+
+
+@app.post("/api/quotes/{quote_number}/status")
+def quote_status(quote_number: str, req: schemas.QuoteStatusIn, db: Session = Depends(get_db)):
+    quote = db.scalar(select(models.Quote).where(models.Quote.quote_number == quote_number))
+    if quote is None:
+        raise HTTPException(404, "Quote not found")
+    if req.status not in ("Sent", "Accepted", "Declined"):
+        raise HTTPException(400, "status must be Sent|Accepted|Declined")
+
+    quote.status = req.status
+    result = {"quote_number": quote.quote_number, "status": quote.status}
+
+    if req.status == "Sent":
+        lc.log(db, "quote", f"sent quote {quote.quote_number} to "
+               f"{quote.client_name} via WhatsApp", who=req.who)
+    elif req.status == "Declined":
+        lc.log(db, "quote", f"{quote.client_name} declined quote {quote.quote_number}",
+               who=req.who)
+    elif req.status == "Accepted":
+        if quote.job_id is None:
+            client = db.scalar(select(models.Client)
+                               .where(models.Client.name == quote.client_name))
+            if client is None:
+                client = models.Client(name=quote.client_name)
+                db.add(client); db.flush()
+            n = db.scalar(select(func.count(models.Job.id))) or 0
+            job = models.Job(job_number=f"SOF-{datetime.now():%Y}-{n + 101:03d}",
+                             client_id=client.id, product=quote.product,
+                             stage="pending", progress=0, paid="0%", value=quote.total)
+            db.add(job); db.flush()
+            quote.job_id = job.id
+            result["job_number"] = job.job_number
+            lc.log(db, "quote", f"{quote.client_name} accepted {quote.quote_number} — "
+                   f"job {job.job_number} opened (GHS {quote.total:,.0f}), awaiting 50% deposit",
+                   job_id=job.id, who=req.who)
+        else:
+            job = db.get(models.Job, quote.job_id)
+            result["job_number"] = job.job_number if job else None
+    db.commit()
+    return result
+
+
+@app.get("/api/activity")
+def activity(limit: int = 20, db: Session = Depends(get_db)):
+    events = db.scalars(select(models.Event)
+                        .order_by(models.Event.created_at.desc()).limit(limit)).all()
+    out = []
+    for e in events:
+        job = db.get(models.Job, e.job_id) if e.job_id else None
+        out.append(lc.event_dict(e, job.job_number if job else None))
+    return out
+
+
+@app.get("/api/quotes")
 def list_quotes(db: Session = Depends(get_db)):
-    return db.scalars(select(models.Quote)).all()
+    quotes = db.scalars(select(models.Quote)
+                        .order_by(models.Quote.created_at.desc())).all()
+    out = []
+    for q in quotes:
+        job = db.get(models.Job, q.job_id) if q.job_id else None
+        out.append({"quote_number": q.quote_number, "client_name": q.client_name,
+                    "product": q.product, "total": q.total, "status": q.status,
+                    "created_at": q.created_at.isoformat() if q.created_at else None,
+                    "job_number": job.job_number if job else None})
+    return out
+
+
+@app.get("/api/qc-checks")
+def list_qc_checks(limit: int = 20, db: Session = Depends(get_db)):
+    checks = db.scalars(select(models.QcCheck)
+                        .order_by(models.QcCheck.created_at.desc()).limit(limit)).all()
+    out = []
+    for q in checks:
+        job = db.get(models.Job, q.job_id)
+        out.append({"job": job.job_number if job else "—",
+                    "product": job.product if job else "—",
+                    "result": q.result, "score": q.score, "notes": q.notes,
+                    "inspector": q.inspector, "at": q.created_at.isoformat()})
+    return out
 
 
 @app.post("/api/price")
@@ -132,7 +393,7 @@ def create_job_from_design(req: schemas.DesignQuoteIn, db: Session = Depends(get
     job = models.Job(
         job_number=f"SOF-{datetime.now():%Y}-{n + 101:03d}",
         client_id=client.id, product=req.design.name,
-        stage="cutting", progress=0, paid="0%",
+        stage="pending", progress=0, paid="0%", value=result["grand_total"],
     )
     db.add(job); db.flush()
     quote.job_id = job.id
@@ -142,6 +403,9 @@ def create_job_from_design(req: schemas.DesignQuoteIn, db: Session = Depends(get
         total=result["grand_total"], design_json=req.design.model_dump_json(),
         job_id=job.id,
     ))
+    lc.log(db, "quote", f"quote {quote.quote_number} accepted — job {job.job_number} "
+           f"opened for {name} (GHS {result['grand_total']:,.0f}), awaiting 50% deposit",
+           job_id=job.id, who="Kwame Mensah")
     db.commit()
     return {"job_number": job.job_number, "quote_number": quote.quote_number,
             "total": result["grand_total"], "currency": "GHS"}
@@ -255,7 +519,69 @@ def optimize_cutting(req: schemas.OptimizeRequest):
 
 @app.get("/api/dashboard")
 def dashboard(db: Session = Depends(get_db)):
-    jobs = db.scalar(select(func.count(models.Job.id))) or 0
-    quotes = db.scalar(select(func.count(models.Quote.id))) or 0
-    clients = db.scalar(select(func.count(models.Client.id))) or 0
-    return {"active_jobs": jobs, "open_quotes": quotes, "clients": clients}
+    """Everything on the dashboard, computed from the live database."""
+    from datetime import timedelta
+    now = datetime.utcnow()
+
+    jobs = db.scalars(select(models.Job)).all()
+    quotes = db.scalars(select(models.Quote)).all()
+    payments = db.scalars(select(models.Payment)).all()
+    materials = db.scalars(select(models.Material)).all()
+
+    active = [j for j in jobs if j.stage != "done"]
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    revenue_month = sum(p.amount for p in payments if p.created_at >= month_start)
+    received_total = {j.id: 0.0 for j in jobs}
+    for p in payments:
+        received_total[p.job_id] = received_total.get(p.job_id, 0) + p.amount
+    outstanding = sum(max(j.value - received_total.get(j.id, 0), 0) for j in active)
+
+    open_q = [q for q in quotes if q.status in ("Draft", "Sent")]
+    decided = [q for q in quotes if q.status in ("Accepted", "Approved", "Declined", "Rejected")]
+    won = [q for q in decided if q.status in ("Accepted", "Approved")]
+    convert = round(len(won) / len(decided) * 100) if decided else 0
+
+    # payments received per week, last 8 weeks
+    trend = []
+    for w in range(7, -1, -1):
+        start = now - timedelta(days=(w + 1) * 7)
+        end = now - timedelta(days=w * 7)
+        amt = sum(p.amount for p in payments if start <= p.created_at < end)
+        trend.append({"label": f"W{8 - w}", "value": round(amt / 1000, 1)})
+
+    by_stage = {}
+    for j in active:
+        by_stage[j.stage] = by_stage.get(j.stage, 0) + 1
+    stage_mix = [{"key": k, "label": lc.STAGE_LABEL.get(k, k), "value": v}
+                 for k, v in by_stage.items()]
+
+    low_stock = [{"code": m.code, "name": m.name, "stock": m.stock,
+                  "unit": m.unit, "reorder": m.reorder_level}
+                 for m in materials if m.stock <= m.reorder_level]
+    stock_value = sum(m.stock * m.unit_price for m in materials)
+
+    events = db.scalars(select(models.Event)
+                        .order_by(models.Event.created_at.desc()).limit(8)).all()
+    feed = []
+    for e in events:
+        job = db.get(models.Job, e.job_id) if e.job_id else None
+        feed.append(lc.event_dict(e, job.job_number if job else None))
+
+    recent_jobs = [lc.job_summary(db, j) for j in
+                   sorted(jobs, key=lambda j: j.created_at, reverse=True)[:6]]
+
+    return {
+        "active_jobs": len(active), "open_quotes": len(open_q),
+        "clients": db.scalar(select(func.count(models.Client.id))) or 0,
+        "revenue_month": round(revenue_month, 2),
+        "outstanding": round(outstanding, 2),
+        "convert_pct": convert,
+        "quoted_month": round(sum(q.total for q in quotes
+                                  if q.created_at and q.created_at >= month_start), 2),
+        "trend": trend, "stage_mix": stage_mix,
+        "low_stock": low_stock, "stock_value": round(stock_value, 2),
+        "activity": feed, "recent_jobs": recent_jobs,
+        "awaiting_deposit": len([j for j in active if j.stage == "pending"]),
+        "awaiting_qa": len([j for j in active if j.stage == "qa"]),
+        "in_dispatch": len([j for j in active if j.stage in ("dispatch", "install")]),
+    }

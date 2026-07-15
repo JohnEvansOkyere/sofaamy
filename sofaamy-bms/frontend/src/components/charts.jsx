@@ -2,7 +2,7 @@
 
 export function AreaChart({ data, height = 180, color = '#2471A3' }) {
   const w = 560, h = height, pad = 8
-  const max = Math.max(...data.map(d => d.value)) * 1.15
+  const max = Math.max(...data.map(d => d.value), 1) * 1.15
   const step = (w - pad*2) / (data.length - 1)
   const pts = data.map((d,i) => [pad + i*step, h - 24 - (d.value/max)*(h - 44)])
   const line = pts.map((p,i)=>`${i?'L':'M'}${p[0]},${p[1]}`).join(' ')

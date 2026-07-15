@@ -622,3 +622,71 @@ def installation_sheet_pdf(design: dict, result: dict) -> bytes:
                   strokeColor=colors.HexColor("#9fb0bd"), strokeWidth=0.8))
     flow.append(box2)
     return _build("INSTALLATION SHEET", _meta_line(design, result), flow)
+
+
+# ── DELIVERY NOTE ────────────────────────────────────────────
+
+def delivery_note_pdf(job: dict, design: dict | None, site: str) -> bytes:
+    """Delivery note for a dispatched job — items, vehicle, sign-off."""
+    flow = []
+
+    rows = [
+        ["Delivery Note No.", job.get("dn_number") or "—", "Job No.", job["job_number"]],
+        ["Client", job["client"], "Contact", job.get("client_phone") or "—"],
+        ["Delivery Address", site or "—", "Date", f"{datetime.now():%d %b %Y}"],
+        ["Driver", job.get("driver") or "—", "Vehicle", job.get("vehicle") or "—"],
+    ]
+    t = Table(rows, colWidths=[34 * mm, 58 * mm, 24 * mm, 50 * mm])
+    t.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+        ("TEXTCOLOR", (0, 0), (0, -1), NAVY),
+        ("TEXTCOLOR", (2, 0), (2, -1), NAVY),
+        ("GRID", (0, 0), (-1, -1), 0.4, LINE),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    flow.append(t)
+
+    flow.append(Paragraph("Items delivered", H2))
+    if design:
+        qty = design.get("qty") or 1
+        item = (f"{design.get('name', job['product'])}"
+                f" — {design.get('width')} × {design.get('height')} mm"
+                + (f" · ref {design.get('ref')}" if design.get("ref") else ""))
+        rows = [["#", "Item", "Qty", "Checked"]] + [["1", item, str(qty), "☐"]]
+    else:
+        rows = [["#", "Item", "Qty", "Checked"]] + [["1", job["product"], "—", "☐"]]
+    rows += [[str(i), "", "", "☐"] for i in range(len(rows), 5)]
+    t = Table(rows, colWidths=[10 * mm, 116 * mm, 16 * mm, 24 * mm])
+    t.setStyle(BASE_STYLE)
+    flow.append(t)
+
+    flow.append(Paragraph(
+        "Goods checked and received in good condition. Glass inspected for edge damage, "
+        "scratches and correct sizes before signing. Balance payment due on delivery per "
+        "agreed terms (50% deposit / 50% on delivery).", NOTE))
+
+    flow.append(Spacer(0, 14 * mm))
+    rows = [["Delivered by (Sofaamy)", "Received by (Client)"],
+            ["\n\nName: ____________________\n\nSignature: _______________\n\nDate: ____________",
+             "\n\nName: ____________________\n\nSignature: _______________\n\nDate: ____________"]]
+    t = Table(rows, colWidths=[83 * mm, 83 * mm])
+    t.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 8.5),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+        ("FONTSIZE", (0, 1), (-1, -1), 8.5),
+        ("GRID", (0, 0), (-1, -1), 0.4, LINE),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 10),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    flow.append(t)
+
+    sub = (f"Job {job['job_number']} · {job['client']} · "
+           f"value {ghs(job['value'])} · paid {job['paid']} · {datetime.now():%d %b %Y}")
+    return _build("DELIVERY NOTE", sub, flow)

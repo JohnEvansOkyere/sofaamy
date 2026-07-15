@@ -1,59 +1,90 @@
+import { useEffect, useState } from 'react'
 import { PageHead, Card, Stat, Badge, Person } from '../components/ui.jsx'
-import { QA_CHECKS } from '../data/seed.js'
+import JobDrawer from '../components/JobDrawer.jsx'
+import { listJobs, listQcChecks } from '../lib/api.js'
+import { timeAgo } from '../lib/whatsapp.js'
 import { IconShield, IconCheck, IconClock } from '../components/icons.jsx'
+import '../styles/ops.css'
 
 export default function Quality() {
+  const [jobs, setJobs] = useState([])
+  const [checks, setChecks] = useState([])
+  const [live, setLive] = useState(false)
+  const [open, setOpen] = useState(null)
+
+  const refresh = () => Promise.all([listJobs(), listQcChecks()])
+    .then(([js, cs]) => { setJobs(js); setChecks(cs); setLive(true) }).catch(() => {})
+  useEffect(() => { refresh() }, [])
+
+  const queue = jobs.filter(j => j.stage === 'qa')
+  const passes = checks.filter(c => c.result === 'pass')
+  const rework = checks.filter(c => c.result === 'rework')
+  const avgScore = checks.length ? Math.round(checks.reduce((s, c) => s + c.score, 0) / checks.length) : 0
+
   return (
     <>
-      <PageHead title="Quality Control" subtitle="Post-production and post-installation checks matched to Sofaamy's standards." >
-        <button className="btn btn-primary"><IconShield/> New Inspection</button>
+      <PageHead title="Quality Control" subtitle="Inspect at the QA gate — pass releases to dispatch, rework holds the job.">
+        {live
+          ? <span className="badge b-green"><span className="bdot"/>Live · from database</span>
+          : <span className="badge b-orange"><span className="bdot"/>Backend offline</span>}
       </PageHead>
 
       <div className="grid g-4 mb">
-        <Stat label="Pass Rate (Month)" value="94%" trend="+2%" dir="up" tone="green" icon={<IconCheck/>} />
-        <Stat label="Inspections" value="42" trend="this month" dir="flat" tone="blue" icon={<IconShield/>} />
-        <Stat label="Rework Items" value="3" trend="↓ 2" dir="up" tone="orange" icon={<IconClock/>} />
-        <Stat label="Avg. QA Score" value="93.5%" trend="stable" dir="flat" tone="purple" icon={<IconShield/>} />
+        <Stat label="Awaiting Inspection" value={String(queue.length)} trend="at the QA gate" dir="flat" tone="orange" icon={<IconClock/>} />
+        <Stat label="Pass Rate" value={checks.length ? `${Math.round(passes.length / checks.length * 100)}%` : '—'} trend={`${checks.length} inspections`} dir="up" tone="green" icon={<IconCheck/>} />
+        <Stat label="Rework Flagged" value={String(rework.length)} trend={rework[0]?.job || 'none'} dir="flat" tone="purple" icon={<IconShield/>} />
+        <Stat label="Avg. QA Score" value={checks.length ? `${avgScore}%` : '—'} trend="across all checks" dir="flat" tone="blue" icon={<IconShield/>} />
       </div>
 
-      <Card title="Inspection Log" pad={false}>
+      <Card title="Inspection Queue" sub="Jobs at Quality Check — open one to run the checklist" pad={false} className="mb">
         <div className="tbl-wrap">
           <table className="tbl">
-            <thead><tr><th>Check</th><th>Job</th><th>Product</th><th>Checkpoint</th><th>Inspector</th><th>Score</th><th>Result</th><th>When</th></tr></thead>
+            <thead><tr><th>Job</th><th>Client</th><th>Product</th><th>Last Result</th><th></th></tr></thead>
             <tbody>
-              {QA_CHECKS.map((q,i) => (
-                <tr key={q.id}>
-                  <td className="t-mono">{q.id}</td>
-                  <td className="t-mono t-muted">{q.job}</td>
-                  <td className="t-strong">{q.product}</td>
-                  <td><Badge tone="gray">{q.stage}</Badge></td>
-                  <td><Person name={q.inspector} i={i+4} /></td>
-                  <td className="t-mono">{q.score}</td>
-                  <td><Badge>{q.result}</Badge></td>
-                  <td className="t-muted">{q.when}</td>
+              {queue.map(j => (
+                <tr key={j.id}>
+                  <td className="t-mono">{j.job_number}</td>
+                  <td className="t-strong">{j.client}</td>
+                  <td className="t-muted">{j.product}</td>
+                  <td>{j.qc
+                    ? <Badge tone={j.qc === 'pass' ? 'green' : 'orange'}>{j.qc === 'pass' ? 'Passed — release' : '⟲ Rework — re-inspect'}</Badge>
+                    : <Badge tone="gray">Not inspected</Badge>}</td>
+                  <td className="right">
+                    <button className="btn btn-primary btn-sm" onClick={() => setOpen(j.job_number)}>
+                      <IconShield style={{ width:14, height:14 }}/> Inspect
+                    </button>
+                  </td>
                 </tr>
               ))}
+              {!queue.length && <tr><td colSpan={5} className="muted center" style={{ padding:22 }}>QA queue is clear — jobs arrive here from Glazing.</td></tr>}
             </tbody>
           </table>
         </div>
       </Card>
 
-      <div className="grid g-2 mt">
-        <Card title="QA Checklist Template" sub="Applied at each checkpoint">
-          {['Frame squareness within ±2mm','Glass free of chips & scratches','Hardware operates smoothly','Seals & gaskets fitted','Finish matches spec','Dimensions match survey'].map((c,i)=>(
-            <div key={i} className="flex items-center gap-sm" style={{ padding:'7px 0', fontSize:13, borderBottom:'1px solid var(--line-soft)' }}>
-              <span style={{ width:18,height:18,borderRadius:5,background:'var(--green-soft)',color:'var(--green)',display:'flex',alignItems:'center',justifyContent:'center' }}>
-                <IconCheck style={{ width:12,height:12 }}/></span>{c}
-            </div>
-          ))}
-        </Card>
-        <Card title="Rework Flow" sub="What happens on a fail">
-          <p className="t-muted" style={{ fontSize:13 }}>A failed check sends the job back to the responsible factory stage with a note and photo. The supervisor is notified instantly, and the job re-enters the pipeline at that stage — nothing slips through.</p>
-          <div className="mt flex gap-sm wrap">
-            <Badge tone="orange">Rework → Glazing</Badge><Badge tone="blue">Supervisor notified</Badge>
-          </div>
-        </Card>
-      </div>
+      <Card title="Inspection Log" sub="Every inspection recorded, newest first" pad={false}>
+        <div className="tbl-wrap">
+          <table className="tbl">
+            <thead><tr><th>Job</th><th>Product</th><th>Inspector</th><th>Notes</th><th>Score</th><th>Result</th><th>When</th></tr></thead>
+            <tbody>
+              {checks.map((q, i) => (
+                <tr key={i}>
+                  <td className="t-mono t-muted">{q.job}</td>
+                  <td className="t-strong">{q.product}</td>
+                  <td><Person name={q.inspector || '—'} i={i + 4} /></td>
+                  <td className="t-muted" style={{ maxWidth:260 }}>{q.notes || '—'}</td>
+                  <td className="t-mono">{q.score}%</td>
+                  <td><Badge tone={q.result === 'pass' ? 'green' : 'orange'}>{q.result === 'pass' ? 'Pass' : 'Rework'}</Badge></td>
+                  <td className="t-muted">{timeAgo(q.at)}</td>
+                </tr>
+              ))}
+              {!checks.length && <tr><td colSpan={7} className="muted center" style={{ padding:22 }}>No inspections recorded yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {open && <JobDrawer jobNumber={open} onClose={() => setOpen(null)} onChanged={refresh}/>}
     </>
   )
 }

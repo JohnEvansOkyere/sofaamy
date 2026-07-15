@@ -4,6 +4,9 @@ import FramelessCanvas from './FramelessCanvas.jsx'
 import CurtainWallCanvas from './CurtainWallCanvas.jsx'
 import CutPlan from './CutPlan.jsx'
 import GlassOrder from './GlassOrder.jsx'
+import WhatsAppModal from '../WhatsAppModal.jsx'
+import { quoteMessage } from '../../lib/whatsapp.js'
+import '../../styles/ops.css'
 
 // 3D views are heavy (three.js) — loaded only when first opened
 const Design3D = lazy(() => import('./Design3D.jsx'))
@@ -278,6 +281,22 @@ export default function Configurator() {
       } catch {
         window.prompt('Client link — copy it:', url)
       }
+    } catch (e) { apiFail(e) }
+  }
+  // full WhatsApp send: save design → share link → composed quote message
+  const [wa, setWa] = useState(null)
+  const onWhatsApp = async () => {
+    try {
+      const r = await saveDesign(client, design)
+      refreshSaved()
+      setWa({
+        message: quoteMessage({
+          client: client || 'there', product: design.name,
+          quoteNumber: r.ref || design.ref || design.name, total: quote.grandTotal,
+          shareUrl: `${window.location.origin}/share/${r.share_token}`,
+        }),
+        link: `${window.location.origin}/share/${r.share_token}`,
+      })
     } catch (e) { apiFail(e) }
   }
 
@@ -725,7 +744,7 @@ export default function Configurator() {
               <div className="q-sum"><span className="t-muted">Margin ({quote.marginPct}%)</span><b>{GHS(quote.margin)}</b></div>
               <div className="q-sum" style={{ borderTop:'2px solid var(--line)', marginTop:4, paddingTop:10, fontSize:15 }}><b>Total</b><b style={{ color:'var(--navy-600)' }}>{GHS(quote.total)}</b></div>
               <div className="q-actions">
-                <button className="btn btn-gold btn-block" onClick={() => fire(`✅ Quote sent to ${client||'client'} on WhatsApp`)}><IconWhatsApp style={{ width:16, height:16 }} /> Send Quote on WhatsApp</button>
+                <button className="btn btn-gold btn-block" onClick={onWhatsApp}><IconWhatsApp style={{ width:16, height:16 }} /> Send Quote on WhatsApp</button>
                 <button className="btn btn-ghost btn-block" onClick={onShareLink}><IconCube style={{ width:16, height:16 }} /> Copy Client Link — 2D/3D view</button>
                 <button className="btn btn-ghost btn-block" onClick={onDownloadPdf}><IconDownload style={{ width:16, height:16 }} /> Download Quote PDF</button>
                 <button className="btn btn-primary btn-block" onClick={onSaveJob}><IconCheck style={{ width:16, height:16 }} /> Save & Create Job</button>
@@ -758,6 +777,8 @@ export default function Configurator() {
       : <CutPlan design={design} />)}
 
     {newProjectModal}
+    {wa && <WhatsAppModal to={{ phone: '', name: client || 'Client' }}
+      message={wa.message} link={wa.link} onClose={() => setWa(null)}/>}
     </>
   )
 }

@@ -76,14 +76,33 @@ export async function getSharedDesign(token) {
   return res.json()
 }
 
-export async function listJobs() {
-  const res = await fetch(`${BASE}/api/jobs`)
+async function getJSON(path) {
+  const res = await fetch(`${BASE}${path}`)
   if (!res.ok) throw new Error(`API ${res.status}`)
   return res.json()
 }
 
-export async function listQuotes() {
-  const res = await fetch(`${BASE}/api/quotes`)
-  if (!res.ok) throw new Error(`API ${res.status}`)
-  return res.json()
+export const listJobs = () => getJSON('/api/jobs')
+export const listQuotes = () => getJSON('/api/quotes')
+export const getJob = (jobNumber) => getJSON(`/api/jobs/${jobNumber}`)
+export const getDashboard = () => getJSON('/api/dashboard')
+export const getActivity = () => getJSON('/api/activity')
+export const listClients = () => getJSON('/api/clients')
+export const listMaterials = () => getJSON('/api/materials')
+export const listStockMoves = () => getJSON('/api/stock-moves')
+export const listQcChecks = () => getJSON('/api/qc-checks')
+
+// lifecycle actions — every one of these hits the real database
+export const advanceJob = (jn) => post(`/api/jobs/${jn}/advance`, {}).then(r => r.json())
+export const addPayment = (jn, data) => post(`/api/jobs/${jn}/payments`, data).then(r => r.json())
+export const addQc = (jn, data) => post(`/api/jobs/${jn}/qc`, data).then(r => r.json())
+export const assignDispatch = (jn, data) => post(`/api/jobs/${jn}/dispatch`, data).then(r => r.json())
+export const setQuoteStatus = (qn, status) => post(`/api/quotes/${qn}/status`, { status }).then(r => r.json())
+export const addClient = (data) => post('/api/clients', data).then(r => r.json())
+export const receiveStock = (id, qty, note = '') => post(`/api/materials/${id}/receive`, { qty, note }).then(r => r.json())
+
+export async function downloadDeliveryNote(jobNumber) {
+  const res = await fetch(`${BASE}/api/jobs/${jobNumber}/delivery-note`)
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return downloadBlob(res, `delivery-note-${jobNumber}.pdf`)
 }

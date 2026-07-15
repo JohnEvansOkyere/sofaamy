@@ -125,3 +125,25 @@ Your full frameless list (Hinged / Sliding / Swing systems, 25 configurations) i
 | L-corner joint gap | 5 mm (same as inline joint) | L43 |
 | Template default dims | per-template guesses | L44 |
 | Share-page WhatsApp | wa.me/233000000000 | L45 |
+
+---
+
+## M. Operations pipeline (added 15 Jul 2026, after the operational build)
+
+The system now runs the full job lifecycle (deposit gate → factory stages → QA gate → dispatch → balance gate → close-out). To make it match how Sofaamy actually operates:
+
+46. **Confirm the factory stage list**: Awaiting Deposit → Cutting → Processing → Holes/Routing → Assembly → Glazing → Quality Check → Dispatch → Installation → Completed. Any stages missing, merged, or in a different order?
+47. **Payment methods & references**: we model MoMo / bank / cash / cheque. Which do you accept, and what reference do you record (MoMo txn ID, bank slip no.)? Any part-payment rules beyond 50/50?
+48. **Who is allowed to do what**: who advances factory stages, who records payments, who signs off QA, who assigns drivers? (Becomes the role/permission matrix.)
+49. **QC checklist**: our 5 placeholder checks (dimensions ±1 mm, glass free of chips, edgework, hardware operation, finish match) — replace with your real inspection points per product family?
+50. **Delivery note**: fields/format you use today (units list? site contact? vehicle?) — ours is a standard 2-signature note.
+51. **WhatsApp sender**: which number do quotes/updates go out from (the wa.me flow opens the operator's own WhatsApp today; the Africa's Talking automation will need the business number + template approval).
+
+### Additional placeholders in the build (operations)
+| Value in system | Placeholder | Replace with |
+|---|---|---|
+| Stage list & order | 10 stages per CLAUDE.md | M46 |
+| Deposit / balance gates | 50% to start, 100% to close | confirm M47 |
+| QC checklist items | 5 generic checks | M49 |
+| Delivery note layout | 2-signature standard | M50 |
+| Staff names on actions | seeded names (Kwame, Esi, Yaw…) | auth module (Phase 2) |
