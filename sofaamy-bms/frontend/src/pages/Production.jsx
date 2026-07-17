@@ -41,7 +41,7 @@ export default function Production() {
 
       <div className="grid g-4 mb">
         <Stat label="Jobs in Factory" value={String(inFactory.length)} trend={`${active.length} active total`} dir="flat" tone="blue" icon={<IconFactory/>} />
-        <Stat label="Awaiting Deposit" value={String(jobs.filter(j => j.stage === 'pending').length)} trend="50% gate" dir="flat" tone="orange" icon={<IconWallet/>} />
+        <Stat label="Awaiting Deposit" value={String(jobs.filter(j => j.stage === 'pending').length)} trend="configured deposit gate" dir="flat" tone="orange" icon={<IconWallet/>} />
         <Stat label="Awaiting QA" value={String(jobs.filter(j => j.stage === 'qa').length)} trend={jobs.some(j => j.stage === 'qa' && j.qc === 'rework') ? 'rework flagged' : 'on track'} dir="flat" tone="purple" icon={<IconCheck/>} />
         <Stat label="Outstanding Balance" value={GHS0(outstanding)} trend={`${jobs.filter(j => ['dispatch','install'].includes(j.stage)).length} in delivery`} dir="flat" tone="green" icon={<IconTruck/>} />
       </div>

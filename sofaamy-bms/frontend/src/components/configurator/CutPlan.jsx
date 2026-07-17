@@ -10,7 +10,7 @@ function Bar({ bar, stockMm }) {
     <div className="cut-bar">
       {bar.cuts.map((c, i) => (
         <div key={i} className="cut-seg" style={{ width: `${(c.lengthMm / stockMm) * 100}%` }}
-          title={`${c.member} — ${c.lengthMm} mm`}>
+          title={`${c.position || c.member} — ${c.lengthMm} mm`}>
           <span>{c.lengthMm}</span>
         </div>
       ))}
@@ -44,13 +44,15 @@ export default function CutPlan({ design }) {
           <div>
             <div className="cfg-label" style={{ marginTop: 0 }}>Profile Breakdown — per unit{qty > 1 ? ` (× ${qty} units for cutting)` : ''}</div>
             <table className="cut-table">
-              <thead><tr><th>Position</th><th>Profile</th><th className="r">Length (mm)</th><th>Cuts</th><th className="r">Qty</th></tr></thead>
+              <thead><tr><th>Position</th><th>Profile</th><th className="r">Input</th><th className="r">Adj.</th><th className="r">Cut length</th><th>Cuts</th><th className="r">Qty</th></tr></thead>
               <tbody>
                 {breakdown.profiles.map((p, i) => (
                   <tr key={i}>
-                    <td>{p.position}</td>
+                    <td>{p.position}{p.note && <span className="muted" style={{ display:'block', fontSize:10 }}>{p.note}</span>}</td>
                     <td>{profileLabel(p.profile)}</td>
-                    <td className="r t-mono">{p.lengthMm.toLocaleString()}</td>
+                    <td className="r t-mono">{(p.sourceMm ?? p.lengthMm).toLocaleString()}</td>
+                    <td className="r t-mono">{p.adjustmentMm > 0 ? '+' : ''}{(p.adjustmentMm ?? 0).toLocaleString()}</td>
+                    <td className="r t-mono"><b>{p.lengthMm.toLocaleString()}</b></td>
                     <td className="t-mono" style={{ fontSize: 11 }}>{p.cuts}</td>
                     <td className="r t-mono">{p.qty}</td>
                   </tr>
@@ -60,12 +62,13 @@ export default function CutPlan({ design }) {
 
             <div className="cfg-label">Glass Cutting Sizes — per unit</div>
             <table className="cut-table">
-              <thead><tr><th>Section</th><th>Glass</th><th className="r">Cut W × H (mm)</th><th className="r">Qty</th></tr></thead>
+              <thead><tr><th>Section</th><th>Glass</th><th className="r">Source W × H</th><th className="r">Cut W × H (mm)</th><th className="r">Qty</th></tr></thead>
               <tbody>
                 {breakdown.glass.map((g, i) => (
                   <tr key={i}>
                     <td>{g.section} <span className="muted" style={{ fontSize: 10.5 }}>({g.note})</span></td>
                     <td>{GLASS[g.glass]?.label || g.glass}</td>
+                    <td className="r t-mono">{(g.sourceWMm ?? g.wMm).toLocaleString()} × {(g.sourceHMm ?? g.hMm).toLocaleString()}</td>
                     <td className="r t-mono">{g.wMm.toLocaleString()} × {g.hMm.toLocaleString()}</td>
                     <td className="r t-mono">{g.qty}</td>
                   </tr>
@@ -74,9 +77,10 @@ export default function CutPlan({ design }) {
             </table>
 
             <div className="cut-note">
-              Deductions: mullion/transom −2×50 mm frame depth · sliding sash = section/n + 15 mm interlock,
-              height −30 mm track · glass = opening −70 mm (fixed) / sash −60 mm · kerf {plan.kerfMm} mm ·
-              min offcut {CUTTING.minOffcutMm} mm — <b>all placeholder values, confirm with Sofaamy</b>
+              Each profile row shows the measured input, the applied adjustment, and the resulting cut length.
+              Current geometry uses −2×50 mm frame depth, +15 mm opening overlap, −30 mm track, glass −70 mm
+              (fixed) / −60 mm (opening), kerf {plan.kerfMm} mm and min offcut {CUTTING.minOffcutMm} mm.
+              Exact Sofaamy source-profile mapping still requires supervisor confirmation before factory release.
             </div>
           </div>
 
@@ -95,6 +99,9 @@ export default function CutPlan({ design }) {
                   <b>{profileLabel(g.profile)}</b>
                   <span className="muted">stock {g.stockMm.toLocaleString()} mm · {g.bars.length} bar(s) · waste {(g.wasteMm / 1000).toFixed(2)} m · {g.utilization}% used</span>
                 </div>
+                {g.oversized?.length > 0 && <div className="cut-note" style={{ color:'var(--red)', marginBottom:6 }}>
+                  ⚠ {g.oversized.length} cut(s) exceed the available {g.stockMm.toLocaleString()} mm stock length and must be reviewed before release.
+                </div>}
                 {g.bars.map((b, i) => <Bar key={i} bar={b} stockMm={g.stockMm} />)}
               </div>
             ))}

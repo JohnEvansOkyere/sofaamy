@@ -40,8 +40,8 @@ export default function Quotations() {
     try {
       const r = await setQuoteStatus(q.quote_number, 'Accepted')
       refresh()
-      fire(r.job_number
-        ? `✅ ${q.client_name} accepted — job ${r.job_number} opened, awaiting 50% deposit`
+        fire(r.job_number
+        ? `✅ ${q.client_name} accepted — job ${r.job_number} opened, awaiting the configured deposit`
         : `✅ Quote marked accepted`)
     } catch (e) { fire(`⚠️ ${e.message}`) }
   }

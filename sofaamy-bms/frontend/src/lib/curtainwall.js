@@ -40,6 +40,8 @@ export function buildCurtainWall(t) {
         glass:'reflective', opening:'fixed', panels:1 })
   return { category:'curtainwall', templateId:t.id, name:t.name, group:t.group,
     ref:'', qty:1, location:'',
+    clientPhone:'', clientEmail:'', jobDescription:'', colourDescription:'', quoteValidDays:3, costFloorOverride:0,
+    accessoryOverrides:[], customCutPieces:[], siteImages:[],
     frame:'mill', system:'standard', finishType:'powder',
     width:t.w, height:t.h, cols:t.cols, rows:t.rows,
     colWidths: equalSplit(t.w, t.cols), rowHeights: equalSplit(t.h, t.rows),
@@ -121,6 +123,9 @@ export function calcCurtainWallQuote(d) {
     ],
     subtotal:+subtotal.toFixed(2), margin:+margin.toFixed(2),
     marginPct:RATES.marginPercent, total:+total.toFixed(2),
+    internalFloor:+(subtotal * qty).toFixed(2), calculatedInternalFloor:+(subtotal * qty).toFixed(2),
+    costFloorOverride:0, costFloorSource:'working estimate', clientNet:+(total * qty).toFixed(2),
+    floorGap:+(margin * qty).toFixed(2), floorStatus:'OK',
   }
 }
 

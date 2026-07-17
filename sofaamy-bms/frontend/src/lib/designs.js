@@ -4,6 +4,8 @@
 // sections (cells); each section carries its own glass + opening.
 // ============================================================
 
+import { frameSystemForTemplate, frameRateForRateKey, frameRateKeyForOpening } from './frameCatalog.js'
+
 export const DESIGN_GROUPS = [
   { group:'Windows', items:[
     { id:'w-fixed',   name:'Fixed',            cols:1, rows:1, opening:'fixed',    w:1200, h:1200 },
@@ -36,8 +38,13 @@ export const templateById = (id) => {
   return null
 }
 
-const makeCells = (cols, rows, opening) =>
-  Array.from({ length: cols * rows }, () => ({ glass:'clear', opening, panels:1 }))
+const makeCells = (cols, rows, opening, rateKey) =>
+  Array.from({ length: cols * rows }, () => ({
+    glass:'5CF', opening, panels:1,
+    itemQty:1,
+    rateKey: rateKey || frameRateKeyForOpening(opening),
+    ratePerM2: frameRateForRateKey(rateKey || frameRateKeyForOpening(opening)),
+  }))
 
 // Divider layout library (EvA parity, image 3): click to re-split the frame.
 export const DIVIDER_LAYOUTS = [
@@ -60,20 +67,29 @@ const equalSplit = (total, n) => {
 export const MIN_SECTION_MM = 150
 
 export function buildDesign(t) {
+  const rateKey = t.rateKey || frameRateKeyForOpening(t.opening)
   return { category:'frame', templateId:t.id, name:t.name, group:t.group,
     ref:'', qty:1, location:'',
-    system:'standard', finishType:'powder',
+    system:frameSystemForTemplate(t), finishType:'powder',
+    measurementStatus:'preliminary', measurementSource:'', measuredBy:'', measurementDate:'', siteNotes:'',
+    accessoryOverrides:[], customCutPieces:[], siteImages:[],
+    clientPhone:'', clientEmail:'', jobDescription:'', colourDescription:'', quoteValidDays:3, costFloorOverride:0,
+    depositPercent:80, discountPercent:0, getfNhisPercent:5, vatPercent:15,
+    wallColor:'#ded8cc', floorColor:'#cfd6dc', customFrameColor:'', visualView:'orbit',
     width:t.w, height:t.h, cols:t.cols, rows:t.rows, frame:'mill',
     colWidths: equalSplit(t.w, t.cols), rowHeights: equalSplit(t.h, t.rows),
-    cells: makeCells(t.cols, t.rows, t.opening) }
+    cells: makeCells(t.cols, t.rows, t.opening, rateKey) }
 }
 
 // Change divider count, preserving existing sections where they overlap.
 export function resizeGrid(design, cols, rows) {
   const fallback = design.cells[0]?.opening || 'fixed'
+  const fallbackGlass = design.cells[0]?.glass || '5CF'
+  const fallbackRateKey = design.cells[0]?.rateKey || frameRateKeyForOpening(fallback)
+  const fallbackRate = design.cells[0]?.ratePerM2 || frameRateForRateKey(fallbackRateKey)
   const fresh = design.category === 'curtainwall'
     ? () => ({ type:'vision', glass:'reflective', opening:'fixed', panels:1 })
-    : () => ({ glass:'clear', opening:fallback, panels:1 })
+    : () => ({ glass:fallbackGlass, opening:fallback, panels:1, itemQty:1, rateKey:fallbackRateKey, ratePerM2:fallbackRate })
   const cells = []
   for (let r = 0; r < rows; r++)
     for (let c = 0; c < cols; c++) {

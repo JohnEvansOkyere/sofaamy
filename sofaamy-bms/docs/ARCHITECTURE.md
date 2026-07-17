@@ -30,29 +30,27 @@ Sections have **independent sizes** (`colWidths[]` / `rowHeights[]`, mm, summing
 overall dims) — dividers drag on the canvas EvA-style, totals never change, 150 mm
 minimum section. Each design carries a **profile system** (placeholder list until
 Sofaamy's brands arrive) and a **surface finish** (type + colour).
-Glass is priced per real section area; sash pieces take their own section's dims.
+Glass is priced per real section area; opening-member estimates take their own section's dimensions.
 
-## Member mapping (piece extractor)
+## Frame profile identity boundary
 
-Stick-built, curtain-wall convention — **CONFIRM against Sofaamy's fabrication drawings**:
-
-| Members | Profile | Rule |
-|---|---|---|
-| 2 jambs + (cols−1) mullions | **Mollium** | full design height |
-| Head + sill | **Transum** | full design width |
-| Internal transoms | **Transum** | span between mullions: (rows−1) × cols pieces of width/cols |
-| Sash frames | **Sash** | each non-fixed section: 2 rails (cell width) + 2 stiles (cell height) |
-
-No deduction/mitre allowances yet — placeholder until Sofaamy confirms.
+The supplied Frame workbooks use system-specific profile descriptions and
+codes, for example Trialco Frame, Flat Leaf, Net Italian, Interlock Adaptor,
+Small L-Outer, Flat Beading, Big T, Swinglockstile and others. They do not
+provide a confirmed universal mapping from those profiles to every geometric
+cut role. The piece extractor therefore uses neutral working geometry groups
+(`frame_outer`, `frame_internal`, `frame_opening`) and displays the selected
+system's exact catalogue separately. This is a preview, not a released factory
+cutting rule.
 
 ## Confirmed facts vs placeholders
 
 | Value | Status | Source |
 |---|---|---|
-| Profile names Mollium / Transum / Sash | **Confirmed** | cutting-optimizer screen, meeting 2026-07-10 |
-| Stock lengths 5800 / 5750 / 5700 mm | **Confirmed** | same screenshot |
+| System profile descriptions, codes, 5800 mm stock and listed values | **Confirmed catalogue data** | supplied Frame workbooks |
+| Mapping from source profile to each cut role | **Pending** | request an approved cutting list per system |
 | Kerf 5 mm, min offcut 300 mm | Placeholder | ask Sofaamy |
-| Profile prices/m (85/85/95 GHS) | Placeholder | awaiting material list |
+| Geometry deductions and mitre/butt rules | Placeholder | ask Sofaamy |
 | Grinding (top/left/bottom/right per piece) | Not modeled yet | seen in their optimizer; ask what it adds |
 | Mitre vs butt joints per member | Not modeled yet | ask |
 

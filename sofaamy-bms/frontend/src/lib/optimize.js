@@ -21,12 +21,16 @@ export function optimizeCutting(pieces, kerfMm = CUTTING.kerfMm) {
 
     // expand qty → individual cuts, longest first (FFD)
     const cuts = list
-      .flatMap(p => Array.from({ length: p.qty }, () => ({ member: p.member, lengthMm: p.lengthMm })))
+      .flatMap(p => Array.from({ length: p.qty }, () => ({
+        member: p.member, position:p.position || p.member, lengthMm: p.lengthMm,
+      })))
       .sort((a, b) => b.lengthMm - a.lengthMm)
 
     const bars = []
+    const oversized = []
     cuts.forEach(c => {
       const need = c.lengthMm + kerfMm
+      if (need > stockMm) { oversized.push({ ...c, reason:`${c.lengthMm} mm + ${kerfMm} mm kerf exceeds ${stockMm} mm stock` }); return }
       let bar = bars.find(b => stockMm - b.usedMm >= need)
       if (!bar) { bar = { cuts: [], usedMm: 0 }; bars.push(bar) }
       bar.cuts.push(c)
@@ -35,9 +39,11 @@ export function optimizeCutting(pieces, kerfMm = CUTTING.kerfMm) {
     bars.forEach(b => { b.wasteMm = stockMm - b.usedMm })
 
     const totalStock = bars.length * stockMm
-    const totalCut = cuts.reduce((s, c) => s + c.lengthMm, 0)
+    const totalCut = cuts.filter(c => c.lengthMm + kerfMm <= stockMm)
+      .reduce((s, c) => s + c.lengthMm, 0)
     return {
       profile, stockMm, bars,
+      oversized,
       totalMm: totalCut,
       wasteMm: totalStock - totalCut,
       utilization: totalStock ? +(100 * totalCut / totalStock).toFixed(1) : 0,

@@ -13,7 +13,7 @@ const colWidths = (d) => d.colWidths?.length === d.cols
 const rowHeights = (d) => d.rowHeights?.length === d.rows
   ? d.rowHeights : Array.from({ length: d.rows }, () => d.height / d.rows)
 
-// → { profiles:[{position, profile, member, lengthMm, qty, cuts}],
+// → { profiles:[{position, profile, member, sourceMm, adjustmentMm, lengthMm, qty, cuts}],
 //     glass:[{section, glass, wMm, hMm, qty, note}] }  — for ONE unit
 export function designBreakdown(d) {
   // curtain wall has its own joint hierarchy (continuous mullions);
@@ -22,39 +22,58 @@ export function designBreakdown(d) {
   if (d.category === 'frameless') return { profiles: [], glass: [] }
   const cw = colWidths(d), rh = rowHeights(d)
   const profiles = [], glass = []
-  const P = (position, profile, member, lengthMm, qty, cuts) =>
-    profiles.push({ position, profile, member, lengthMm: Math.round(lengthMm), qty, cuts })
+  const P = (position, profile, member, lengthMm, qty, cuts, sourceMm = lengthMm, adjustmentMm = lengthMm - sourceMm, note = '') =>
+    profiles.push({ position, profile, member, sourceMm: Math.round(sourceMm), adjustmentMm: Math.round(adjustmentMm),
+      lengthMm: Math.round(lengthMm), qty, cuts, note })
 
-  // ── outer frame: full size, mitred
-  P('Frame head', 'transum', 'Head', d.width, 1, '45°/45°')
-  P('Frame sill', 'transum', 'Sill', d.width, 1, '45°/45°')
-  P('Frame jambs (L+R)', 'mollium', 'Jamb', d.height, 2, '45°/45°')
+  // ── working geometry only: exact source profile mapping is pending
+  P('Frame head', 'frame_outer', 'Outer frame member — head', d.width, 1, '45°/45°', d.width, 0)
+  P('Frame sill', 'frame_outer', 'Outer frame member — sill', d.width, 1, '45°/45°', d.width, 0)
+  P('Frame left jamb', 'frame_outer', 'Outer frame member — jamb', d.height, 1, '45°/45°', d.height, 0)
+  P('Frame right jamb', 'frame_outer', 'Outer frame member — jamb', d.height, 1, '45°/45°', d.height, 0)
 
   // ── internal members: butt between frame faces, square cut
   for (let j = 1; j < d.cols; j++)
-    P(`Mullion ${j}`, 'mollium', 'Mullion', d.height - 2 * FAB.frameDepthMm, 1, '90°/90°')
+    P(`Internal vertical ${j}`, 'frame_internal', 'Internal member — vertical', d.height - 2 * FAB.frameDepthMm, 1, '90°/90°', d.height, -2 * FAB.frameDepthMm)
   for (let r = 1; r < d.rows; r++)
     for (let c = 0; c < d.cols; c++)
-      P(`Transom ${r}.${c + 1}`, 'transum', 'Transom', cw[c] - 2 * FAB.frameDepthMm, 1, '90°/90°')
+      P(`Internal horizontal ${r}.${c + 1}`, 'frame_internal', 'Internal member — horizontal', cw[c] - 2 * FAB.frameDepthMm, 1, '90°/90°', cw[c], -2 * FAB.frameDepthMm)
 
-  // ── per-section: sashes + glass cut sizes
+  // ── per-section: opening members + glass cut sizes
   d.cells.forEach((cell, i) => {
     const secW = cw[i % d.cols], secH = rh[Math.floor(i / d.cols)]
     const tag = `F${i + 1}`
     if (cell.opening === 'fixed') {
-      glass.push({ section: tag, glass: cell.glass, wMm: Math.round(secW - FAB.glassDeductFixedMm),
-        hMm: Math.round(secH - FAB.glassDeductFixedMm), qty: 1, note: 'fixed lite' })
+      glass.push({ section: tag, glass: cell.glass, sourceWMm: Math.round(secW), sourceHMm: Math.round(secH),
+        adjustmentWMm: -FAB.glassDeductFixedMm, adjustmentHMm: -FAB.glassDeductFixedMm,
+        wMm: Math.round(secW - FAB.glassDeductFixedMm), hMm: Math.round(secH - FAB.glassDeductFixedMm), qty: 1, note: 'fixed lite' })
     } else {
-      const n = cell.panels || 1
-      const sashW = secW / n + (n > 1 ? FAB.interlockMm / 2 : 0)
-      const sashH = secH - FAB.trackClearMm
+      const n = cell.opening === 'double' ? 2 : Math.max(1, cell.panels || 1)
+      const panelW = secW / n
+      const railAdjustment = n > 1 ? FAB.interlockMm / 2 : 0
+      const openingW = panelW + railAdjustment
+      const openingH = secH - FAB.trackClearMm
       const mitred = cell.opening === 'casement' || cell.opening === 'awning'
       const cuts = mitred ? '45°/45°' : '90°/90°'
-      P(`${tag} sash rails (top+btm)`, 'sash', 'Sash rail', sashW, 2 * n, cuts)
-      P(`${tag} sash stiles`, 'sash', 'Sash stile', sashH, 2 * n, cuts)
-      glass.push({ section: tag, glass: cell.glass, wMm: Math.round(sashW - FAB.glassDeductSashMm),
-        hMm: Math.round(sashH - FAB.glassDeductSashMm), qty: n, note: `${n} sash panel(s)` })
+      for (let leaf = 1; leaf <= n; leaf++) {
+        P(`${tag} leaf ${leaf} top rail`, 'frame_opening', 'Opening member — rail', openingW, 1, cuts, panelW, railAdjustment)
+        P(`${tag} leaf ${leaf} bottom rail`, 'frame_opening', 'Opening member — rail', openingW, 1, cuts, panelW, railAdjustment)
+        P(`${tag} leaf ${leaf} left stile`, 'frame_opening', 'Opening member — stile', openingH, 1, cuts, secH, -FAB.trackClearMm)
+        P(`${tag} leaf ${leaf} right stile`, 'frame_opening', 'Opening member — stile', openingH, 1, cuts, secH, -FAB.trackClearMm)
+      }
+      glass.push({ section: tag, glass: cell.glass, sourceWMm: Math.round(panelW), sourceHMm: Math.round(secH),
+        adjustmentWMm: Math.round(railAdjustment - FAB.glassDeductOpeningMm), adjustmentHMm: -FAB.glassDeductOpeningMm,
+        wMm: Math.round(openingW - FAB.glassDeductOpeningMm), hMm: Math.round(openingH - FAB.glassDeductOpeningMm), qty: n, note: `${n} opening panel(s)` })
     }
+  })
+  ;(d.customCutPieces || []).forEach((piece, index) => {
+    const source = Number(piece.sourceMm || piece.lengthMm || 0)
+    const adjustment = Number(piece.adjustmentMm || 0)
+    const length = Number(piece.lengthMm || source + adjustment)
+    if (length <= 0) return
+    P(piece.position || `Custom piece ${index + 1}`, piece.profile || 'frame_outer',
+      piece.member || 'Manual fabrication piece', length, Math.max(1, Number(piece.qty || 1)),
+      piece.cuts || 'SPECIAL / TEMPLATE', source, adjustment, piece.note || '')
   })
   return { profiles, glass }
 }
@@ -63,10 +82,13 @@ export function designBreakdown(d) {
 export function extractPieces(d) {
   const merged = new Map()
   designBreakdown(d).profiles.forEach(p => {
-    const k = `${p.profile}|${p.member}|${p.lengthMm}`
+    // Keep the fabrication position in the optimizer key. Identical lengths
+    // from different sections may share a stock bar, but production still
+    // needs to know where every cut belongs.
+    const k = `${p.profile}|${p.member}|${p.lengthMm}|${p.position}`
     const m = merged.get(k)
     if (m) m.qty += p.qty
-    else merged.set(k, { profile: p.profile, member: p.member, lengthMm: p.lengthMm, qty: p.qty })
+    else merged.set(k, { profile: p.profile, member: p.member, position:p.position, lengthMm: p.lengthMm, qty: p.qty })
   })
   return [...merged.values()].sort((a, b) =>
     a.profile === b.profile ? b.lengthMm - a.lengthMm : a.profile.localeCompare(b.profile))
@@ -82,7 +104,8 @@ export function cellSizes(d) {
   return d.cells.map((_, i) => ({ wMm: cw[i % d.cols], hMm: rh[Math.floor(i / d.cols)] }))
 }
 
-// total metres per profile: { mollium: 12.4, ... }
+// total metres per working geometry group. Source profile identity is shown
+// separately from the cut estimate until Sofaamy confirms the mapping.
 export function metresByProfile(pieces) {
   const out = {}
   pieces.forEach(p => {

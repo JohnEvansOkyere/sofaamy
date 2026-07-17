@@ -1,10 +1,11 @@
-import { useMemo } from 'react'
-import { Canvas } from '@react-three/fiber'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Canvas, useFrame } from '@react-three/fiber'
 import { OrbitControls, ContactShadows, Sky } from '@react-three/drei'
 import * as THREE from 'three'
 import { FL_GLASS, FL_FAB } from '../../lib/products.js'
 import { framelessBreakdown } from '../../lib/frameless.js'
 import { pivotSide } from '../../lib/preps.js'
+import './configurator.css'
 
 // Frameless 3D — derived from the SAME design record as the 2D canvas,
 // quote, glass order and hardware list. Two modes:
@@ -115,14 +116,25 @@ function Handle({ x, yMid, t }) {
 }
 
 // one bay = a group; doors get a nested pivot group so they stand ajar
-function Bay({ bay, glass, scene }) {
+function Bay({ bay, glass, scene, openAmount }) {
+  const motionRef = useRef(null)
   const { type, w, gTop, gBot, t, pivot, trackY } = bay
   const gh = gTop - gBot, gy = (gTop + gBot) / 2
   const pivotX = pivot === 'right' ? w / 2 : -w / 2
-  const open = scene && (type === 'door' || type === 'hinged')
-    ? (pivot === 'right' ? 1 : -1) * 0.3 : 0
+  const isLeaf = type === 'door' || type === 'hinged'
+
+  useFrame((_, delta) => {
+    if (!motionRef.current) return
+    const targetAngle = isLeaf ? (pivot === 'right' ? 1 : -1) * 0.42 * openAmount : 0
+    const targetSlide = type === 'slider'
+      ? (bay.i % 2 === 0 ? -1 : 1) * M(w * 0.28) * openAmount : 0
+    const speed = Math.min(1, delta * 10)
+    motionRef.current.rotation.y += (targetAngle - motionRef.current.rotation.y) * speed
+    motionRef.current.position.x += (targetSlide - motionRef.current.position.x) * speed
+  })
 
   const fittings = []
+  let track = null
   if (type === 'fixed') {
     // corner clamps (BL 203)
     for (const dx of [-w / 2 + 120, w / 2 - 120])
@@ -144,8 +156,8 @@ function Bay({ bay, glass, scene }) {
     fittings.push(<Tube key="kn" x={-pivotX * (1 - 70 / w)} y={gy} z={t / 2 + 22} r={14} h={44} />)
   }
   if (type === 'slider') {
+    track = <Box key="tk" x={0} y={trackY} w={w + FL_FAB.slideOverlapMm} h={52} d={64} color={DARK} rough={0.4} />
     fittings.push(
-      <Box key="tk" x={0} y={trackY} w={w + FL_FAB.slideOverlapMm} h={52} d={64} color={DARK} rough={0.4} />,
       <Tube key="r1" x={-w * 0.3} y={gTop + 24} r={22} h={16} horizontal />,
       <Tube key="r2" x={w * 0.3} y={gTop + 24} r={22} h={16} horizontal />,
     )
@@ -157,18 +169,19 @@ function Bay({ bay, glass, scene }) {
     ? <Box x={pivotX * (1 - 150 / w)} y={-2} w={300} h={9} d={130} color={DARK} rough={0.45} />
     : null
 
-  if (open) {
-    // rotate leaf + its fittings about the pivot edge
-    return (
-      <group>
-        {plate}
-        <group position={[M(pivotX), 0, 0]} rotation={[0, open, 0]}>
-          <group position={[M(-pivotX), 0, 0]}>{pane}{fittings}</group>
+  // Rotate leaves around the pivot edge and translate sliding leaves along
+  // their track. Stationary floor/track fittings stay behind while the glass
+  // and its moving hardware travel together.
+  return (
+    <group>
+      {track}{plate}
+      <group ref={motionRef} position={isLeaf ? [M(pivotX), 0, 0] : [0, 0, 0]}>
+        <group position={isLeaf ? [M(-pivotX), 0, 0] : [0, 0, 0]}>
+          {pane}{fittings}
         </group>
       </group>
-    )
-  }
-  return <group>{pane}{fittings}{plate}</group>
+    </group>
+  )
 }
 
 // design → bays with leg placement (L-shape: return leg turns 90°)
@@ -194,7 +207,7 @@ function useRun(design) {
       const inOver = hasOver && overIdx.includes(i)
       const gBot = F.floorGapMm
       // panel tops mirror the 2D canvas / breakdown heights
-      let gTop = ty === 'fixed' ? H - F.jointMm
+      let gTop = ty === 'fixed' ? H
         : inOver ? F.floorGapMm + design.doorH : H - F.jointMm
       let z = 0, trackY = 0, gw = w - F.jointMm
       if (ty === 'door' || ty === 'hinged') gw = w - F.doorGapMm
@@ -337,8 +350,26 @@ function Shopfront({ run }) {
 
 export default function Frameless3D({ design, scene = false }) {
   const run = useRun(design)
+  const shellRef = useRef(null)
+  const [maximized, setMaximized] = useState(false)
   const glass = FL_GLASS[design.glassId] || FL_GLASS.temp10
   const { bays, over, mainW, retW, H } = run
+  const [openAmount, setOpenAmount] = useState(scene ? 0.3 : 0)
+  useEffect(() => { setOpenAmount(scene ? 0.3 : 0) }, [scene, design.templateId])
+  useEffect(() => {
+    const onFullscreen = () => setMaximized(document.fullscreenElement === shellRef.current)
+    document.addEventListener('fullscreenchange', onFullscreen)
+    return () => document.removeEventListener('fullscreenchange', onFullscreen)
+  }, [])
+  const toggleMaximize = async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen()
+      else if (shellRef.current?.requestFullscreen) await shellRef.current.requestFullscreen()
+      else setMaximized(v => !v)
+    } catch {
+      setMaximized(v => !v)
+    }
+  }
   const cx = M(mainW) / 2
   const span = Math.max(M(mainW), M(H), M(retW) + 0.001)
   const sceneKind = design.scene === 'bathroom' ? 'bathroom' : 'shopfront'
@@ -347,8 +378,9 @@ export default function Frameless3D({ design, scene = false }) {
     : [cx + span * 0.8, M(H) * 0.62, span * 1.5]
 
   return (
-    <Canvas shadows camera={{ position: camPos, fov: 45 }} style={{ width: '100%', height: '100%' }}
-      gl={{ antialias: true }}>
+    <div ref={shellRef} className={`fl-viz-shell${maximized ? ' viz-maximized' : ''}`}>
+      <Canvas shadows camera={{ position: camPos, fov: 45 }} style={{ width: '100%', height: '100%' }}
+        gl={{ antialias: true }}>
       {!scene && <color attach="background" args={['#eef3f8']} />}
       {scene && sceneKind === 'shopfront' && <Sky sunPosition={[6, 8, 4]} turbidity={5} />}
       {scene && sceneKind === 'bathroom' && <color attach="background" args={['#e8edf0']} />}
@@ -364,7 +396,7 @@ export default function Frameless3D({ design, scene = false }) {
       <group>
         {bays.map(b => (
           <group key={b.i} position={b.pos} rotation={[0, b.rotY, 0]}>
-            <Bay bay={b} glass={glass} scene={scene} />
+            <Bay bay={b} glass={glass} scene={scene} openAmount={openAmount} />
           </group>
         ))}
         {over && (
@@ -382,6 +414,15 @@ export default function Frameless3D({ design, scene = false }) {
 
       <OrbitControls enableDamping dampingFactor={0.12} maxPolarAngle={Math.PI / 2 - 0.02}
         target={[cx, scene ? 1.3 : M(H) / 2, -M(retW) / 2]} />
-    </Canvas>
+      </Canvas>
+      <div className="fl-viz-controls">
+        <span className="viz-control-label">Opening</span>
+        <button onClick={() => setOpenAmount(v => v > 0.5 ? 0 : 1)}>{openAmount > 0.5 ? 'Close' : 'Open'}</button>
+        <input type="range" min="0" max="1" step="0.01" value={openAmount} onChange={e => setOpenAmount(+e.target.value)} />
+        <span>{Math.round(openAmount * 100)}%</span>
+        <span className="fl-hardware-note">Hardware shown</span>
+        <button onClick={toggleMaximize}>{maximized ? 'Minimize' : 'Maximize'}</button>
+      </div>
+    </div>
   )
 }

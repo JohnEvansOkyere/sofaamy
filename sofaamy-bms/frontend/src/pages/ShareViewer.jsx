@@ -142,7 +142,7 @@ export default function ShareViewer() {
         <div>
           <div className="lbl">Your investment{data.qty > 1 ? ` — ${data.qty} units` : ''}</div>
           <div className="amt">{GHS(data.grand_total)}</div>
-          <div className="terms">50% deposit to begin production · balance on delivery · prices in Ghana Cedi, VAT exclusive</div>
+          <div className="terms">Deposit and balance follow the agreed quotation terms · prices in Ghana Cedi, VAT exclusive</div>
         </div>
         <a className="share-cta" href="https://wa.me/233000000000" target="_blank" rel="noreferrer">
           Chat with us on WhatsApp

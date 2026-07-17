@@ -1,8 +1,8 @@
 """Job lifecycle — stages, gates and side-effects.
 
-The pipeline every job walks, with the two commercial gates Sofaamy
-runs the business on (50% deposit before production, balance before
-close-out) and automatic material issue when production starts.
+The pipeline every job walks, with Sofaamy's configurable deposit gate before
+production, balance before close-out, and automatic material issue when
+production starts.
 """
 from datetime import datetime
 
@@ -63,9 +63,11 @@ def advance_block_reason(db: Session, job: models.Job) -> str | None:
         return "Job is already completed"
     nxt = STAGE_KEYS[nxt_i]
     if job.stage == "pending" and job.value:
-        if paid_amount(db, job) + 0.5 < job.value * 0.5:
-            need = job.value * 0.5 - paid_amount(db, job)
-            return f"50% deposit required before production — GHS {need:,.2f} outstanding"
+        deposit_percent = max(0, min(100, float(job.deposit_percent or 80)))
+        required = job.value * deposit_percent / 100
+        if paid_amount(db, job) + 0.5 < required:
+            need = required - paid_amount(db, job)
+            return f"{deposit_percent:.0f}% deposit required before production — GHS {need:,.2f} outstanding"
     if job.stage == "qa":
         qc = latest_qc(db, job)
         if qc is None:
@@ -85,8 +87,10 @@ def refresh_paid(db: Session, job: models.Job) -> None:
 
 # ── material issue when production starts ──
 # Best-effort match from the design's engine output to material codes.
-PROFILE_CODE = {"mollium": "AL-MOLLIUM", "transum": "AL-TRANSUM", "sash": "AL-SASH",
-                "cwmullion": "CW-MULLION", "cwtransom": "CW-TRANSOM"}
+# Frame source profile identity is not yet mapped to cut roles. Do not issue
+# stock against invented generic profile codes. Curtain-wall codes remain
+# separate because that is a different system family.
+PROFILE_CODE = {"cwmullion": "CW-MULLION", "cwtransom": "CW-TRANSOM"}
 FL_GLASS_CODE = {"temp8": "GL-TMP-8", "temp10": "GL-TMP-10", "temp12": "GL-TMP-12",
                  "frost10": "GL-FRST-10", "lam13": "GL-LAM-13"}
 FRAME_GLASS_CODE = "GL-CLR-6"   # frame glass tracked coarsely for now
@@ -140,9 +144,6 @@ def issue_materials(db: Session, job: models.Job) -> list[str]:
 # issue matches on existing databases too (additive only) ──
 ENGINE_MATERIALS = [
     # code, name, category, unit, unit_price (GHS, PLACEHOLDER), stock, reorder
-    ("AL-MOLLIUM", "Mollium Profile (5800mm bars)", "Profile", "m", 85, 640, 250),
-    ("AL-TRANSUM", "Transum Profile (5750mm bars)", "Profile", "m", 85, 520, 250),
-    ("AL-SASH",    "Sash Profile (5700mm bars)",    "Profile", "m", 95, 380, 200),
     ("CW-MULLION", "Curtain Wall Mullion",          "Profile", "m", 140, 220, 120),
     ("CW-TRANSOM", "Curtain Wall Transom",          "Profile", "m", 130, 180, 120),
     ("GL-TMP-8",   "Tempered Glass 8mm",            "Glass", "m2", 390, 85, 40),
@@ -193,6 +194,7 @@ def job_summary(db: Session, j: models.Job) -> dict:
         "progress": STAGE_PROGRESS.get(j.stage, j.progress),
         "value": round(j.value, 2), "paid_amount": round(paid, 2),
         "balance": round(max(j.value - paid, 0), 2),
+        "deposit_percent": round(j.deposit_percent or 80, 2),
         "paid": f"{paid_pct(db, j)}%",
         "qc": qc.result if qc else None,
         "driver": j.driver, "vehicle": j.vehicle, "dn_number": j.dn_number,

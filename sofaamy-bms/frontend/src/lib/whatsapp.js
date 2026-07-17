@@ -14,7 +14,7 @@ export const waLink = (phone, text) => {
 
 export const firstName = (name = '') => (name.split(/[\s,]+/)[0] || 'there')
 
-export function quoteMessage({ client, product, quoteNumber, total, shareUrl }) {
+export function quoteMessage({ client, product, quoteNumber, total, shareUrl, depositPercent = 80 }) {
   return [
     `Hello ${firstName(client)}! 👋`,
     ``,
@@ -25,7 +25,7 @@ export function quoteMessage({ client, product, quoteNumber, total, shareUrl }) 
     `Total: *${GHS0(total)}* (VAT excl.)`,
     ...(shareUrl ? [``, `View your design in 2D & 3D here:`, shareUrl] : []),
     ``,
-    `Terms: 50% deposit to begin production, balance on delivery.`,
+    `Terms: ${depositPercent}% deposit before fabrication, balance before completion.`,
     ``,
     `Thank you for choosing Sofaamy! 🙏`,
   ].join('\n')

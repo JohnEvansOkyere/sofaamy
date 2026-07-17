@@ -115,7 +115,7 @@ export default function JobDrawer({ jobNumber, onClose, onChanged }) {
         {/* ── payments ── */}
         <div className="drawer-sec">
           <h5>Payments</h5>
-          {job.payments.length === 0 && <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>No payments recorded — 50% deposit required to start production.</div>}
+          {job.payments.length === 0 && <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>No payments recorded — {job.deposit_percent || 80}% deposit required to start production.</div>}
           {job.payments.map((p, i) => (
             <div key={i} className="pay-row">
               <Badge tone={p.kind === 'deposit' ? 'blue' : 'green'}>{p.kind}</Badge>

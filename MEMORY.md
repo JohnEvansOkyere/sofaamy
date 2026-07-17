@@ -115,3 +115,59 @@ Read MEMORY.md at the start of every session before doing anything. Never contra
 **Why:** The design sheet is the demo centrepiece; chrome (nav + two side panels + duplicate header) was consuming more than half the screen.
 **What was rejected:** localStorage persistence of collapse states (not asked); making the right quote column sticky (it scrolls with the page as before).
 **Verified:** build clean; headless CDP walkthrough (home → New Project modal → workspace → hide both panels → restore + expand sidebar) with zero console errors; canvas measured 768×500 default → 1440×500 with panels hidden at 1600px window (height scales with real viewport).
+
+## 2026-07-16, Real Frame catalogue integrated as the first supplied-data build slice
+**What was decided:** Start the Frame build from the supplied catalogue evidence. Added `frontend/src/lib/frameCatalog.js` with the eight current Frame system/category choices from `FINAL.xlsx` and the profile/accessory workbooks: Trialco, KS-50, Italian, FDT Casement, FDT Projected, FDT Fixed, FDT Hinge, and FDT Swing. New Frame designs default to a relevant real system, and the configurator shows the system's profile/accessory references, codes, stock length, colours, and listed values.
+**Why:** These are the rules the supplied files actually prove. Integrating the catalogue now gives the team real product context without pretending that missing cut formulas, consumption rules, labour rates, wastage, or internal cost allocation are confirmed.
+**What was rejected:** Replacing the current fabrication engine with guessed per-system formulas or treating every accessory workbook number as a confirmed unit price. The existing cutting and detailed quote formulas remain visibly provisional until a completed project pack validates them.
+**Verified:** Frontend production build passes after the catalogue integration.
+
+## 2026-07-16, Frame one-month proof slice — catalogue, quote style, measurement, and deposit workflow
+**What was decided:** Build the first operational Frame slice from the supplied workbooks and quote screenshots. The configurator now uses categorized real products (Trialco/KS-50/Italian sliding systems; FDT casement/projected/fixed windows; FDT swing/hinge doors), real Frame glass codes/rates and service references, and system-specific profile/accessory catalogue references. Frame designs carry measurement status/source/rep/date/site notes, editable opening quantities, bundled unit rates, discount, GETF+NHIS, VAT, and deposit percentage. Client quotations render spreadsheet-style rows; detailed material/labour lines stay internal. Jobs and quotes carry a configurable deposit gate, defaulting to 80%.
+**Why:** This demonstrates Sofaamy's daily operation in the one-month window using evidence already received: catalogue → measurement → bundled quote → deposit → production workflow. The current spreadsheet examples contain conflicting sliding rates (1,500/1,700/1,900), so rates are editable starting values rather than a falsely fixed rate card.
+**What was rejected:** Pretending that catalogue rows alone establish system-specific consumption, cut deductions, glass deductions, labour, wastage, or profit rules. Those remain visible working estimates or operator-confirmed inputs until a completed project pack validates them.
+**Verified:** Frontend build, backend compilation/import, additive SQLite migration for quote/job deposit percentages, quote calculation smoke test, client PDF generation, and `git diff --check` all pass.
+
+## 2026-07-16 (later), Interactive Frame wall visualizer
+**What was decided:** The Frame 3D/Wall view now has a client-facing visualizer layer: wall colour presets and custom colour, custom frame/window/door colour, Orbit/Front/Inside/Back viewpoints, and a live Open/Close range control. Sliding panels move across multi-panel runs; casement, swing/hinge, and projected/awning panels animate around their visual hinge. Wall, floor, finish, and preferred view are saved with the design and therefore travel into the public share view.
+**Why:** The client needs to see the proposed product in context and understand how the opening behaves before fabrication. This improves the sales/demo experience while keeping the 2D drawing and fabrication calculations as the source of truth.
+**Boundary:** The animation is a visual presentation of the configured opening, not structural/clearance validation. Exact hinge sides, slide stacking, clearances, deductions, and system-specific hardware still require Sofaamy's confirmed fabrication rules.
+**Verified:** Frontend production build, backend compilation/import, design payload serialization, and `git diff --check` pass.
+
+## 2026-07-16 (later), Visible opening hardware in Frame 3D
+**What was decided:** Movable Frame panels now render visible presentation hardware: hinge barrels and handles for casement/door/pivot-style leaves, top pivots and a handle for projected/awning leaves, and rollers plus handles for sliding leaves. Hardware is nested inside the animated sash group so it follows the panel during opening and closing.
+**Boundary:** These shapes communicate the operating mechanism in a client visualizer. They do not yet assert the exact supplied accessory code, count, mounting position, or system-specific hardware geometry; those remain tied to confirmed fabrication rules.
+**Verified:** Frontend production build and `git diff --check` pass.
+
+## 2026-07-16 (later), Frameless motion and fabrication-report hardening
+**What was decided:** Frameless 3D now has an Open/Close control for hinged, swing, and sliding leaves. The scene renders and animates its real catalog-derived fitting families: patch fittings, hinges, handles, floor-spring cover, rollers, and track; stationary track/cover pieces remain fixed while moving hardware follows the glass. Fixed-pane geometry was aligned with the glass-order height rule.
+**Report hardening:** Optimized Frame/Curtain Wall cuts retain their fabrication position through the nesting engine and cutting PDF; oversized cuts are explicitly flagged instead of producing a negative-waste bar; Frameless installation now lists each bay, centreline void, panel mark, and glass cut size; production report subtitles expose measurement status/source so preliminary site information is visible before release.
+**Verified:** Frontend build, backend compilation, representative Frame/Frameless/Curtain Wall PDF generation, PDF text traceability, oversized-cut guard, and `git diff --check` pass.
+
+## 2026-07-16 (later), Client-aware project list and duplicate editing
+**What was decided:** The Projects home now displays the saved client name on every card. Each saved design has a separate `Duplicate & Edit` action that opens a full-copy draft with a `-COPY` reference, preserving the original while allowing dimensions, sections, product settings, and commercial details to be changed before saving. Opening an existing design also restores its client name into the quotation field.
+**Verified:** Frontend production build and `git diff --check` pass.
+
+## 2026-07-16 (later), Frame source-profile correction
+**What was corrected:** The supplied Frame workbooks use direct system-specific identities such as Trialco Frame, Flat Leaf, Net Italian, Interlock Adaptor, Small L-Outer, Flat Beading, Big T, Swinglockstile and related codes. The previous generic Mollium/Transum/Sash model was not supported by the supplied evidence and was removed from Frame-facing calculations, reports and inventory issue mapping.
+**Current behaviour:** Frame BOQ reports show the selected system's exact source profile catalogue first. The cut preview uses neutral working geometry groups only and clearly states that source-profile mapping, deductions and cut rules are pending confirmation. Fake generic Frame stock codes are no longer issued automatically.
+**Verified:** Backend compilation, frontend build, Frame BOQ PDF generation, source-code scan and `git diff --check` pass.
+
+## 2026-07-16 (later), EVA-style Frame fabrication 3D overlay
+**What was decided:** Internal Frame 3D opens in a Fabrication mode with overall width/height dimensions, bay dimensions, panel/sash dimensions, and labelled accessory anchor markers. A Client view toggle removes the engineering overlay for a cleaner presentation. Markers are nested with animated panels so hinges, pivots, rollers, and handles remain attached during Open/Close.
+**Boundary:** The overlay is generated from the current design geometry and communicates intended mounting locations. Accessory codes and exact system mounting rules remain provisional until Sofaamy confirms them per system.
+**Verified:** Frontend production build and `git diff --check` pass.
+
+## 2026-07-16 (later), Fabrication overlay annotation layout fix
+**What was fixed:** The first EVA-style overlay had colliding labels. Vertical dimensions were offset inward, and long one-line panel/accessory labels overlapped in perspective. Vertical dimensions now sit outside the frame, bay labels are shorter, panel dimensions wrap to two lines within each panel, and accessory markers use compact codes with a legend (H hinge, P pivot, R roller, L handle).
+**Verified:** Frontend production build and `git diff --check` pass.
+
+## 2026-07-16 (later), Maximize/minimize visual views
+**What was added:** Frame and Frameless 3D visualizers now have Maximize/Minimize controls. They use browser fullscreen where available and a fixed in-app expanded fallback otherwise; opening, fabrication annotations, hardware markers, and view controls remain available.
+**Verified:** Frontend production build and `git diff --check` pass.
+
+## 2026-07-16 (later), Customer quote and internal BOQ control aligned to company evidence
+**What was changed:** The three material report rows were consolidated into one Internal BOQ & Cost Floor document containing profiles/stock bars, glass cut sizes, hardware/accessories, materials, fabrication labour, installation, internal floor, client net before tax, and negotiation headroom/shortfall. The customer PDF now carries quote number, design reference, client/site/contact, job description, colour, validity date, opening rows, discount, GETF+NHIS, VAT, grand total and explicit payment/final-measurement terms. Internal cost lines remain excluded from the customer document.
+**Control:** A project-level approved floor can be entered from the supervisor's material-cost sheet (for example GHS 56,613.64 in the supplied Trialco evidence). If it is not entered, the system labels the computed floor as a working estimate. The backend refuses to issue or accept a quote whose net-before-tax value is below the floor.
+**Boundary:** The supplied cost sheet is a project example, not a universal rate card. Exact consumption, accessory quantities, labour and deductions still require validation against approved system rules.
+**Verified:** Frontend production build, Python compilation, representative quote/BOQ/price-breakdown PDF generation and PDF text extraction pass.

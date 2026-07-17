@@ -47,6 +47,7 @@ class Job(Base):
     progress: Mapped[int] = mapped_column(Integer, default=0)
     paid: Mapped[str] = mapped_column(String(10), default="0%")
     value: Mapped[float] = mapped_column(Float, default=0.0)   # GHS contract value
+    deposit_percent: Mapped[float] = mapped_column(Float, default=80.0)
     driver: Mapped[str] = mapped_column(String(80), default="")
     vehicle: Mapped[str] = mapped_column(String(40), default="")
     dn_number: Mapped[str] = mapped_column(String(30), default="")  # delivery note
@@ -135,6 +136,7 @@ class Quote(Base):
     opening: Mapped[str] = mapped_column(String(30), default="fixed")
     glass: Mapped[str] = mapped_column(String(30), default="clear")
     total: Mapped[float] = mapped_column(Float, default=0.0)  # GHS
+    deposit_percent: Mapped[float] = mapped_column(Float, default=80.0)
     status: Mapped[str] = mapped_column(String(20), default="Draft")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     job = relationship("Job", back_populates="quotes")

@@ -33,7 +33,8 @@ def _auto_migrate():
     wanted = {
         "jobs": [("value", "FLOAT DEFAULT 0"), ("driver", "TEXT DEFAULT ''"),
                  ("vehicle", "TEXT DEFAULT ''"), ("dn_number", "TEXT DEFAULT ''"),
-                 ("delivered_at", "DATETIME")],
+                 ("delivered_at", "DATETIME"), ("deposit_percent", "FLOAT DEFAULT 80")],
+        "quotes": [("deposit_percent", "FLOAT DEFAULT 80")],
     }
     with engine.begin() as conn:
         for table, cols in wanted.items():
@@ -269,12 +270,13 @@ def quote_status(quote_number: str, req: schemas.QuoteStatusIn, db: Session = De
             n = db.scalar(select(func.count(models.Job.id))) or 0
             job = models.Job(job_number=f"SOF-{datetime.now():%Y}-{n + 101:03d}",
                              client_id=client.id, product=quote.product,
-                             stage="pending", progress=0, paid="0%", value=quote.total)
+                             stage="pending", progress=0, paid="0%", value=quote.total,
+                             deposit_percent=quote.deposit_percent or 80)
             db.add(job); db.flush()
             quote.job_id = job.id
             result["job_number"] = job.job_number
             lc.log(db, "quote", f"{quote.client_name} accepted {quote.quote_number} — "
-                   f"job {job.job_number} opened (GHS {quote.total:,.0f}), awaiting 50% deposit",
+                   f"job {job.job_number} opened (GHS {quote.total:,.0f}), awaiting {job.deposit_percent:.0f}% deposit",
                    job_id=job.id, who=req.who)
         else:
             job = db.get(models.Job, quote.job_id)
@@ -303,6 +305,7 @@ def list_quotes(db: Session = Depends(get_db)):
         job = db.get(models.Job, q.job_id) if q.job_id else None
         out.append({"quote_number": q.quote_number, "client_name": q.client_name,
                     "product": q.product, "total": q.total, "status": q.status,
+                    "deposit_percent": q.deposit_percent or 80,
                     "created_at": q.created_at.isoformat() if q.created_at else None,
                     "job_number": job.job_number if job else None})
     return out
@@ -352,7 +355,8 @@ def _persist_design_quote(db: Session, client_name: str, design: schemas.DesignI
         width_mm=design.width, height_mm=design.height,
         panels=design.cols * design.rows,
         opening=first.opening, glass=first.glass,
-        total=result["grand_total"], status=status,
+        total=result["grand_total"], deposit_percent=design.depositPercent,
+        status=status,
     )
     db.add(quote); db.commit(); db.refresh(quote)
     return quote
@@ -368,6 +372,8 @@ def price_design(req: schemas.DesignQuoteIn):
 def design_quote_pdf(req: schemas.DesignQuoteIn, db: Session = Depends(get_db)):
     """Issue a quote: persist it and return the branded PDF."""
     result = calc_any_quote(req.design.engine_dict())
+    if result.get("floor_status") == "BELOW FLOOR":
+        raise HTTPException(422, "Client net is below the internal cost floor. Reduce the discount or confirm the project BOQ floor before issuing the quote.")
     quote = _persist_design_quote(db, req.client_name, req.design, result, "Sent")
     pdf = quote_pdf(quote.quote_number, quote.client_name, req.design.name,
                     req.design.width, req.design.height, result,
@@ -382,6 +388,8 @@ def design_quote_pdf(req: schemas.DesignQuoteIn, db: Session = Depends(get_db)):
 def create_job_from_design(req: schemas.DesignQuoteIn, db: Session = Depends(get_db)):
     """Save & Create Job: persist client + accepted quote + job in one step."""
     result = calc_any_quote(req.design.engine_dict())
+    if result.get("floor_status") == "BELOW FLOOR":
+        raise HTTPException(422, "Cannot accept a quote below the internal cost floor. Review discount and confirmed project BOQ first.")
     quote = _persist_design_quote(db, req.client_name, req.design, result, "Accepted")
 
     name = req.client_name or "Walk-in Client"
@@ -395,6 +403,7 @@ def create_job_from_design(req: schemas.DesignQuoteIn, db: Session = Depends(get
         job_number=f"SOF-{datetime.now():%Y}-{n + 101:03d}",
         client_id=client.id, product=req.design.name,
         stage="pending", progress=0, paid="0%", value=result["grand_total"],
+        deposit_percent=max(0, min(100, float(req.design.depositPercent))),
     )
     db.add(job); db.flush()
     quote.job_id = job.id
@@ -405,7 +414,7 @@ def create_job_from_design(req: schemas.DesignQuoteIn, db: Session = Depends(get
         job_id=job.id,
     ))
     lc.log(db, "quote", f"quote {quote.quote_number} accepted — job {job.job_number} "
-           f"opened for {name} (GHS {result['grand_total']:,.0f}), awaiting 50% deposit",
+           f"opened for {name} (GHS {result['grand_total']:,.0f}), awaiting {job.deposit_percent:.0f}% deposit",
            job_id=job.id, who="Kwame Mensah")
     db.commit()
     return {"job_number": job.job_number, "quote_number": quote.quote_number,
@@ -421,7 +430,7 @@ def _pdf_response(pdf: bytes, filename: str) -> Response:
 @app.post("/api/reports/{kind}")
 def design_report(kind: str, req: schemas.DesignQuoteIn):
     """Design documents. Any category: summary | elevation | quotation |
-    price-breakdown. Frame/curtain wall: cutting-list | work-order | boq.
+    price-breakdown | internal-boq. Frame/curtain wall: cutting-list | work-order.
     Frameless: glass-order | hardware-list | work-order | installation."""
     d = req.design.engine_dict()
     result = calc_any_quote(d)
@@ -460,7 +469,7 @@ def design_report(kind: str, req: schemas.DesignQuoteIn):
         return _pdf_response(cutting_list_pdf(d, result, demand, plan), f"cutting-list-{ref}.pdf")
     if kind == "work-order":
         return _pdf_response(work_order_pdf(d, result, pieces), f"work-order-{ref}.pdf")
-    if kind == "boq":
+    if kind in ("boq", "internal-boq"):
         return _pdf_response(boq_pdf(d, result, demand, plan), f"boq-{ref}.pdf")
     raise HTTPException(404, f"Unknown report: {kind}")
 
@@ -492,6 +501,10 @@ def get_shared_design(token: str, db: Session = Depends(get_db)):
     from the WhatsApp link. No internal costs, just the quoted totals."""
     rec = _shared_design(token, db)
     design = json.loads(rec.design_json)
+    # Site photos are internal measurement evidence, not client-facing
+    # presentation assets. Keep them on the saved project but omit them from
+    # the public share payload.
+    design.pop("siteImages", None)
     d = schemas.DesignIn(**design).engine_dict()
     result = calc_any_quote(d)
     panels = frameless_breakdown(d)["panels"] if d.get("category") == "frameless" else []

@@ -31,6 +31,7 @@ class JobOut(BaseModel):
     stage: str
     progress: int
     paid: str
+    deposit_percent: float = 80
     class Config: from_attributes = True
 
 
@@ -50,6 +51,7 @@ class QuoteOut(BaseModel):
     client_name: str
     product: str
     total: float
+    deposit_percent: float = 80
     status: str
     class Config: from_attributes = True
 
@@ -66,6 +68,9 @@ class DesignCell(BaseModel):
     glass: str = "clear"
     opening: str = "fixed"
     panels: int = 1
+    itemQty: int = 1
+    rateKey: str = ""
+    ratePerM2: float | None = None
     # frameless panel type (fixed|door|hinged|slider) or curtain wall
     # bay type (vision|spandrel|vent); unused by framed designs
     type: str = ""
@@ -87,6 +92,44 @@ class DesignIn(BaseModel):
     colWidths: list[int] = []
     rowHeights: list[int] = []
     cells: list[DesignCell]
+    # Project-level Frame accessory edits. Each row may override a catalogue
+    # code's quantity or add a custom item; removed rows are retained so the
+    # project can be reopened without losing the edit history in its payload.
+    accessoryOverrides: list[dict] = []
+    # Per-unit manual fabrication additions such as a curve/template piece
+    # or a site-specific member not covered by the standard geometry recipe.
+    customCutPieces: list[dict] = []
+    # Internal site evidence. Images are resized in the browser before being
+    # stored with the saved design JSON; they are not exposed on client share
+    # links by default.
+    siteImages: list[dict] = []
+    # Frame measurement and commercial metadata
+    measurementStatus: str = "preliminary"
+    measurementSource: str = ""
+    measuredBy: str = ""
+    measurementDate: str = ""
+    siteNotes: str = ""
+    # Customer quotation metadata. Optional because a walk-in client may not
+    # have supplied contact details at first measurement.
+    clientPhone: str = ""
+    clientEmail: str = ""
+    jobDescription: str = ""
+    colourDescription: str = ""
+    quoteValidDays: int = 3
+    # Project-specific internal cost floor copied from the approved material
+    # costing/BOQ sheet. This is a project total, before customer taxes.
+    # Zero means use the calculated working floor.
+    costFloorOverride: float = 0
+    depositPercent: float = 80
+    discountPercent: float = 0
+    getfNhisPercent: float = 5
+    vatPercent: float = 15
+    # Client visualiser presentation preferences. These are saved with the
+    # design so a shared project opens with the same wall/finish viewpoint.
+    wallColor: str = "#ded8cc"
+    floorColor: str = "#cfd6dc"
+    customFrameColor: str = ""
+    visualView: str = "orbit"
     # frameless-only
     glassId: str = "temp10"
     overPanel: bool = False
@@ -107,6 +150,45 @@ class DesignIn(BaseModel):
         d["fl_system"] = d.pop("flSystem")
         d["slide_system"] = d.pop("slideSystem")
         d["corner_after"] = d.pop("cornerAfter")
+        d["measurement_status"] = d.pop("measurementStatus")
+        d["measurement_source"] = d.pop("measurementSource")
+        d["measured_by"] = d.pop("measuredBy")
+        d["measurement_date"] = d.pop("measurementDate")
+        d["site_notes"] = d.pop("siteNotes")
+        d["accessory_overrides"] = d.pop("accessoryOverrides")
+        d["custom_cut_pieces"] = d.pop("customCutPieces")
+        d["site_images"] = d.pop("siteImages")
+        d["client_phone"] = d.pop("clientPhone")
+        d["client_email"] = d.pop("clientEmail")
+        d["job_description"] = d.pop("jobDescription")
+        d["colour_description"] = d.pop("colourDescription")
+        d["quote_valid_days"] = d.pop("quoteValidDays")
+        d["cost_floor_override"] = d.pop("costFloorOverride")
+        d["deposit_percent"] = d.pop("depositPercent")
+        d["discount_percent"] = d.pop("discountPercent")
+        d["getf_nhis_percent"] = d.pop("getfNhisPercent")
+        d["vat_percent"] = d.pop("vatPercent")
+        d["wall_color"] = d.pop("wallColor")
+        d["floor_color"] = d.pop("floorColor")
+        d["custom_frame_color"] = d.pop("customFrameColor")
+        d["visual_view"] = d.pop("visualView")
+        for cell in d.get("cells", []):
+            if "itemQty" in cell:
+                cell["item_qty"] = cell.pop("itemQty")
+            if "rateKey" in cell:
+                cell["rate_key"] = cell.pop("rateKey")
+            if "ratePerM2" in cell:
+                cell["rate_per_m2"] = cell.pop("ratePerM2")
+        for item in d.get("accessory_overrides", []):
+            if "unitPrice" in item:
+                item["unit_price"] = item.pop("unitPrice")
+        for piece in d.get("custom_cut_pieces", []):
+            if "sourceMm" in piece:
+                piece["source_mm"] = piece.pop("sourceMm")
+            if "adjustmentMm" in piece:
+                piece["adjustment_mm"] = piece.pop("adjustmentMm")
+            if "lengthMm" in piece:
+                piece["length_mm"] = piece.pop("lengthMm")
         return d
 
 

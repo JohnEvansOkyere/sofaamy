@@ -5,10 +5,197 @@ INSTALL_PER_M2 = 45.0
 MARGIN_PCT = 20.0
 
 # per-profile prices/m — PLACEHOLDERS until Sofaamy's material list arrives
-PROFILE_PRICES = {"mollium": 85.0, "transum": 85.0, "sash": 95.0,
+PROFILE_PRICES = {"frame_outer": 85.0, "frame_internal": 85.0, "frame_opening": 85.0,
                   "cwmullion": 140.0, "cwtransom": 130.0}
-PROFILE_LABELS = {"mollium": "Mollium", "transum": "Transum", "sash": "Sash",
+PROFILE_LABELS = {"frame_outer": "Outer frame member (mapping pending)",
+                  "frame_internal": "Internal member (mapping pending)",
+                  "frame_opening": "Opening member (mapping pending)",
                   "cwmullion": "CW Mullion", "cwtransom": "CW Transom"}
+
+# Exact Frame catalogue identities copied from the supplied profile workbook.
+# This is catalogue data only: it does not claim which profile is consumed by
+# each cut role until Sofaamy confirms the system rules.
+FRAME_SOURCE_PROFILES = {
+    "trialco": [
+        ("TRIALCO FRAME WITH COVER", "TF053N", 5800, 636),
+        ("TRIALCO FRAME WITHOUT COVER", "TF073N", 5800, 608),
+        ("FLAT LEAF", "TF065N", 5800, 466),
+        ("NET ITALIAN", "TF223N", 5800, 171),
+        ("INTERLOCK ADOPTOR", "TF224N", 5800, 171),
+    ],
+    "ks50": [
+        ("KS - 50 FRAME WITH COVER", "MA0032", 5800, 494),
+        ("KS - 50 FRAME WITHOUT COVER", "MA0035", 5800, 437),
+        ("FLAT LEAF", "MA0033", 5800, 342),
+        ("NET LEAF ITALIAN", "AF2142N", 5800, 152),
+        ("INTERLOCK ADOPTOR", "MA0034", 5800, 152),
+    ],
+    "italian": [
+        ("ITALIAN FRAME WITH COVER", "AF2227N", 5800, 342),
+        ("ITALIAN FRAME WITHOUT COVER", "AF2237N", 5800, 309),
+        ("FLAT LEAF", "AF2136", 5800, 247),
+        ("NET LEAF ITALIAN", "AF2142N", 5800, 124),
+        ("INTERLOCK ADOPTOR", "AF2162N", 5800, 124),
+    ],
+    "fdt_casement": [
+        ("SMALL L-OUTER", "SML", 5800, 262), ("FLAT BEADING", "AF2158N", 5800, 124),
+        ("BIG T", "AF2235", 5800, 423), ("NET TRUCK", "NT02", 5800, 170),
+        ("ITALIAN NET LEAF", "AF2142N", 5800, 124),
+    ],
+    "fdt_projected": [
+        ("SMALL L-OUTER", "SML", 5800, 262), ("FLAT BEADING", "AF2158N", 5800, 124),
+        ("BIG T", "AF2235", 5800, 423), ("NET TRUCK", "NT02", 5800, 170),
+        ("ITALIAN NET LEAF", "AF2142N", 5800, 124),
+    ],
+    "fdt_fixed": [
+        ("SMALL L-OUTER / SWINGLOCKSTILE", "SML / SP-LS", 5800, 418),
+        ("FLAT BEADING", "AF2158N", 5800, 124), ("BIG T", "AF2235", 5800, 423),
+    ],
+    "fdt_hinge": [
+        ("SWINGLOCKSTILE", "SP-LS", 5800, 418), ("FLAT BEADING", "AF2158N", 5800, 124),
+        ("SWING BOTTOM DIVISION", "SP007", 5800, 637),
+        ("DOUBLE HINGE ADOPTOR", "JA061", 5800, 323),
+        ("BIG Z / HINGE LOCKSTILE", "AF2156", 5800, 447), ("BIG T", "AF2235", 5800, 423),
+    ],
+    "fdt_swing": [
+        ("SWINGLOCKSTILE", "SP-LS", 5800, 418), ("FLAT BEADING", "AF2158N", 5800, 124),
+        ("SWING BOTTOM DIVISION", "SP007", 5800, 637),
+        ("SWING BRUSH ADOPTOR", "AF2376R", 5800, 162), ("BIG T", "AF2235", 5800, 423),
+    ],
+}
+
+
+def frame_source_profiles(design: dict) -> list[dict]:
+    return [{"description": n, "code": c, "stock_mm": stock, "listed_price": price}
+            for n, c, stock, price in FRAME_SOURCE_PROFILES.get(design.get("system"), [])]
+
+
+def _acc(name, code, value, note=""):
+    return {"name": name, "code": code, "listed_value": value, "note": note}
+
+
+FRAME_SOURCE_ACCESSORIES = {
+    "trialco": [
+        _acc("0404 CORNERS", "ACC04C", 6.5), _acc("TRIALCO KIT", "ACC", 38),
+        _acc("NET CORNERS", "IT01NC", 1), _acc("TRIALCO ROLLERS", "TRIAL-R1", 15),
+        _acc("METAL LOCKS", "ACCML", 35), _acc("NET HANDLE", "ACCNH", 3),
+        _acc("NET FIBRE", "ACCNF", 280), _acc("GLAZING RUBBER", "ACCGRB", 128),
+        _acc("NET RUBBER", "ACCNRB", 60), _acc("INSTALLATION SCREWS", "ACCITS", 55),
+        _acc("WALL PLUGS", "ACCWPL", 54), _acc("WATER DRAIN CAP", "ACCWDC", 4.5),
+        _acc("PVC HOLE COVER", "ACCPVC", 6), _acc("SILICONE", "SIL", 30),
+        _acc("ITALIAN BRUSH", "ACCITB", 65),
+        _acc("ITALIAN SLIDING LOCK WITH KEY", "ACCIT SLK", 40, "Sliding doors only"),
+        _acc("ITALIAN SLIDING DOOR HANDLE", "ACCIT SDH", 38, "Sliding doors only"),
+    ],
+    "ks50": [
+        _acc("0404 CORNERS", "ACC04C", 6.5), _acc("NET CORNERS", "ACCNC", 1),
+        _acc("KS-50 ROLLERS", "ACC50R", 10), _acc("METAL LOCKS", "ACCML", 35),
+        _acc("NET HANDLE", "ACCNH", 3), _acc("NET FIBRE", "ACCNF", 280),
+        _acc("GLAZING RUBBER", "ACCGRB", 128), _acc("NET RUBBER", "ACCNRB", 60),
+        _acc("INSTALLATION SCREWS", "ACCITS", 55), _acc("WALL PLUGS", "ACCWPL", 54),
+        _acc("WATER DRAIN CAP", "ACCWDC", 4.5), _acc("PVC HOLE COVER", "ACCPVC", 6),
+        _acc("SILICONE", "SIL", 30), _acc("ITALIAN BRUSH", "ACCITB", 65),
+        _acc("ITALIAN SLIDING LOCK WITH KEY", "ACCIT SLK", 40, "Sliding doors only"),
+        _acc("ITALIAN SLIDING DOOR HANDLE", "ACCIT SDH", 38, "Sliding doors only"),
+    ],
+    "italian": [
+        _acc("FRAME CORNERS", "IT22FC", 5), _acc("LEAF CORNERS", "IT213LC", 5),
+        _acc("NET CORNERS", "IT01NC", 1), _acc("ITALIAN ROLLERS", "IT02RL", 6),
+        _acc("METAL LOCKS", "ACCML", 35), _acc("NET HANDLE", "ACCNH", 3),
+        _acc("NET FIBRE", "ACCNF", 280), _acc("GLAZING RUBBER", "ACCGRB", 128),
+        _acc("NET RUBBER", "ACCNRB", 60), _acc("INSTALLATION SCREWS", "ACCITS", 55),
+        _acc("WALL PLUGS", "ACCWPL", 54), _acc("WATER DRAIN CAP", "ACCWDC", 4.5),
+        _acc("PVC HOLE COVER", "ACCPVC", 6), _acc("SILICONE", "SIL", 30),
+        _acc("ITALIAN BRUSH", "ACCITB", 65),
+        _acc("ITALIAN SLIDING LOCK WITH KEY", "ACCIT SLK", 40, "Sliding doors only"),
+        _acc("ITALIAN SLIDING DOOR HANDLE", "ACCIT SDH", 38, "Sliding doors only"),
+    ],
+    "fdt_casement": [
+        _acc("45 DOOR CORNERS", "ACC45C", 13), _acc("NET TRUCK CORNERS", "ACCNTC", 7),
+        _acc("NET CORNERS", "ACCNC", 1), _acc("SUPERIOR PROJECT. HANDLE", "JQ106B", 46),
+        _acc("CASEMENT STOPPER", "13C3", 35), _acc("HEAVY DUTY HINGES", "HD/206", 35),
+        _acc("NET HANDLE", "ACCNH", 3), _acc("NET FIBRE", "ACCNF", 280),
+        _acc("GLAZING RUBBER", "ACCGRB", 128), _acc("NET RUBBER", "ACCNRB", 60),
+        _acc("FRAME RUBBER", "ACC FRRB", 54), _acc("INSTALLATION SCREWS", "ACCITS", 55),
+        _acc("WALL PLUGS", "ACCWPL", 4.5), _acc("WATER DRAIN CAP", "ACCWDC", 6),
+        _acc("PVC HOLE COVER", "ACCPVC", 46), _acc("SILICONE", "SIL", 30),
+    ],
+    "fdt_projected": [
+        _acc("45 DOOR CORNERS", "ACC45C", 13), _acc("NET TRUCK CORNERS", "ACCNTC", 7),
+        _acc("NET CORNERS", "ACCNC", 1), _acc("SUPERIOR PROJECT. HANDLE", "JQ106B", 46),
+        _acc("HEAVY DUTY PROJECTED HINGES", "HD/206", 70), _acc("NET HANDLE", "ACCNH", 3),
+        _acc("NET FIBRE", "ACCNF", 280), _acc("GLAZING RUBBER", "ACCGRB", 128),
+        _acc("NET RUBBER", "ACCNRB", 60), _acc("FRAME RUBBER", "ACC FRRB", 54),
+        _acc("INSTALLATION SCREWS", "ACCITS", 55), _acc("WALL PLUGS", "ACCWPL", 4.5),
+        _acc("WATER DRAIN CAP", "ACCWDC", 6), _acc("PVC HOLE COVER", "ACCPVC", 46),
+        _acc("SILICONE", "SIL", 30),
+    ],
+    "fdt_fixed": [
+        _acc("45 DOOR CORNERS", "ACC45C", 13), _acc("GLAZING RUBBER", "ACCGRB", 128),
+        _acc("FRAME RUBBER", "ACC FRRB", 54), _acc("INSTALLATION SCREWS", "ACCITS", 55),
+        _acc("WALL PLUGS", "ACCWPL", 4.5), _acc("WATER DRAIN CAP", "ACCWDC", 6),
+        _acc("PVC HOLE COVER", "ACCPVC", 46), _acc("SILICONE", "SIL", 30),
+    ],
+    "fdt_hinge": [
+        _acc("45 DOOR CORNERS", "ACC45C", 13), _acc("CEGO BRUSH", "AF2017", 46),
+        _acc("FRAME RUBBER", "ACC FRRB", 54), _acc("GLAZING RUBBER", "ACCGRB", 128),
+        _acc("ROLLER LOCK (30MM)", "RL30", 105, "1 for both double or single"),
+        _acc("CHROME HANDLE (SMALL)", "CHROME-H", 150), _acc("HINGE STRICKER", "HS 02", 3.5, "1 for both double or single"),
+        _acc("TOP CLOSER", "KDZ 202", 230), _acc("INSTALLATION SCREWS", "ACCITS", 55),
+        _acc("SILICONE", "SIL", 30), _acc("FLASH BOLT", "FBLT", 12, "2 for double swing doors"),
+    ],
+    "fdt_swing": [
+        _acc("45 DOOR CORNERS", "ACC45C", 13), _acc("CEGO BRUSH", "AF2017", 46),
+        _acc("FRAME RUBBER", "ACC FRRB", 54), _acc("GLAZING RUBBER", "ACCGRB", 128),
+        _acc("ROLLER LOCK (30MM)", "RL30", 105, "1 for both double or single"),
+        _acc("CHROME HANDLE (SMALL)", "CHROME-H", 150), _acc("HINGE STRICKER", "HS 02", 3.5, "1 for both double or single"),
+        _acc("DOWN CLOSER", "KL-HD203/6", 450), _acc("INSTALLATION SCREWS", "ACCITS", 55),
+        _acc("SILICONE", "SIL", 30), _acc("FLASH BOLT", "FBLT", 12, "2 for double swing doors"),
+    ],
+}
+
+
+def frame_accessory_rows(design: dict) -> list[dict]:
+    source = FRAME_SOURCE_ACCESSORIES.get(design.get("system"), [])
+    cells = design.get("cells") or []
+    project_qty = max(1, int(design.get("qty") or 1))
+    opening_count = max(1, sum(max(1, int(c.get("item_qty") or 1)) for c in cells))
+    moving = [c for c in cells if c.get("opening") != "fixed"]
+    moving_panels = max(1, sum(max(1, int(c.get("panels") or 1)) * max(1, int(c.get("item_qty") or 1)) for c in moving))
+    doors = [c for c in cells if c.get("opening") in ("single", "double")]
+    double_doors = sum(max(1, int(c.get("item_qty") or 1)) for c in doors if c.get("opening") == "double")
+    has_sliding_door = any(c.get("opening") == "sliding" for c in cells)
+    rows = []
+    for a in source:
+        k = f"{a['name']} {a['code']}".lower()
+        qty, rule = opening_count * project_qty, "one working allowance per project opening"
+        if "sliding doors only" in a.get("note", "").lower() and not has_sliding_door:
+            qty, rule = 0, "only for sliding doors"
+        elif any(x in k for x in ("roller", "wheel", "truck")):
+            qty, rule = moving_panels * 2 * project_qty, "2 per moving panel"
+        elif "corner" in k:
+            qty, rule = moving_panels * 4 * project_qty, "4 per moving panel"
+        elif "hinge" in k:
+            qty, rule = max(1, len(doors)) * 2 * project_qty, "2 per door leaf"
+        elif "flash bolt" in k:
+            qty, rule = max(1, len(doors)) * project_qty + double_doors * project_qty, "1 per door + 1 extra per double door"
+        elif any(x in k for x in ("handle", "lock", "closer", "stopper", "stricker")):
+            qty, rule = max(1, len(moving)) * project_qty, "1 per opening/door leaf"
+        rows.append({**a, "qty": qty, "suggested_qty": qty, "rule": rule,
+                     "source": "catalogue + working recipe", "unit_price": a["listed_value"]})
+    overrides = {x.get("code", f"custom:{x.get('name','item')}"): x for x in design.get("accessory_overrides", [])}
+    out = []
+    for row in rows:
+        o = overrides.get(row["code"])
+        item = {**row, **o} if o else row
+        if not item.get("removed") and float(item.get("qty", 0) or 0) > 0:
+            out.append(item)
+    known = {r["code"] for r in rows}
+    for o in design.get("accessory_overrides", []):
+        if o.get("custom") and not o.get("removed") and o.get("code") not in known and float(o.get("qty", 0) or 0) > 0:
+            out.append({**o, "source": "custom project item", "rule": "manual project addition",
+                        "unit_price": float(o.get("unit_price", 0) or 0)})
+    return out
 
 GLASS = {"clear":120,"frosted":160,"tinted":175,"reflective":210,
          "tempered":230,"laminated":275,"double":340}
@@ -16,7 +203,37 @@ HARDWARE = {"fixed":80,"casement":180,"sliding":240,"awning":200,"louvre":320,
             "single":260,"double":420,"pivot":520}
 GLASS_LABELS = {"clear":"Clear","frosted":"Frosted","tinted":"Tinted (Grey)",
                 "reflective":"Reflective","tempered":"Tempered",
-                "laminated":"Laminated","double":"Double Glazed"}
+                "laminated":"Laminated","double":"Double Glazed",
+                "5CF":"5mm Plain","6CF":"6mm Plain","8CF":"8mm Plain",
+                "10CF":"10mm Plain","12CF":"12mm Plain","3.3PL":"3mm + 3mm Laminated",
+                "3.3BZL":"3mm Bronze + 3mm Bronze Laminated","4.4PL":"4mm + 4mm Laminated",
+                "5.5PL":"5mm + 5mm Laminated","4.4BZL":"4mm Bronze + 4mm Bronze Laminated",
+                "5BR":"5mm Blue Reflective","5GR":"5mm Green Reflective",
+                "5BZR":"5mm Bronze Reflective","6MBR":"6mm Mexican Blue Reflective",
+                "5BR-BLACK":"5mm Black Reflective","5DBR":"5mm Deep Black Reflective",
+                "6SMBR":"6mm Superior Mexican Blue Reflective","5BT":"5mm Deep Black Glass",
+                "5BZT":"5mm Bronze Tinted","6BZT":"6mm Bronze Tinted","6BT":"6mm Deep Black Glass",
+                "6SMBT":"6mm Superior Mexican Blue Tinted"}
+
+# Starting values observed in Sofaamy's supplied quotation screenshots. These
+# are editable quote inputs, not a confirmed universal rate card.
+FRAME_QUOTE_RATES = {"slidingDoor": 1700.0, "slidingWindow": 1500.0,
+                     "projected": 2350.0, "casement": 2350.0,
+                     "fixed": 1900.0, "swingDoor": 1900.0,
+                     "hingeDoor": 1900.0}
+FRAME_RATE_KEYS = {"sliding": "slidingWindow", "awning": "projected",
+                   "casement": "casement", "fixed": "fixed",
+                   "single": "swingDoor", "double": "hingeDoor"}
+OPENING_LABELS = {"fixed": "Fixed", "casement": "Casement", "sliding": "Sliding Window",
+                  "awning": "Projected", "single": "Single Door", "double": "Double Door"}
+FRAME_GLASS = {
+    "5CF": 310.0, "6CF": 310.3, "8CF": 331.99, "10CF": 403.77, "12CF": 437.44,
+    "3.3PL": 381.82, "3.3BZL": 400.0, "4.4PL": 402.69, "5.5PL": 471.7,
+    "4.4BZL": 436.36, "5BR": 200.0, "5GR": 219.8, "5BZR": 200.0,
+    "6MBR": 312.46, "5BR-BLACK": 235.69, "5DBR": 288.48, "6SMBR": 361.25,
+    "5BT": 214.55, "5BZT": 206.06, "6BZT": 250.51, "6BT": 320.54,
+    "6SMBT": 252.96,
+}
 
 
 def calc_quote(width_mm: int, height_mm: int, panels: int, opening: str, glass: str) -> dict:
@@ -63,7 +280,7 @@ def _row_heights(design: dict) -> list[float]:
 # Fabrication deduction rules — PLACEHOLDERS until Sofaamy's system
 # specs arrive. Mirrors frontend lib/products.js FAB (formulas there).
 FAB = {"frame_depth": 50, "interlock": 30, "track_clear": 30,
-       "glass_deduct_fixed": 70, "glass_deduct_sash": 60}
+       "glass_deduct_fixed": 70, "glass_deduct_opening": 60}
 
 
 def design_breakdown(design: dict) -> dict:
@@ -75,39 +292,69 @@ def design_breakdown(design: dict) -> dict:
     profiles: list[dict] = []
     glass: list[dict] = []
 
-    def P(position, profile, member, length_mm, qty, cuts):
+    def P(position, profile, member, length_mm, qty, cuts, source_mm=None, adjustment_mm=None, note=""):
+        source = length_mm if source_mm is None else source_mm
+        adjustment = length_mm - source if adjustment_mm is None else adjustment_mm
         profiles.append({"position": position, "profile": profile, "member": member,
-                         "length_mm": round(length_mm), "qty": qty, "cuts": cuts})
+                         "source_mm": round(source), "adjustment_mm": round(adjustment),
+                         "length_mm": round(length_mm), "qty": qty, "cuts": cuts, "note": note})
 
-    P("Frame head", "transum", "Head", w, 1, "45°/45°")
-    P("Frame sill", "transum", "Sill", w, 1, "45°/45°")
-    P("Frame jambs (L+R)", "mollium", "Jamb", h, 2, "45°/45°")
+    P("Frame head", "frame_outer", "Outer frame member — head", w, 1, "45°/45°", w, 0)
+    P("Frame sill", "frame_outer", "Outer frame member — sill", w, 1, "45°/45°", w, 0)
+    P("Frame left jamb", "frame_outer", "Outer frame member — jamb", h, 1, "45°/45°", h, 0)
+    P("Frame right jamb", "frame_outer", "Outer frame member — jamb", h, 1, "45°/45°", h, 0)
     for j in range(1, cols):
-        P(f"Mullion {j}", "mollium", "Mullion", h - 2 * FAB["frame_depth"], 1, "90°/90°")
+        P(f"Internal vertical {j}", "frame_internal", "Internal member — vertical",
+          h - 2 * FAB["frame_depth"], 1, "90°/90°", h, -2 * FAB["frame_depth"])
     for r in range(1, rows):
         for c in range(cols):
-            P(f"Transom {r}.{c + 1}", "transum", "Transom",
-              cw[c] - 2 * FAB["frame_depth"], 1, "90°/90°")
+            P(f"Internal horizontal {r}.{c + 1}", "frame_internal", "Internal member — horizontal",
+              cw[c] - 2 * FAB["frame_depth"], 1, "90°/90°", cw[c], -2 * FAB["frame_depth"])
 
     for i, cell in enumerate(design["cells"]):
         sec_w, sec_h = cw[i % cols], rh[i // cols]
         tag = f"F{i + 1}"
         if cell["opening"] == "fixed":
             glass.append({"section": tag, "glass": cell["glass"],
+                          "source_w_mm": round(sec_w), "source_h_mm": round(sec_h),
+                          "adjustment_w_mm": -FAB["glass_deduct_fixed"],
+                          "adjustment_h_mm": -FAB["glass_deduct_fixed"],
                           "w_mm": round(sec_w - FAB["glass_deduct_fixed"]),
                           "h_mm": round(sec_h - FAB["glass_deduct_fixed"]),
                           "qty": 1, "note": "fixed lite"})
         else:
-            n = cell.get("panels") or 1
-            sash_w = sec_w / n + (FAB["interlock"] / 2 if n > 1 else 0)
-            sash_h = sec_h - FAB["track_clear"]
+            n = 2 if cell["opening"] == "double" else max(1, cell.get("panels") or 1)
+            panel_w = sec_w / n
+            rail_adjustment = FAB["interlock"] / 2 if n > 1 else 0
+            opening_w = panel_w + rail_adjustment
+            opening_h = sec_h - FAB["track_clear"]
             cuts = "45°/45°" if cell["opening"] in ("casement", "awning") else "90°/90°"
-            P(f"{tag} sash rails (top+btm)", "sash", "Sash rail", sash_w, 2 * n, cuts)
-            P(f"{tag} sash stiles", "sash", "Sash stile", sash_h, 2 * n, cuts)
+            for leaf in range(1, n + 1):
+                P(f"{tag} leaf {leaf} top rail", "frame_opening", "Opening member — rail",
+                  opening_w, 1, cuts, panel_w, rail_adjustment)
+                P(f"{tag} leaf {leaf} bottom rail", "frame_opening", "Opening member — rail",
+                  opening_w, 1, cuts, panel_w, rail_adjustment)
+                P(f"{tag} leaf {leaf} left stile", "frame_opening", "Opening member — stile",
+                  opening_h, 1, cuts, sec_h, -FAB["track_clear"])
+                P(f"{tag} leaf {leaf} right stile", "frame_opening", "Opening member — stile",
+                  opening_h, 1, cuts, sec_h, -FAB["track_clear"])
             glass.append({"section": tag, "glass": cell["glass"],
-                          "w_mm": round(sash_w - FAB["glass_deduct_sash"]),
-                          "h_mm": round(sash_h - FAB["glass_deduct_sash"]),
-                          "qty": n, "note": f"{n} sash panel(s)"})
+                          "source_w_mm": round(panel_w), "source_h_mm": round(sec_h),
+                          "adjustment_w_mm": round(rail_adjustment - FAB["glass_deduct_opening"]),
+                          "adjustment_h_mm": -FAB["glass_deduct_opening"],
+                          "w_mm": round(opening_w - FAB["glass_deduct_opening"]),
+                          "h_mm": round(opening_h - FAB["glass_deduct_opening"]),
+                          "qty": n, "note": f"{n} opening panel(s)"})
+    for index, piece in enumerate(design.get("custom_cut_pieces") or []):
+        source = float(piece.get("source_mm") or piece.get("length_mm") or 0)
+        adjustment = float(piece.get("adjustment_mm") or 0)
+        length = float(piece.get("length_mm") or source + adjustment)
+        if length <= 0:
+            continue
+        P(piece.get("position") or f"Custom piece {index + 1}",
+          piece.get("profile") or "frame_outer", piece.get("member") or "Manual fabrication piece",
+          length, max(1, int(piece.get("qty") or 1)), piece.get("cuts") or "SPECIAL / TEMPLATE",
+          source, adjustment, piece.get("note") or "")
     return {"profiles": profiles, "glass": glass}
 
 
@@ -115,12 +362,14 @@ def extract_pieces(design: dict) -> list[dict]:
     """Flat one-unit cut list for the optimizer (merged identical cuts)."""
     merged: dict[tuple, dict] = {}
     for p in design_breakdown(design)["profiles"]:
-        k = (p["profile"], p["member"], p["length_mm"])
+        # Preserve the originating fabrication position even when lengths
+        # match; optimizer bars must remain traceable to the drawing.
+        k = (p["profile"], p["member"], p["length_mm"], p["position"])
         if k in merged:
             merged[k]["qty"] += p["qty"]
         else:
             merged[k] = {"profile": p["profile"], "member": p["member"],
-                         "length_mm": p["length_mm"], "qty": p["qty"]}
+                         "position": p["position"], "length_mm": p["length_mm"], "qty": p["qty"]}
     return sorted(merged.values(), key=lambda p: (p["profile"], -p["length_mm"]))
 
 
@@ -141,35 +390,93 @@ def calc_design_quote(design: dict) -> dict:
 
     profile = sum(m * PROFILE_PRICES.get(pid, PROFILE_PER_M) for pid, m in metres.items())
     glass_cost = sum(
-        (cw[i % design["cols"]] * rh[i // design["cols"]] / 1e6) * GLASS.get(c["glass"], 120)
+        (cw[i % design["cols"]] * rh[i // design["cols"]] / 1e6) *
+        FRAME_GLASS.get(c.get("glass"), GLASS.get(c.get("glass"), 120))
         for i, c in enumerate(design["cells"]))
-    hardware = sum(
-        HARDWARE.get(c["opening"], 80) * (1 if c["opening"] == "fixed" else (c.get("panels") or 1))
-        for c in design["cells"])
+    accessories = frame_accessory_rows(design)
+    accessory_project_cost = sum(float(a.get("qty", 0) or 0) * float(a.get("unit_price", 0) or 0)
+                                  for a in accessories)
+    hardware = accessory_project_cost / qty
     labour = area * LABOUR_PER_M2
     install = area * INSTALL_PER_M2
 
     subtotal = profile + glass_cost + hardware + labour + install
     margin = subtotal * (MARGIN_PCT / 100)
+    internal_total = subtotal + margin
+
+    client_lines = []
+    for i, cell in enumerate(design["cells"]):
+        sec_w = cw[i % design["cols"]]
+        sec_h = rh[i // design["cols"]]
+        rate_key = cell.get("rate_key") or FRAME_RATE_KEYS.get(cell.get("opening"), "fixed")
+        rate = cell.get("rate_per_m2")
+        if not isinstance(rate, (int, float)):
+            rate = FRAME_QUOTE_RATES.get(rate_key, FRAME_QUOTE_RATES["fixed"])
+        row_area = sec_w * sec_h / 1e6
+        row_qty = max(1, int(cell.get("item_qty") or 1)) * qty
+        row_total = row_area * row_qty * rate
+        client_lines.append({
+            "description": OPENING_LABELS.get(cell.get("opening"), cell.get("opening", "Frame item")),
+            "width_mm": round(sec_w), "height_mm": round(sec_h), "qty": row_qty,
+            "m2": round(row_area * row_qty, 2), "unit_price": rate,
+            "total": round(row_total, 2), "rate_key": rate_key,
+        })
+    client_subtotal = sum(row["total"] for row in client_lines)
+    discount_percent = max(0, float(design.get("discount_percent", 0) or 0))
+    getf_nhis_percent = max(0, float(design.get("getf_nhis_percent", 5) or 0))
+    vat_percent = max(0, float(design.get("vat_percent", 15) or 0))
+    discount_amount = client_subtotal * discount_percent / 100
+    client_net = client_subtotal - discount_amount
+    getf_nhis = client_net * getf_nhis_percent / 100
+    vat = client_net * vat_percent / 100
+    client_grand_total = client_net + getf_nhis + vat
+    calculated_floor = subtotal * qty
+    floor_override = max(0, float(design.get("cost_floor_override", 0) or 0))
+    internal_floor = floor_override if floor_override > 0 else calculated_floor
+    floor_gap = client_net - internal_floor
     return {
         "area": round(area, 2),
         "sections": sections,
         "profile_len": round(profile_len, 2),
         "piece_count": piece_count,
         "pieces": pieces,
+        "profile_catalog": frame_source_profiles(design),
+        "profile_mapping_status": "catalogue loaded; cut-role mapping pending Sofaamy confirmation",
+        "accessories": accessories,
         "lines": [
             {"key": "Aluminium profile", "detail": f"{profile_len:.2f} m · {piece_count} cut pieces", "amount": round(profile, 2)},
             {"key": "Glass", "detail": f"{area:.2f} m² · {sections} section(s)", "amount": round(glass_cost, 2)},
-            {"key": "Hardware & fittings", "detail": f"{sections} section(s)", "amount": round(hardware, 2)},
+            {"key": "Hardware & accessories", "detail": f"{len(accessories)} catalogue/custom line(s)", "amount": round(hardware, 2)},
             {"key": "Fabrication labour", "detail": f"{area:.2f} m² × GHS {LABOUR_PER_M2:.0f}/m²", "amount": round(labour, 2)},
             {"key": "Installation", "detail": f"{area:.2f} m² × GHS {INSTALL_PER_M2:.0f}/m²", "amount": round(install, 2)},
         ],
         "subtotal": round(subtotal, 2),
         "margin": round(margin, 2),
         "margin_pct": MARGIN_PCT,
-        "total": round(subtotal + margin, 2),
+        "total": round(client_grand_total / qty, 2),
         "qty": qty,
-        "grand_total": round((subtotal + margin) * qty, 2),
+        "grand_total": round(client_grand_total, 2),
+        "internal_total": round(internal_total, 2),
+        "material_cost_per_unit": round(profile + glass_cost + hardware, 2),
+        "labour_cost_per_unit": round(labour, 2),
+        "installation_cost_per_unit": round(install, 2),
+        "internal_floor_per_unit": round(internal_floor / qty, 2),
+        "internal_floor": round(internal_floor, 2),
+        "calculated_internal_floor": round(calculated_floor, 2),
+        "cost_floor_override": round(floor_override, 2),
+        "cost_floor_source": "approved project BOQ / material sheet" if floor_override > 0 else "working estimate",
+        "client_net": round(client_net, 2),
+        "floor_gap": round(floor_gap, 2),
+        "floor_status": "OK" if floor_gap >= -0.01 else "BELOW FLOOR",
+        "client_lines": client_lines,
+        "client_subtotal": round(client_subtotal, 2),
+        "discount_percent": discount_percent,
+        "discount_amount": round(discount_amount, 2),
+        "getf_nhis_percent": getf_nhis_percent,
+        "getf_nhis": round(getf_nhis, 2),
+        "vat_percent": vat_percent,
+        "vat": round(vat, 2),
+        "client_grand_total": round(client_grand_total, 2),
         "currency": "GHS",
     }
 
@@ -345,6 +652,17 @@ def calc_frameless_quote(design: dict) -> dict:
         "subtotal": round(subtotal, 2), "margin": round(margin, 2),
         "margin_pct": MARGIN_PCT, "total": round(subtotal + margin, 2),
         "qty": qty, "grand_total": round((subtotal + margin) * qty, 2),
+        "material_cost_per_unit": round(glass_cost + hardware + processing, 2),
+        "labour_cost_per_unit": round(labour, 2),
+        "installation_cost_per_unit": round(install, 2),
+        "internal_floor_per_unit": round(subtotal, 2),
+        "internal_floor": round(subtotal * qty, 2),
+        "calculated_internal_floor": round(subtotal * qty, 2),
+        "cost_floor_override": 0,
+        "cost_floor_source": "working estimate",
+        "client_net": round((subtotal + margin) * qty, 2),
+        "floor_gap": round(((subtotal + margin) - subtotal) * qty, 2),
+        "floor_status": "OK",
         "currency": "GHS",
     }
 
@@ -443,6 +761,17 @@ def calc_cw_quote(design: dict) -> dict:
         "subtotal": round(subtotal, 2), "margin": round(margin, 2),
         "margin_pct": MARGIN_PCT, "total": round(subtotal + margin, 2),
         "qty": qty, "grand_total": round((subtotal + margin) * qty, 2),
+        "material_cost_per_unit": round(profile + plates + vision_cost + spandrel_cost + vent_cost + anchor_cost, 2),
+        "labour_cost_per_unit": round(labour, 2),
+        "installation_cost_per_unit": round(install, 2),
+        "internal_floor_per_unit": round(subtotal, 2),
+        "internal_floor": round(subtotal * qty, 2),
+        "calculated_internal_floor": round(subtotal * qty, 2),
+        "cost_floor_override": 0,
+        "cost_floor_source": "working estimate",
+        "client_net": round((subtotal + margin) * qty, 2),
+        "floor_gap": round(((subtotal + margin) - subtotal) * qty, 2),
+        "floor_status": "OK",
         "currency": "GHS",
     }
 

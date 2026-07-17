@@ -67,6 +67,8 @@ const equalSplit = (total, n) => {
 export function buildFrameless(t) {
   return { category:'frameless', templateId:t.id, name:t.name, group:t.group,
     ref:'', qty:1, location:'',
+    clientPhone:'', clientEmail:'', jobDescription:'', colourDescription:'', quoteValidDays:3, costFloorOverride:0,
+    accessoryOverrides:[], customCutPieces:[], siteImages:[],
     glassId:t.glassId || 'temp10', frame:'mill', system:'standard', finishType:'powder',
     width:t.w, height:t.h,
     cols:t.panels.length, rows:1,
@@ -180,6 +182,9 @@ export function calcFramelessQuote(d) {
     ],
     subtotal:+subtotal.toFixed(2), margin:+margin.toFixed(2),
     marginPct:RATES.marginPercent, total:+total.toFixed(2),
+    internalFloor:+(subtotal * qty).toFixed(2), calculatedInternalFloor:+(subtotal * qty).toFixed(2),
+    costFloorOverride:0, costFloorSource:'working estimate', clientNet:+(total * qty).toFixed(2),
+    floorGap:+(margin * qty).toFixed(2), floorStatus:'OK',
   }
 }
 

@@ -29,7 +29,7 @@ export const OPENINGS = {
 
 // Openable-design library (EvA parity: "Openable Designs", "Tilt & Turn"…).
 // Drag one INTO a section (or click with a section selected): the section
-// becomes that arrangement — `panels` sashes of the given opening type.
+// becomes that arrangement — `panels` opening panels of the given opening type.
 export const OPENING_DESIGNS = [
   { group:'Openable Designs', items:[
     { id:'od-fixed',    label:'Fixed',            opening:'fixed',    panels:1 },
@@ -94,13 +94,13 @@ export const FRAMES = {
 }
 
 // ── Aluminium profiles ──
-// Names + stock lengths confirmed from Sofaamy's cutting-optimizer screen
-// (meeting 2026-07-10): MOLLIUM 5800, TRANSUM 5750, SASH 5700.
-// Prices/m are PLACEHOLDERS until Sofaamy's material list arrives.
+// Working geometry groups only. These are deliberately NOT Sofaamy profile
+// names. The supplied Frame workbooks identify system-specific profiles and
+// codes; their cut-role mapping is still pending confirmation.
 export const PROFILES = {
-  mollium: { label:'Mollium',  role:'Vertical members (jambs, mullions)',   pricePerM:85, stockMm:5800 },
-  transum: { label:'Transum',  role:'Horizontal members (head, sill, transoms)', pricePerM:85, stockMm:5750 },
-  sash:    { label:'Sash',     role:'Opening-panel frames',                 pricePerM:95, stockMm:5700 },
+  frame_outer:   { label:'Outer frame member (mapping pending)', role:'Working geometry group', pricePerM:85, stockMm:5800 },
+  frame_internal:{ label:'Internal member (mapping pending)',   role:'Working geometry group', pricePerM:85, stockMm:5800 },
+  frame_opening: { label:'Opening member (mapping pending)',    role:'Working geometry group', pricePerM:85, stockMm:5800 },
   // curtain-wall sticks — PLACEHOLDER profile/prices pending Sofaamy's CW system
   cwmullion: { label:'CW Mullion', role:'Curtain wall vertical (continuous, anchored)', pricePerM:140, stockMm:5800 },
   cwtransom: { label:'CW Transom', role:'Curtain wall horizontal (between mullions)',   pricePerM:130, stockMm:5750 },
@@ -113,22 +113,22 @@ export const CUTTING = {
   minOffcutMm: 300, // shorter than this = scrap, not remnant
 }
 
-// Fabrication deduction rules — EVERY VALUE IS A PLACEHOLDER until
+// Fabrication geometry rules — EVERY VALUE IS A PLACEHOLDER until
 // Sofaamy's system specs arrive (docs/SOFAAMY-QUESTIONS.md §B9).
 // Formulas:
 //   outer frame (head/sill/jambs) → full size, mitred 45°/45°
 //   mullion  = height − 2 × frameDepth   (butts between head & sill, 90°)
 //   transom  = span   − 2 × frameDepth   (butts between verticals, 90°)
-//   sliding sash W = sectionW/n + interlock/2 (panels overlap at interlock)
-//   sash H         = sectionH − trackClear
-//   glass (fixed)  = section − glassDeductFixed (each dimension)
-//   glass (sash)   = sash size − glassDeductSash (each dimension)
+//   sliding opening W = sectionW/n + interlock/2
+//   opening H         = sectionH − trackClear
+//   glass (fixed)     = section − glassDeductFixed (each dimension)
+//   glass (opening)   = opening size − glassDeductOpening (each dimension)
 export const FAB = {
   frameDepthMm: 50,       // outer frame profile depth
-  interlockMm: 30,        // sliding-sash overlap at the meeting stile
-  trackClearMm: 30,       // sash height clearance in the track
+  interlockMm: 30,        // working opening overlap at the meeting stile
+  trackClearMm: 30,       // working opening height clearance in the track
   glassDeductFixedMm: 70, // glass cut size vs section, fixed lite
-  glassDeductSashMm: 60,  // glass cut size vs sash outer size
+  glassDeductOpeningMm: 60, // glass cut size vs opening member outer size
 }
 
 // ============================================================
