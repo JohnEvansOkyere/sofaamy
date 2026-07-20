@@ -7,7 +7,7 @@ import { MIN_SECTION_MM, designLayout } from '../../lib/designs.js'
 // and multiple sash panels (S1/S2… like EvA's double door in a section).
 // Dividers are draggable (EvA-style): dragging moves the boundary between
 // the two neighbouring sections; the overall size never changes.
-export default function DesignCanvas({ design, stageW, stageH, selected, onSelect, onDividerMove }) {
+export default function DesignCanvas({ design, stageW, stageH, pan = { x:0, y:0 }, onPanChange, selected, onSelect, onDividerMove }) {
   const { width, height, cols, rows, frame, cells, group } = design
   const { colW, rowH, scale, fw, fh, ox, oy, ft, cumX, cumY } = designLayout(design, stageW, stageH)
   const frameColor = (FRAMES[frame] || FRAMES.mill).color
@@ -37,7 +37,8 @@ export default function DesignCanvas({ design, stageW, stageH, selected, onSelec
   const setCursor = (e, cur) => { const st = e.target.getStage(); if (st) st.container().style.cursor = cur }
 
   return (
-    <Stage width={stageW} height={stageH}>
+    <Stage width={stageW} height={stageH} x={pan.x} y={pan.y} draggable dragDistance={4}
+      onDragEnd={e => onPanChange?.({ x:e.target.x(), y:e.target.y() })}>
       <Layer>
         <Rect x={ox+6} y={oy+8} width={fw} height={fh} cornerRadius={3} fill="rgba(16,42,67,0.10)" listening={false}/>
         {/* frame + dividers show through the gaps between glass sections */}
@@ -50,26 +51,52 @@ export default function DesignCanvas({ design, stageW, stageH, selected, onSelec
           const pw = cellRight(c) - px, ph = cellBot(r) - py
           const g = GLASS[cell.glass] || GLASS.clear
           const isSel = selected === idx
-          const n = cell.opening === 'fixed' ? 1 : (cell.panels || 1)
           const sashT = Math.max(3, ft * 0.55)   // sash frame thickness
+          const local = cell.localDivider && (cell.localDivider.cols > 1 || cell.localDivider.rows > 1)
+          const localCols = local ? cell.localDivider.cols : 1
+          const localRows = local ? cell.localDivider.rows : 1
+          const localW = local
+            ? (cell.localDivider.colWidths?.length === localCols ? cell.localDivider.colWidths : Array.from({ length:localCols }, () => (pw / scale) / localCols))
+            : [pw / scale]
+          const localH = local
+            ? (cell.localDivider.rowHeights?.length === localRows ? cell.localDivider.rowHeights : Array.from({ length:localRows }, () => (ph / scale) / localRows))
+            : [ph / scale]
+          const localX = localW.reduce((a, w) => [...a, a[a.length - 1] + w], [0])
+          const localY = localH.reduce((a, h) => [...a, a[a.length - 1] + h], [0])
+          const renderPane = (sx, sy, sw, sh, paneIndex) => {
+            const n = cell.opening === 'fixed' ? 1 : (cell.panels || 1)
+            return <Group key={`pane-${paneIndex}`}>
+              <Rect x={sx} y={sy} width={sw} height={sh} fill={g.fill} opacity={g.opacity}
+                onClick={() => onSelect(idx)} onTap={() => onSelect(idx)} />
+              <Line points={[sx+sw*0.12, sy+sh, sx+sw*0.44, sy]} stroke="#fff" strokeWidth={sw*0.05} opacity={0.16} listening={false}/>
+              {n === 1 && marks(sx, sy, sw, sh, cell.opening, idx + paneIndex)}
+              {n > 1 && Array.from({ length:n }).map((_, k) => {
+                const sashX = sx + k * (sw / n), sashW = sw / n
+                return <Group key={`sash-${k}`} listening={false}>
+                  <Rect x={sashX+1} y={sy+1} width={sashW-2} height={sh-2} stroke={frameColor} strokeWidth={sashT} fill="rgba(255,255,255,0.06)"/>
+                  {marks(sashX + sashT, sy + sashT, sashW - sashT*2, sh - sashT*2, cell.opening, k)}
+                  <Rect x={sashX+4} y={sy+4} width={20} height={13} fill="#fff" opacity={0.85} cornerRadius={2}/>
+                  <Text x={sashX+4} y={sy+6} width={20} align="center" text={`S${k+1}`} fontSize={8.5} fontStyle="bold" fill="#33495e"/>
+                </Group>
+              })}
+              {local && (
+                <Text x={sx+4} y={sy+4} width={34} text={`F${idx+1}.${paneIndex+1}`} fontSize={8} fontStyle="bold" fill="#33495e" listening={false}/>
+              )}
+            </Group>
+          }
           return (
             <Group key={idx}>
-              <Rect x={px} y={py} width={pw} height={ph} fill={g.fill} opacity={g.opacity}
-                onClick={() => onSelect(idx)} onTap={() => onSelect(idx)} />
-              <Line points={[px+pw*0.12, py+ph, px+pw*0.44, py]} stroke="#fff" strokeWidth={pw*0.05} opacity={0.16} listening={false}/>
-              {n === 1 && marks(px, py, pw, ph, cell.opening, idx)}
-              {/* multi-panel sashes inside the section (EvA S1/S2) */}
-              {n > 1 && Array.from({ length: n }).map((_, k) => {
-                const sx = px + k * (pw / n), sw = pw / n
-                return (
-                  <Group key={k} listening={false}>
-                    <Rect x={sx+1} y={py+1} width={sw-2} height={ph-2} stroke={frameColor} strokeWidth={sashT} fill="rgba(255,255,255,0.06)"/>
-                    {marks(sx + sashT, py + sashT, sw - sashT*2, ph - sashT*2, cell.opening, k)}
-                    <Rect x={sx+4} y={py+4} width={20} height={13} fill="#fff" opacity={0.85} cornerRadius={2}/>
-                    <Text x={sx+4} y={py+6} width={20} align="center" text={`S${k+1}`} fontSize={8.5} fontStyle="bold" fill="#33495e"/>
-                  </Group>
-                )
-              })}
+              {local
+                ? Array.from({ length:localCols * localRows }).map((_, paneIndex) => {
+                    const pc = paneIndex % localCols, pr = Math.floor(paneIndex / localCols)
+                    return renderPane(px + localX[pc] * scale, py + localY[pr] * scale,
+                      localW[pc] * scale, localH[pr] * scale, paneIndex)
+                  })
+                : renderPane(px, py, pw, ph, 0)}
+              {local && <Group listening={false}>
+                {Array.from({ length:localCols - 1 }).map((_, j) => <Line key={`local-v-${j}`} points={[px + localX[j + 1] * scale, py, px + localX[j + 1] * scale, py + ph]} stroke={frameColor} strokeWidth={sashT}/>) }
+                {Array.from({ length:localRows - 1 }).map((_, j) => <Line key={`local-h-${j}`} points={[px, py + localY[j + 1] * scale, px + pw, py + localY[j + 1] * scale]} stroke={frameColor} strokeWidth={sashT}/>) }
+              </Group>}
               <Rect x={px} y={py} width={pw} height={ph}
                 stroke={isSel ? '#D4AC0D' : 'rgba(0,0,0,0.12)'} strokeWidth={isSel ? 3 : 1} listening={false}/>
               {/* EvA-style section tag */}

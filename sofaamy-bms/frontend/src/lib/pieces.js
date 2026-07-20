@@ -7,11 +7,22 @@
 // ============================================================
 import { PROFILES, FAB } from './products.js'
 import { cwBreakdown } from './curtainwall.js'
+import { isTrialcoBay, trialcoBreakdown } from './trialco.js'
 
 const colWidths = (d) => d.colWidths?.length === d.cols
   ? d.colWidths : Array.from({ length: d.cols }, () => d.width / d.cols)
 const rowHeights = (d) => d.rowHeights?.length === d.rows
   ? d.rowHeights : Array.from({ length: d.rows }, () => d.height / d.rows)
+
+const localPanes = (cell, secW, secH) => {
+  const local = cell.localDivider
+  if (!local || !(local.cols > 1 || local.rows > 1)) return [{ wMm:secW, hMm:secH, index:0 }]
+  const widths = local.colWidths?.length === local.cols ? local.colWidths : Array.from({ length:local.cols }, () => secW / local.cols)
+  const heights = local.rowHeights?.length === local.rows ? local.rowHeights : Array.from({ length:local.rows }, () => secH / local.rows)
+  return Array.from({ length:local.cols * local.rows }, (_, index) => ({
+    wMm:widths[index % local.cols], hMm:heights[Math.floor(index / local.cols)], index,
+  }))
+}
 
 // → { profiles:[{position, profile, member, sourceMm, adjustmentMm, lengthMm, qty, cuts}],
 //     glass:[{section, glass, wMm, hMm, qty, note}] }  — for ONE unit
@@ -20,6 +31,7 @@ export function designBreakdown(d) {
   // frameless has no profiles at all (see lib/frameless.js)
   if (d.category === 'curtainwall') return cwBreakdown(d)
   if (d.category === 'frameless') return { profiles: [], glass: [] }
+  if (isTrialcoBay(d)) return trialcoBreakdown(d)
   const cw = colWidths(d), rh = rowHeights(d)
   const profiles = [], glass = []
   const P = (position, profile, member, lengthMm, qty, cuts, sourceMm = lengthMm, adjustmentMm = lengthMm - sourceMm, note = '') =>
@@ -43,28 +55,43 @@ export function designBreakdown(d) {
   d.cells.forEach((cell, i) => {
     const secW = cw[i % d.cols], secH = rh[Math.floor(i / d.cols)]
     const tag = `F${i + 1}`
-    if (cell.opening === 'fixed') {
-      glass.push({ section: tag, glass: cell.glass, sourceWMm: Math.round(secW), sourceHMm: Math.round(secH),
-        adjustmentWMm: -FAB.glassDeductFixedMm, adjustmentHMm: -FAB.glassDeductFixedMm,
-        wMm: Math.round(secW - FAB.glassDeductFixedMm), hMm: Math.round(secH - FAB.glassDeductFixedMm), qty: 1, note: 'fixed lite' })
-    } else {
+    const panes = localPanes(cell, secW, secH)
+    if (panes.length > 1) {
+      const local = cell.localDivider
+      const localWidths = local.colWidths?.length === local.cols ? local.colWidths : Array.from({ length:local.cols }, () => secW / local.cols)
+      const localHeights = local.rowHeights?.length === local.rows ? local.rowHeights : Array.from({ length:local.rows }, () => secH / local.rows)
+      for (let j = 1; j < local.cols; j++)
+        P(`${tag} local vertical ${j}`, 'frame_internal', 'Local internal member — vertical', secH - 2 * FAB.frameDepthMm, 1, '90°/90°', secH, -2 * FAB.frameDepthMm)
+      for (let r = 1; r < local.rows; r++)
+        for (let c = 0; c < local.cols; c++)
+          P(`${tag} local horizontal ${r}.${c + 1}`, 'frame_internal', 'Local internal member — horizontal', localWidths[c] - 2 * FAB.frameDepthMm, 1, '90°/90°', localWidths[c], -2 * FAB.frameDepthMm)
+    }
+    panes.forEach(pane => {
+      const paneTag = panes.length > 1 ? `${tag}.${pane.index + 1}` : tag
+      const paneW = pane.wMm, paneH = pane.hMm
+      if (cell.opening === 'fixed') {
+        glass.push({ section: paneTag, glass: cell.glass, sourceWMm: Math.round(paneW), sourceHMm: Math.round(paneH),
+          adjustmentWMm: -FAB.glassDeductFixedMm, adjustmentHMm: -FAB.glassDeductFixedMm,
+          wMm: Math.round(paneW - FAB.glassDeductFixedMm), hMm: Math.round(paneH - FAB.glassDeductFixedMm), qty: 1, note: panes.length > 1 ? 'local fixed lite' : 'fixed lite' })
+        return
+      }
       const n = cell.opening === 'double' ? 2 : Math.max(1, cell.panels || 1)
-      const panelW = secW / n
+      const panelW = paneW / n
       const railAdjustment = n > 1 ? FAB.interlockMm / 2 : 0
       const openingW = panelW + railAdjustment
-      const openingH = secH - FAB.trackClearMm
+      const openingH = paneH - FAB.trackClearMm
       const mitred = cell.opening === 'casement' || cell.opening === 'awning'
       const cuts = mitred ? '45°/45°' : '90°/90°'
       for (let leaf = 1; leaf <= n; leaf++) {
-        P(`${tag} leaf ${leaf} top rail`, 'frame_opening', 'Opening member — rail', openingW, 1, cuts, panelW, railAdjustment)
-        P(`${tag} leaf ${leaf} bottom rail`, 'frame_opening', 'Opening member — rail', openingW, 1, cuts, panelW, railAdjustment)
-        P(`${tag} leaf ${leaf} left stile`, 'frame_opening', 'Opening member — stile', openingH, 1, cuts, secH, -FAB.trackClearMm)
-        P(`${tag} leaf ${leaf} right stile`, 'frame_opening', 'Opening member — stile', openingH, 1, cuts, secH, -FAB.trackClearMm)
+        P(`${paneTag} leaf ${leaf} top rail`, 'frame_opening', 'Opening member — rail', openingW, 1, cuts, panelW, railAdjustment)
+        P(`${paneTag} leaf ${leaf} bottom rail`, 'frame_opening', 'Opening member — rail', openingW, 1, cuts, panelW, railAdjustment)
+        P(`${paneTag} leaf ${leaf} left stile`, 'frame_opening', 'Opening member — stile', openingH, 1, cuts, paneH, -FAB.trackClearMm)
+        P(`${paneTag} leaf ${leaf} right stile`, 'frame_opening', 'Opening member — stile', openingH, 1, cuts, paneH, -FAB.trackClearMm)
       }
-      glass.push({ section: tag, glass: cell.glass, sourceWMm: Math.round(panelW), sourceHMm: Math.round(secH),
+      glass.push({ section: paneTag, glass: cell.glass, sourceWMm: Math.round(panelW), sourceHMm: Math.round(paneH),
         adjustmentWMm: Math.round(railAdjustment - FAB.glassDeductOpeningMm), adjustmentHMm: -FAB.glassDeductOpeningMm,
         wMm: Math.round(openingW - FAB.glassDeductOpeningMm), hMm: Math.round(openingH - FAB.glassDeductOpeningMm), qty: n, note: `${n} opening panel(s)` })
-    }
+    })
   })
   ;(d.customCutPieces || []).forEach((piece, index) => {
     const source = Number(piece.sourceMm || piece.lengthMm || 0)
@@ -101,7 +128,7 @@ export const multiplyPieces = (pieces, qty) =>
 // per-cell sizes for pricing: [{wMm, hMm}] row-major
 export function cellSizes(d) {
   const cw = colWidths(d), rh = rowHeights(d)
-  return d.cells.map((_, i) => ({ wMm: cw[i % d.cols], hMm: rh[Math.floor(i / d.cols)] }))
+  return d.cells.flatMap((cell, i) => localPanes(cell, cw[i % d.cols], rh[Math.floor(i / d.cols)]))
 }
 
 // total metres per working geometry group. Source profile identity is shown

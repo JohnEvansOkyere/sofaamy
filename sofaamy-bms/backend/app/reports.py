@@ -12,7 +12,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from .pricing import (GLASS, GLASS_LABELS, HARDWARE, PROFILE_LABELS,
+from .pricing import (FRAME_GLASS, GLASS, GLASS_LABELS, HARDWARE, PROFILE_LABELS,
                       PROFILE_PRICES, _col_widths, _row_heights, any_breakdown)
 
 NAVY = colors.HexColor("#122a46")
@@ -92,12 +92,72 @@ def _piece_position(piece):
     return f"{piece['position']} — {piece['note']}" if piece.get("note") else piece["position"]
 
 
+def _trialco_formula_table(result):
+    f = result.get("fabrication") or {}
+    if f.get("system") != "trialco":
+        return None
+    rows = [["Aspect", "Formula", "Working result"]]
+    rows += [
+        ["Frame", "Site measurement: Frame W × Frame H",
+         f"{f['frame']['w_mm']:,} × {f['frame']['h_mm']:,} mm"],
+        ["Leaf × 2", "Leaf W = Frame W ÷ 2; Leaf H = Frame H − 70",
+         f"{f['leaf']['w_mm']:,} × {f['leaf']['h_mm']:,} mm"],
+        ["Net × 2", "Net W = Leaf W; Net H = Leaf H − 10",
+         f"{f['net']['w_mm']:,} × {f['net']['h_mm']:,} mm"],
+        ["Interlock × 2", "Interlock length = Leaf H",
+         f"{f['interlock']['length_mm']:,} mm long"],
+        ["Glass × 2", "Glass W/H = Leaf W/H − 112",
+         f"{f['glass']['w_mm']:,} × {f['glass']['h_mm']:,} mm"],
+    ]
+    t = Table([[_cell(v) for v in row] for row in rows], colWidths=[29 * mm, 88 * mm, 49 * mm], repeatRows=1)
+    t.setStyle(BASE_STYLE)
+    return t
+
+
+def _trialco_material_table(result):
+    """Project-level material quantities and fixed internal unit prices."""
+    material_rows = result.get("material_rows") or []
+    if not material_rows:
+        return None
+    rows = [["Item", "Code", "Qty", "Unit", "Unit price", "Total"]]
+    for item in material_rows:
+        rows.append([
+            _cell(item.get("description", "—")),
+            _cell(item.get("code", "—")),
+            _cell(f"{float(item.get('quantity', 0) or 0):g}"),
+            _cell(item.get("unit", "—")),
+            _cell(ghs(float(item.get("unit_price", 0) or 0))),
+            _cell(ghs(float(item.get("total", 0) or 0))),
+        ])
+    rows.extend([
+        ["", "", "", "", "Material cost", ghs(result.get("material_cost", 0) or 0)],
+        ["", "", "", "", f"Installation ({result.get('installation_percent', 30)}%)", ghs(result.get("installation_cost", 0) or 0)],
+        ["", "", "", "", "Total internal cost", ghs(result.get("total_material_cost", 0) or 0)],
+    ])
+    table = Table(rows, colWidths=[43 * mm, 29 * mm, 18 * mm, 22 * mm, 29 * mm, 31 * mm], repeatRows=1)
+    table.setStyle(BASE_STYLE)
+    return table
+
+
 # ── 1. CUTTING LIST ──────────────────────────────────────────
 
 def cutting_list_pdf(design: dict, result: dict, demand: list[dict], plan: dict) -> bytes:
     bd = any_breakdown(design)
     qty = result["qty"]
     flow = []
+
+    formula_table = _trialco_formula_table(result)
+    if formula_table:
+        flow.append(Paragraph("Trialco bay formula summary — PER BAY", H2))
+        flow.append(formula_table)
+        flow.append(Paragraph(
+            "This is the working Trialco recipe used below. Quantities and final profile cut rules must be checked against Sofaamy's approved calculation before factory release.", NOTE))
+        material_table = _trialco_material_table(result)
+        if material_table:
+            flow.append(Paragraph("Trialco internal material cost list — PROJECT TOTALS", H2))
+            flow.append(material_table)
+            flow.append(Paragraph(
+                "Material quantities are prepopulated from Frame W, Frame H and project quantity. Unit prices are fixed internal costing-sheet rates; the selected glass catalogue rate is used for the glass row.", NOTE))
 
     flow.append(Paragraph("Profile breakdown — every piece, with deductions and cut angles (all units)", H2))
     rows = [["Position", "Profile", "Input (mm)", "Adj. (mm)", "Cut (mm)", "Cuts", "Qty"]] + [
@@ -119,6 +179,16 @@ def cutting_list_pdf(design: dict, result: dict, demand: list[dict], plan: dict)
     t = Table(rows, colWidths=[38 * mm, 30 * mm, 40 * mm, 50 * mm, 20 * mm], repeatRows=1)
     t.setStyle(BASE_STYLE)
     flow.append(t)
+    if bd.get("net"):
+        flow.append(Paragraph("Net cutting sizes (all units)", H2))
+        rows = [["Panel", "Source W × H (mm)", "Cut W × H (mm)", "Qty"]] + [
+            [_cell(f"{n['section']} ({n.get('note', '')})"),
+             _cell(f"{n.get('source_w_mm', n['w_mm']):,} × {n.get('source_h_mm', n['h_mm']):,}"),
+             _cell(f"{n['w_mm']:,} × {n['h_mm']:,}"), _cell(str(n['qty'] * qty))]
+            for n in bd["net"]]
+        t = Table(rows, colWidths=[74 * mm, 42 * mm, 50 * mm, 20 * mm], repeatRows=1)
+        t.setStyle(BASE_STYLE)
+        flow.append(t)
     flow.append(Paragraph(
         "This schedule expands the design into individual fabrication pieces. Each profile row shows "
         "input size + adjustment = cut length; double openings are expanded into separate leaf rows. "
@@ -163,13 +233,27 @@ def work_order_pdf(design: dict, result: dict, pieces_per_unit: list[dict]) -> b
 
     flow.append(Paragraph("Sections", H2))
     rows = [["Section", "Size (mm)", "Glass", "Opening", "Opening panels"]]
-    for i, c in enumerate(design["cells"]):
-        rows.append([f"F{i + 1}", f"{round(cw[i % cols])} × {round(rh[i // cols])}",
-                     GLASS_LABELS.get(c["glass"], c["glass"]), c["opening"].title(),
-                     "—" if c["opening"] == "fixed" else str(c.get("panels") or 1)])
+    if (result.get("fabrication") or {}).get("system") == "trialco":
+        f = result["fabrication"]
+        rows.append(["Bay", f"{f['frame']['w_mm']} × {f['frame']['h_mm']}",
+                     "2 panels", "Trialco sliding", "2 leaves"])
+    else:
+        for i, c in enumerate(design["cells"]):
+            rows.append([f"F{i + 1}", f"{round(cw[i % cols])} × {round(rh[i // cols])}",
+                         GLASS_LABELS.get(c["glass"], c["glass"]), c["opening"].title(),
+                         "—" if c["opening"] == "fixed" else str(c.get("panels") or 1)])
     t = Table(rows, colWidths=[20 * mm, 38 * mm, 45 * mm, 40 * mm, 30 * mm])
     t.setStyle(BASE_STYLE)
     flow.append(t)
+
+    formula_table = _trialco_formula_table(result)
+    if formula_table:
+        flow.append(Paragraph("Trialco fabrication formula summary", H2))
+        flow.append(formula_table)
+        material_table = _trialco_material_table(result)
+        if material_table:
+            flow.append(Paragraph("Trialco internal material cost list — PROJECT TOTALS", H2))
+            flow.append(material_table)
 
     bd = any_breakdown(design)
     flow.append(Paragraph("Cut pieces — PER UNIT (with deductions and cut angles)", H2))
@@ -192,6 +276,16 @@ def work_order_pdf(design: dict, result: dict, pieces_per_unit: list[dict]) -> b
     t = Table(rows, colWidths=[38 * mm, 30 * mm, 40 * mm, 50 * mm, 20 * mm], repeatRows=1)
     t.setStyle(BASE_STYLE)
     flow.append(t)
+    if bd.get("net"):
+        flow.append(Paragraph("Net — PER UNIT (cut sizes)", H2))
+        rows = [["Panel", "Source W × H (mm)", "Cut W × H (mm)", "Qty"]] + [
+            [_cell(f"{n['section']} ({n.get('note', '')})"),
+             _cell(f"{n.get('source_w_mm', n['w_mm']):,} × {n.get('source_h_mm', n['h_mm']):,}"),
+             _cell(f"{n['w_mm']:,} × {n['h_mm']:,}"), _cell(str(n['qty']))]
+            for n in bd["net"]]
+        t = Table(rows, colWidths=[74 * mm, 42 * mm, 50 * mm, 20 * mm], repeatRows=1)
+        t.setStyle(BASE_STYLE)
+        flow.append(t)
 
     flow.append(Paragraph(
         "This work order carries the per-unit fabrication schedule. Confirm the source profile role, "
@@ -259,6 +353,21 @@ def boq_pdf(design: dict, result: dict, demand: list[dict], plan: dict) -> bytes
     qty = result["qty"]
     flow = []
 
+    # Trialco has a dedicated internal costing-sheet workflow. Keep this
+    # aligned with the configurator and cutting list instead of mixing the
+    # fixed-price recipe with the generic area/profile estimate below.
+    material_table = _trialco_material_table(result)
+    if material_table:
+        flow.append(Paragraph("Trialco bay formula summary — PER BAY", H2))
+        flow.append(_trialco_formula_table(result))
+        flow.append(Paragraph("Trialco internal material cost list — PROJECT TOTALS", H2))
+        flow.append(material_table)
+        flow.append(Paragraph(
+            "This is an INTERNAL material-cost document. Quantities are calculated from the measured Frame W, Frame H and project quantity. Unit prices remain fixed from the Trialco costing sheet image, while glass uses the selected glass catalogue rate. Customer selling price and taxes remain on the customer quotation.", NOTE))
+        flow.append(Paragraph("Internal cost floor & negotiation control", H2))
+        flow.append(_cost_floor_table(result))
+        return _build("INTERNAL TRIALCO MATERIAL COST SHEET", _meta_line(design, result), flow)
+
     source_profiles = result.get("profile_catalog") or []
     if source_profiles:
         flow.append(Paragraph("Selected Frame system — source profile catalogue", H2))
@@ -304,7 +413,7 @@ def boq_pdf(design: dict, result: dict, demand: list[dict], plan: dict) -> bytes
     rows = [["Glass type", "Cut sizes / unit (mm)", "Panels", "Area (m²)", "Rate / m²", "Amount"]]
     total_glass = 0.0
     for gid, e in glass.items():
-        rate = GLASS.get(gid, 120)
+        rate = FRAME_GLASS.get(gid, GLASS.get(gid, 120))
         amt = e["area"] * qty * rate
         total_glass += amt
         rows.append([_cell(GLASS_LABELS.get(gid, gid)), _cell(", ".join(e["sizes"])), _cell(str(e["n"] * qty)),
@@ -313,6 +422,15 @@ def boq_pdf(design: dict, result: dict, demand: list[dict], plan: dict) -> bytes
     t = Table(rows, colWidths=[30 * mm, 42 * mm, 18 * mm, 22 * mm, 24 * mm, 27 * mm])
     t.setStyle(BASE_STYLE)
     flow.append(t)
+
+    if bd.get("net"):
+        flow.append(Paragraph("Net panels — dimensions for issue", H2))
+        net_rows = [["Panel", "Cut size (mm)", "Qty"]] + [
+            [_cell(n["section"]), _cell(f"{n['w_mm']:,} × {n['h_mm']:,}"), _cell(str(n["qty"] * qty))]
+            for n in bd["net"]]
+        t = Table(net_rows, colWidths=[55 * mm, 65 * mm, 30 * mm], repeatRows=1)
+        t.setStyle(BASE_STYLE)
+        flow.append(t)
 
     # project accessory recipe, including any user edits saved on the design
     flow.append(Paragraph("Accessories & hardware — editable project recipe", H2))
@@ -904,6 +1022,11 @@ def price_breakdown_pdf(design: dict, result: dict, client_name: str = "") -> by
     t = Table(rows, colWidths=[54 * mm, 76 * mm, 26 * mm])
     t.setStyle(BASE_STYLE)
     flow.append(t)
+
+    material_table = _trialco_material_table(result)
+    if material_table:
+        flow.append(Paragraph("Trialco internal material cost list — PROJECT TOTALS", H2))
+        flow.append(material_table)
 
     flow.append(Paragraph("Totals", H2))
     rows = [["Subtotal (per unit)", ghs(result["subtotal"])],

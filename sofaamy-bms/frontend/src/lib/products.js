@@ -101,6 +101,12 @@ export const PROFILES = {
   frame_outer:   { label:'Outer frame member (mapping pending)', role:'Working geometry group', pricePerM:85, stockMm:5800 },
   frame_internal:{ label:'Internal member (mapping pending)',   role:'Working geometry group', pricePerM:85, stockMm:5800 },
   frame_opening: { label:'Opening member (mapping pending)',    role:'Working geometry group', pricePerM:85, stockMm:5800 },
+  // Trialco-specific groups. Rates remain working estimates until the
+  // approved per-profile price sheet is connected to the system.
+  trialco_frame:    { label:'Trialco frame (TF053N / TF073N)', role:'Trialco outer frame', pricePerM:85, stockMm:5800 },
+  trialco_leaf:     { label:'Trialco flat leaf (TF065N)',      role:'Trialco sliding leaf', pricePerM:85, stockMm:5800 },
+  trialco_net:      { label:'Trialco net Italian (TF223N)',    role:'Trialco insect screen', pricePerM:85, stockMm:5800 },
+  trialco_interlock:{ label:'Trialco interlock adaptor (TF224N)', role:'Trialco meeting profile', pricePerM:85, stockMm:5800 },
   // curtain-wall sticks — PLACEHOLDER profile/prices pending Sofaamy's CW system
   cwmullion: { label:'CW Mullion', role:'Curtain wall vertical (continuous, anchored)', pricePerM:140, stockMm:5800 },
   cwtransom: { label:'CW Transom', role:'Curtain wall horizontal (between mullions)',   pricePerM:130, stockMm:5750 },

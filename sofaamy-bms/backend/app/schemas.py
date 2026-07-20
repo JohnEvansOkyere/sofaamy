@@ -74,6 +74,9 @@ class DesignCell(BaseModel):
     # frameless panel type (fixed|door|hinged|slider) or curtain wall
     # bay type (vision|spandrel|vent); unused by framed designs
     type: str = ""
+    # Optional divider layout applied only to this section, rather than the
+    # entire outer frame grid.
+    localDivider: dict | None = None
 
 
 class DesignIn(BaseModel):
@@ -194,6 +197,7 @@ class DesignIn(BaseModel):
 
 class DesignQuoteIn(BaseModel):
     client_name: str = ""
+    project_id: int | None = None
     design: DesignIn
 
 
@@ -234,6 +238,13 @@ class ClientIn(BaseModel):
     phone: str = ""
     location: str = ""
     type: str = "company"
+
+
+class ProjectIn(BaseModel):
+    name: str
+    client_name: str = ""
+    client_id: int | None = None
+    location: str = ""
 
 
 class ReceiveStockIn(BaseModel):

@@ -128,6 +128,11 @@ def quote_pdf(quote_number: str, client_name: str, design_name: str,
     if result.get("total_kg") is not None:   # frameless
         meta = (f"{result['sections']} toughened panel(s) · {result['area']} m² · "
                 f"{result['total_kg']} kg glass per unit")
+    elif (result.get("fabrication") or {}).get("system") == "trialco":
+        f = result["fabrication"]
+        meta = (f"Trialco bay · frame {f['frame']['w_mm']} × {f['frame']['h_mm']} mm · "
+                f"{f['leaf']['qty']} leaves · {result['area']} m² · "
+                f"{result['profile_len']} m profile / {result['piece_count']} pieces per unit")
     else:
         meta = (f"{result['sections']} section(s) · {result['area']} m² · "
                 f"{result['profile_len']} m profile / {result['piece_count']} pieces per unit")
@@ -255,4 +260,81 @@ def quote_pdf(quote_number: str, client_name: str, design_name: str,
 
     c.showPage()
     c.save()
+    return buf.getvalue()
+
+
+def project_quote_summary_pdf(project: dict) -> bytes:
+    """Consolidated client-facing quote index for a multi-item project."""
+    buf = BytesIO()
+    c = Canvas(buf, pagesize=A4)
+    margin = M
+    y = PAGE_H - 18 * mm
+
+    def header():
+        nonlocal y
+        c.setFillColor(NAVY)
+        c.rect(0, PAGE_H - 34 * mm, PAGE_W, 34 * mm, stroke=0, fill=1)
+        c.setFillColor(colors.white); c.setFont("Helvetica-Bold", 20)
+        c.drawString(margin, PAGE_H - 16 * mm, "SOFAAMY CO. LTD")
+        c.setFont("Helvetica", 9); c.setFillColor(colors.HexColor("#b9c6d4"))
+        c.drawString(margin, PAGE_H - 22 * mm, "Glass & Aluminium Fabrication · Accra, Ghana")
+        c.setFillColor(GOLD); c.setFont("Helvetica-Bold", 13)
+        c.drawRightString(PAGE_W - margin, PAGE_H - 16 * mm, "PROJECT QUOTE SUMMARY")
+        c.setFillColor(colors.white); c.setFont("Helvetica", 10)
+        c.drawRightString(PAGE_W - margin, PAGE_H - 22 * mm, project.get("project_number", "—"))
+        y = PAGE_H - 47 * mm
+
+    def footer():
+        c.setStrokeColor(LINE); c.setLineWidth(.5)
+        c.line(margin, 18 * mm, PAGE_W - margin, 18 * mm)
+        c.setFillColor(MUTED); c.setFont("Helvetica", 8)
+        c.drawString(margin, 13 * mm, "Sofaamy Co. Ltd · Accra, Ghana")
+        c.drawRightString(PAGE_W - margin, 13 * mm, "Powered by Veloxa")
+
+    header()
+    c.setFillColor(MUTED); c.setFont("Helvetica", 8.5)
+    c.drawString(margin, y, "Client")
+    c.drawString(margin + 72 * mm, y, "Project / site")
+    y -= 5 * mm
+    c.setFillColor(INK); c.setFont("Helvetica-Bold", 11)
+    c.drawString(margin, y, _clip(project.get("client_name") or "Walk-in Client", 34))
+    c.drawString(margin + 72 * mm, y, _clip(project.get("name"), 43))
+    y -= 5 * mm
+    c.setFillColor(MUTED); c.setFont("Helvetica", 8.5)
+    c.drawString(margin + 72 * mm, y, _clip(project.get("location") or "—", 43))
+    y -= 12 * mm
+
+    c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 9)
+    c.drawString(margin, y, "ITEM / PROFILE")
+    c.drawString(margin + 76 * mm, y, "REFERENCE")
+    c.drawString(margin + 125 * mm, y, "STATUS")
+    c.drawRightString(PAGE_W - margin, y, "TOTAL")
+    y -= 2.5 * mm; c.setStrokeColor(NAVY); c.setLineWidth(1)
+    c.line(margin, y, PAGE_W - margin, y)
+    for item in project.get("items", []):
+        if y < 35 * mm:
+            footer(); c.showPage(); header()
+            c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 9)
+            c.drawString(margin, y, "ITEM / PROFILE (continued)")
+            y -= 5 * mm
+        y -= 7 * mm
+        c.setFillColor(INK); c.setFont("Helvetica", 8.5)
+        c.drawString(margin, y, _clip(item.get("name"), 30))
+        c.drawString(margin + 76 * mm, y, _clip(item.get("ref") or "—", 20))
+        quotes = item.get("quotes") or []
+        status = quotes[-1].get("status", "Draft") if quotes else "Draft"
+        c.drawString(margin + 125 * mm, y, status)
+        c.drawRightString(PAGE_W - margin, y, ghs(item.get("total", 0)))
+        c.setStrokeColor(LINE); c.setLineWidth(.4); c.line(margin, y - 2.2 * mm, PAGE_W - margin, y - 2.2 * mm)
+
+    y -= 14 * mm
+    c.setFillColor(NAVY); c.rect(PAGE_W - margin - 78 * mm, y - 3 * mm, 78 * mm, 11 * mm, stroke=0, fill=1)
+    c.setFillColor(colors.white); c.setFont("Helvetica-Bold", 11)
+    c.drawString(PAGE_W - margin - 73 * mm, y, "PROJECT TOTAL")
+    c.drawRightString(PAGE_W - margin - 3 * mm, y, ghs(project.get("total", 0)))
+    y -= 16 * mm
+    c.setFillColor(MUTED); c.setFont("Helvetica", 8.5)
+    c.drawString(margin, y, "Each item/profile may be issued as a separate quotation. This page is the consolidated project summary.")
+    c.drawString(margin, y - 5 * mm, "Final dimensions remain subject to site verification before fabrication.")
+    footer(); c.showPage(); c.save()
     return buf.getvalue()

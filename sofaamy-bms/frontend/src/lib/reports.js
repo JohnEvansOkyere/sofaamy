@@ -47,7 +47,7 @@ export const REPORT_GROUPS = [
     id:'production', title:'Production Reports',
     sub:'What the factory floor works from',
     reports:[
-      { name:'Cutting list & optimization', desc:'Bar-by-bar nesting with waste % — live in the configurator', status:'live', kinds:{ frame:'cutting-list', curtainwall:'cutting-list' } },
+      { name:'Cutting list & optimization', desc:'Profile breakdown, bar-by-bar nesting and waste % — available in Reports', status:'live', kinds:{ frame:'cutting-list', curtainwall:'cutting-list' } },
       { name:'Factory work order / job card', desc:'Per unit: stages, materials, drawings, QA boxes', status:'live', kinds:'work-order' },
       { name:'Glass order sheet', desc:'Panel cut sizes to send to the glass supplier/processor', status:'live', kinds:{ frameless:'glass-order' } },
       { name:'Assembly sheet', desc:'Per design: opening sizes, hardware positions, gasket runs', status:'planned' },

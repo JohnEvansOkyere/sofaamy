@@ -47,7 +47,7 @@ function Preps({ feats, x0, top, w, h, wMm, hMm, steel }) {
 // joints, patch fittings, floor springs, handles and an optional
 // over-panel band. Mirrors the SmartGlazier drawing style Sofaamy
 // already knows (see images/sofaamy.pdf).
-export default function FramelessCanvas({ design, stageW, stageH, selected, onSelect, onDividerMove }) {
+export default function FramelessCanvas({ design, stageW, stageH, pan = { x:0, y:0 }, onPanChange, selected, onSelect, onDividerMove }) {
   const { width, height, cells, doorH } = design
   const { colW, scale, fw, fh, ox, oy, cumX } = designLayout(design, stageW, stageH)
   const dim = '#CA6F1E'
@@ -73,7 +73,8 @@ export default function FramelessCanvas({ design, stageW, stageH, selected, onSe
   const setCursor = (e, cur) => { const st = e.target.getStage(); if (st) st.container().style.cursor = cur }
 
   return (
-    <Stage width={stageW} height={stageH}>
+    <Stage width={stageW} height={stageH} x={pan.x} y={pan.y} draggable dragDistance={4}
+      onDragEnd={e => onPanChange?.({ x:e.target.x(), y:e.target.y() })}>
       <Layer>
         {/* void / wall opening */}
         <Rect x={ox - 6} y={oy - 6} width={fw + 12} height={fh + 6} fill="rgba(16,42,67,0.06)" listening={false}/>

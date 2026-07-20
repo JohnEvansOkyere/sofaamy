@@ -5,7 +5,7 @@ import { MIN_SECTION_MM, designLayout } from '../../lib/designs.js'
 // Curtain wall elevation — stick system: CONTINUOUS mullions over
 // transoms (the reverse of a window frame), pressure-cap grid look,
 // vision / spandrel / vent cells. Dividers drag like the frame canvas.
-export default function CurtainWallCanvas({ design, stageW, stageH, selected, onSelect, onDividerMove }) {
+export default function CurtainWallCanvas({ design, stageW, stageH, pan = { x:0, y:0 }, onPanChange, selected, onSelect, onDividerMove }) {
   const { width, height, cols, rows, frame, cells } = design
   const { colW, rowH, scale, fw, fh, ox, oy, ft, cumX, cumY } = designLayout(design, stageW, stageH)
   const capColor = (FRAMES[frame] || FRAMES.mill).color
@@ -15,7 +15,8 @@ export default function CurtainWallCanvas({ design, stageW, stageH, selected, on
   const setCursor = (e, cur) => { const st = e.target.getStage(); if (st) st.container().style.cursor = cur }
 
   return (
-    <Stage width={stageW} height={stageH}>
+    <Stage width={stageW} height={stageH} x={pan.x} y={pan.y} draggable dragDistance={4}
+      onDragEnd={e => onPanChange?.({ x:e.target.x(), y:e.target.y() })}>
       <Layer>
         <Rect x={ox + 6} y={oy + 8} width={fw} height={fh} cornerRadius={3} fill="rgba(16,42,67,0.10)" listening={false}/>
 

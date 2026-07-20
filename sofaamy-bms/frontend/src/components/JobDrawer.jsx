@@ -87,9 +87,17 @@ export default function JobDrawer({ jobNumber, onClose, onChanged }) {
           <div><span>Status</span><Badge tone={job.paid === '100%' ? 'green' : 'orange'}>{job.paid} paid</Badge></div>
         </div>
 
+        <div className="job-workflow-banner">
+          <div>
+            <span className="job-workflow-kicker">JOB WORKFLOW</span>
+            <b>Step {Math.max(1, curIdx + 1)} of {stages.length || 1}: {job.stage_label}</b>
+          </div>
+          <span>{job.next_stage ? `Next: ${job.next_stage}` : 'Ready for close-out'}</span>
+        </div>
+
         {/* ── stage timeline + gate ── */}
         <div className="drawer-sec">
-          <h5>Production Stages</h5>
+          <h5>Production progress</h5>
           <div className="stage-track">
             {stages.map((s, i) => (
               <div key={s.key} className={`stage-step ${i < curIdx ? 'done' : i === curIdx ? 'cur' : ''}`}>
@@ -114,7 +122,7 @@ export default function JobDrawer({ jobNumber, onClose, onChanged }) {
 
         {/* ── payments ── */}
         <div className="drawer-sec">
-          <h5>Payments</h5>
+          <h5>Commercial check · payments</h5>
           {job.payments.length === 0 && <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>No payments recorded — {job.deposit_percent || 80}% deposit required to start production.</div>}
           {job.payments.map((p, i) => (
             <div key={i} className="pay-row">
@@ -143,7 +151,7 @@ export default function JobDrawer({ jobNumber, onClose, onChanged }) {
         {/* ── QA (at the QA stage) ── */}
         {job.stage === 'qa' && (
           <div className="drawer-sec">
-            <h5>Quality Inspection</h5>
+            <h5>Quality inspection · required before dispatch</h5>
             {QC_ITEMS.map((item, i) => (
               <label key={i} className="qc-item">
                 <input type="checkbox" checked={qcTicks[i]}
@@ -183,7 +191,7 @@ export default function JobDrawer({ jobNumber, onClose, onChanged }) {
         {/* ── dispatch (from dispatch stage onwards) ── */}
         {['dispatch', 'install', 'done'].includes(job.stage) && (
           <div className="drawer-sec">
-            <h5><IconTruck style={{ width: 15, height: 15 }}/> Dispatch & Delivery</h5>
+            <h5><IconTruck style={{ width: 15, height: 15 }}/> Dispatch & installation</h5>
             <div className="pay-form" style={{ gridTemplateColumns: '1fr 1fr auto' }}>
               <input placeholder="Driver" value={disp.driver} onChange={e => setDisp(d => ({ ...d, driver: e.target.value }))}/>
               <input placeholder="Vehicle (e.g. GT-4821-22)" value={disp.vehicle} onChange={e => setDisp(d => ({ ...d, vehicle: e.target.value }))}/>
@@ -210,7 +218,7 @@ export default function JobDrawer({ jobNumber, onClose, onChanged }) {
         {/* ── production documents ── */}
         {docs.length > 0 && (
           <div className="drawer-sec">
-            <h5>Documents</h5>
+            <h5>Factory and site documents</h5>
             <div className="flex gap-sm wrap">
               {docs.map(([kind, label]) => (
                 <button key={kind} className="btn btn-ghost btn-sm"

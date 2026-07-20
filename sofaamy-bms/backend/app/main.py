@@ -17,7 +17,7 @@ from .database import Base, engine, get_db, SessionLocal
 from . import models, schemas, lifecycle as lc
 from .pricing import calc_quote, calc_any_quote, extract_pieces_any, frameless_breakdown
 from .optimizer import optimize
-from .pdf import quote_pdf
+from .pdf import quote_pdf, project_quote_summary_pdf
 from .reports import (boq_pdf, cutting_list_pdf, work_order_pdf,
                       glass_order_pdf, hardware_list_pdf, fl_work_order_pdf,
                       installation_sheet_pdf, delivery_note_pdf,
@@ -33,8 +33,11 @@ def _auto_migrate():
     wanted = {
         "jobs": [("value", "FLOAT DEFAULT 0"), ("driver", "TEXT DEFAULT ''"),
                  ("vehicle", "TEXT DEFAULT ''"), ("dn_number", "TEXT DEFAULT ''"),
-                 ("delivered_at", "DATETIME"), ("deposit_percent", "FLOAT DEFAULT 80")],
-        "quotes": [("deposit_percent", "FLOAT DEFAULT 80")],
+                 ("delivered_at", "DATETIME"), ("deposit_percent", "FLOAT DEFAULT 80"),
+                 ("project_id", "INTEGER")],
+        "quotes": [("deposit_percent", "FLOAT DEFAULT 80"), ("project_id", "INTEGER"),
+                    ("design_id", "INTEGER")],
+        "designs": [("project_id", "INTEGER")],
     }
     with engine.begin() as conn:
         for table, cols in wanted.items():
@@ -80,6 +83,98 @@ def create_client(c: schemas.ClientIn, db: Session = Depends(get_db)):
     lc.log(db, "system", f"added client {c.name}", who="Kwame Mensah")
     db.commit(); db.refresh(client)
     return {"id": client.id, "name": client.name}
+
+
+def _project_payload(project: models.Project) -> dict:
+    """Return one project with item-level quotes and a roll-up total."""
+    items = sorted(project.items or [], key=lambda item: item.created_at)
+    quotes = sorted(project.quotes or [], key=lambda quote: quote.created_at)
+    quotes_by_item = {}
+    for quote in quotes:
+        if quote.design_id is not None:
+            quotes_by_item.setdefault(quote.design_id, []).append({
+                "quote_number": quote.quote_number,
+                "total": quote.total,
+                "status": quote.status,
+                "job_number": quote.job.job_number if quote.job else None,
+                "created_at": quote.created_at.isoformat() if quote.created_at else None,
+            })
+    item_rows = []
+    for item in items:
+        item_rows.append({
+            "id": item.id, "ref": item.ref, "name": item.name,
+            "client_name": item.client_name, "qty": item.qty,
+            "location": item.location, "total": item.total,
+            "project_id": item.project_id,
+            "quotes": quotes_by_item.get(item.id, []),
+        })
+    return {
+        "id": project.id,
+        "project_number": project.project_number,
+        "name": project.name,
+        "client_id": project.client_id,
+        "client_name": project.client.name if project.client else "",
+        "client_phone": project.client.phone if project.client else "",
+        "location": project.location,
+        "status": project.status,
+        "item_count": len(item_rows),
+        "total": round(sum(item["total"] for item in item_rows), 2),
+        "quoted_total": round(sum(q.total for q in quotes), 2),
+        "quotes": [{
+            "quote_number": q.quote_number, "product": q.product,
+            "total": q.total, "status": q.status,
+            "design_id": q.design_id,
+            "created_at": q.created_at.isoformat() if q.created_at else None,
+        } for q in quotes],
+        "items": item_rows,
+        "created_at": project.created_at.isoformat() if project.created_at else None,
+    }
+
+
+@app.post("/api/projects")
+def create_project(req: schemas.ProjectIn, db: Session = Depends(get_db)):
+    """Create a project container under a client."""
+    if not req.name.strip():
+        raise HTTPException(400, "Project name is required")
+    client = db.get(models.Client, req.client_id) if req.client_id else None
+    if client is None and req.client_name.strip():
+        client = db.scalar(select(models.Client).where(models.Client.name == req.client_name.strip()))
+        if client is None:
+            client = models.Client(name=req.client_name.strip())
+            db.add(client); db.flush()
+    n = db.scalar(select(func.count(models.Project.id))) or 0
+    project = models.Project(
+        project_number=f"SOF-P-{datetime.now():%Y}-{n + 1:03d}",
+        name=req.name.strip(), client_id=client.id if client else None,
+        location=req.location.strip(), status="draft",
+    )
+    db.add(project); db.commit(); db.refresh(project)
+    return _project_payload(project)
+
+
+@app.get("/api/projects")
+def list_projects(db: Session = Depends(get_db)):
+    return [_project_payload(project) for project in db.scalars(
+        select(models.Project).order_by(models.Project.created_at.desc())
+    ).all()]
+
+
+@app.get("/api/projects/{project_id}")
+def get_project(project_id: int, db: Session = Depends(get_db)):
+    project = db.get(models.Project, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    return _project_payload(project)
+
+
+@app.get("/api/projects/{project_id}/quote-summary/pdf")
+def project_quote_summary(project_id: int, db: Session = Depends(get_db)):
+    project = db.get(models.Project, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    payload = _project_payload(project)
+    return _pdf_response(project_quote_summary_pdf(payload),
+                         f"project-quote-summary-{project.project_number}.pdf")
 
 
 @app.get("/api/materials")
@@ -269,11 +364,14 @@ def quote_status(quote_number: str, req: schemas.QuoteStatusIn, db: Session = De
                 db.add(client); db.flush()
             n = db.scalar(select(func.count(models.Job.id))) or 0
             job = models.Job(job_number=f"SOF-{datetime.now():%Y}-{n + 101:03d}",
-                             client_id=client.id, product=quote.product,
+                             client_id=client.id, project_id=quote.project_id,
+                             product=quote.product,
                              stage="pending", progress=0, paid="0%", value=quote.total,
                              deposit_percent=quote.deposit_percent or 80)
             db.add(job); db.flush()
             quote.job_id = job.id
+            if quote.project:
+                quote.project.status = "accepted"
             result["job_number"] = job.job_number
             lc.log(db, "quote", f"{quote.client_name} accepted {quote.quote_number} — "
                    f"job {job.job_number} opened (GHS {quote.total:,.0f}), awaiting {job.deposit_percent:.0f}% deposit",
@@ -306,6 +404,9 @@ def list_quotes(db: Session = Depends(get_db)):
         out.append({"quote_number": q.quote_number, "client_name": q.client_name,
                     "product": q.product, "total": q.total, "status": q.status,
                     "deposit_percent": q.deposit_percent or 80,
+                    "project_id": q.project_id,
+                    "project_number": q.project.project_number if q.project else None,
+                    "design_id": q.design_id,
                     "created_at": q.created_at.isoformat() if q.created_at else None,
                     "job_number": job.job_number if job else None})
     return out
@@ -346,17 +447,34 @@ def create_quote(q: schemas.QuoteIn, db: Session = Depends(get_db)):
 
 
 def _persist_design_quote(db: Session, client_name: str, design: schemas.DesignIn,
-                          result: dict, status: str) -> models.Quote:
+                          result: dict, status: str, project_id: int | None = None) -> models.Quote:
     n = db.scalar(select(func.count(models.Quote.id))) or 0
     first = design.cells[0] if design.cells else schemas.DesignCell()
+    project = db.get(models.Project, project_id) if project_id else None
+    item = None
+    if project:
+        item = db.scalar(select(models.DesignRecord).where(
+            models.DesignRecord.project_id == project.id,
+            models.DesignRecord.ref == design.ref,
+        ).order_by(models.DesignRecord.created_at.desc()))
+        if item is None:
+            item = models.DesignRecord(
+                ref=design.ref, name=design.name,
+                client_name=project.client.name if project.client else client_name,
+                qty=design.qty, location=design.location, total=result["grand_total"],
+                design_json=design.model_dump_json(), project_id=project.id,
+            )
+            db.add(item); db.flush()
+    quote_client_name = (project.client.name if project and project.client else None) or client_name or "Walk-in Client"
     quote = models.Quote(
         quote_number=f"SOF-Q-{datetime.now():%Y}-{n + 143:04d}",
-        client_name=client_name or "Walk-in Client", product=design.name,
+        client_name=quote_client_name, product=design.name,
         width_mm=design.width, height_mm=design.height,
         panels=design.cols * design.rows,
         opening=first.opening, glass=first.glass,
         total=result["grand_total"], deposit_percent=design.depositPercent,
-        status=status,
+        status=status, project_id=project.id if project else None,
+        design_id=item.id if item else None,
     )
     db.add(quote); db.commit(); db.refresh(quote)
     return quote
@@ -371,10 +489,15 @@ def price_design(req: schemas.DesignQuoteIn):
 @app.post("/api/quotes/design/pdf")
 def design_quote_pdf(req: schemas.DesignQuoteIn, db: Session = Depends(get_db)):
     """Issue a quote: persist it and return the branded PDF."""
+    if req.project_id and db.get(models.Project, req.project_id) is None:
+        raise HTTPException(404, "Project not found")
     result = calc_any_quote(req.design.engine_dict())
     if result.get("floor_status") == "BELOW FLOOR":
         raise HTTPException(422, "Client net is below the internal cost floor. Reduce the discount or confirm the project BOQ floor before issuing the quote.")
-    quote = _persist_design_quote(db, req.client_name, req.design, result, "Sent")
+    quote = _persist_design_quote(db, req.client_name, req.design, result, "Sent", req.project_id)
+    if quote.project and quote.project.status == "draft":
+        quote.project.status = "quoted"
+        db.commit()
     pdf = quote_pdf(quote.quote_number, quote.client_name, req.design.name,
                     req.design.width, req.design.height, result,
                     design=req.design.engine_dict())
@@ -390,9 +513,12 @@ def create_job_from_design(req: schemas.DesignQuoteIn, db: Session = Depends(get
     result = calc_any_quote(req.design.engine_dict())
     if result.get("floor_status") == "BELOW FLOOR":
         raise HTTPException(422, "Cannot accept a quote below the internal cost floor. Review discount and confirmed project BOQ first.")
-    quote = _persist_design_quote(db, req.client_name, req.design, result, "Accepted")
+    project = db.get(models.Project, req.project_id) if req.project_id else None
+    if req.project_id and project is None:
+        raise HTTPException(404, "Project not found")
+    quote = _persist_design_quote(db, req.client_name, req.design, result, "Accepted", req.project_id)
 
-    name = req.client_name or "Walk-in Client"
+    name = (project.client.name if project and project.client else None) or req.client_name or "Walk-in Client"
     client = db.scalar(select(models.Client).where(models.Client.name == name))
     if client is None:
         client = models.Client(name=name)
@@ -401,18 +527,27 @@ def create_job_from_design(req: schemas.DesignQuoteIn, db: Session = Depends(get
     n = db.scalar(select(func.count(models.Job.id))) or 0
     job = models.Job(
         job_number=f"SOF-{datetime.now():%Y}-{n + 101:03d}",
-        client_id=client.id, product=req.design.name,
+        client_id=client.id, project_id=project.id if project else None,
+        product=req.design.name,
         stage="pending", progress=0, paid="0%", value=result["grand_total"],
         deposit_percent=max(0, min(100, float(req.design.depositPercent))),
     )
     db.add(job); db.flush()
     quote.job_id = job.id
-    db.add(models.DesignRecord(
-        ref=req.design.ref, name=req.design.name, client_name=name,
-        qty=req.design.qty, location=req.design.location,
-        total=result["grand_total"], design_json=req.design.model_dump_json(),
-        job_id=job.id,
-    ))
+    item = quote.design
+    if item is None:
+        item = models.DesignRecord(
+            ref=req.design.ref, name=req.design.name, client_name=name,
+            qty=req.design.qty, location=req.design.location,
+            total=result["grand_total"], design_json=req.design.model_dump_json(),
+            project_id=project.id if project else None,
+        )
+        db.add(item); db.flush()
+    item.job_id = job.id
+    item.total = result["grand_total"]
+    quote.design_id = item.id
+    if project:
+        project.status = "accepted"
     lc.log(db, "quote", f"quote {quote.quote_number} accepted — job {job.job_number} "
            f"opened for {name} (GHS {result['grand_total']:,.0f}), awaiting {job.deposit_percent:.0f}% deposit",
            job_id=job.id, who="Kwame Mensah")
@@ -521,14 +656,37 @@ def save_design(req: schemas.DesignQuoteIn, db: Session = Depends(get_db)):
     """Save a design so it can be reopened / reused (EvA's saved templates)."""
     d = req.design.engine_dict()
     result = calc_any_quote(d)
-    rec = models.DesignRecord(
-        ref=req.design.ref, name=req.design.name, client_name=req.client_name,
-        qty=req.design.qty, location=req.design.location,
-        total=result["grand_total"], design_json=req.design.model_dump_json(),
-    )
-    db.add(rec); db.commit(); db.refresh(rec)
+    project = db.get(models.Project, req.project_id) if req.project_id else None
+    if req.project_id and project is None:
+        raise HTTPException(404, "Project not found")
+    client_name = (project.client.name if project and project.client else None) or req.client_name
+    rec = None
+    if project:
+        rec = db.scalar(select(models.DesignRecord).where(
+            models.DesignRecord.project_id == project.id,
+            models.DesignRecord.ref == req.design.ref,
+        ).order_by(models.DesignRecord.created_at.desc()))
+    if rec is None:
+        rec = models.DesignRecord(
+            ref=req.design.ref, name=req.design.name, client_name=client_name,
+            qty=req.design.qty, location=req.design.location,
+            total=result["grand_total"], design_json=req.design.model_dump_json(),
+            project_id=project.id if project else None,
+        )
+        db.add(rec)
+    else:
+        rec.name = req.design.name
+        rec.client_name = client_name
+        rec.qty = req.design.qty
+        rec.location = req.design.location
+        rec.total = result["grand_total"]
+        rec.design_json = req.design.model_dump_json()
+    db.commit(); db.refresh(rec)
+    if project and project.status == "draft":
+        project.status = "quoted"
+        db.commit()
     return {"id": rec.id, "ref": rec.ref, "name": rec.name, "total": rec.total,
-            "share_token": share_token(rec.id)}
+            "project_id": rec.project_id, "share_token": share_token(rec.id)}
 
 
 @app.get("/api/designs")
@@ -538,6 +696,8 @@ def list_designs(db: Session = Depends(get_db)):
     return [{"id": r.id, "ref": r.ref, "name": r.name, "qty": r.qty,
              "location": r.location, "total": r.total,
              "client_name": r.client_name,
+             "project_id": r.project_id,
+             "project_number": r.project.project_number if r.project else None,
              "created_at": r.created_at.isoformat(),
              "share_token": share_token(r.id),
              "design": json.loads(r.design_json)} for r in recs]

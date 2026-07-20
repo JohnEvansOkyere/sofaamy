@@ -1,4 +1,6 @@
 """GHS pricing engine — server-side mirror of the frontend engine."""
+import math
+
 PROFILE_PER_M = 85.0
 LABOUR_PER_M2 = 95.0
 INSTALL_PER_M2 = 45.0
@@ -6,10 +8,14 @@ MARGIN_PCT = 20.0
 
 # per-profile prices/m — PLACEHOLDERS until Sofaamy's material list arrives
 PROFILE_PRICES = {"frame_outer": 85.0, "frame_internal": 85.0, "frame_opening": 85.0,
+                  "trialco_frame": 85.0, "trialco_leaf": 85.0, "trialco_interlock": 85.0,
                   "cwmullion": 140.0, "cwtransom": 130.0}
 PROFILE_LABELS = {"frame_outer": "Outer frame member (mapping pending)",
                   "frame_internal": "Internal member (mapping pending)",
                   "frame_opening": "Opening member (mapping pending)",
+                  "trialco_frame": "Trialco frame (TF053N / TF073N)",
+                  "trialco_leaf": "Trialco flat leaf (TF065N)",
+                  "trialco_interlock": "Trialco interlock adaptor (TF224N)",
                   "cwmullion": "CW Mullion", "cwtransom": "CW Transom"}
 
 # Exact Frame catalogue identities copied from the supplied profile workbook.
@@ -164,7 +170,11 @@ def frame_accessory_rows(design: dict) -> list[dict]:
     moving_panels = max(1, sum(max(1, int(c.get("panels") or 1)) * max(1, int(c.get("item_qty") or 1)) for c in moving))
     doors = [c for c in cells if c.get("opening") in ("single", "double")]
     double_doors = sum(max(1, int(c.get("item_qty") or 1)) for c in doors if c.get("opening") == "double")
-    has_sliding_door = any(c.get("opening") == "sliding" for c in cells)
+    has_sliding_door = any(
+        c.get("opening") == "sliding"
+        and (c.get("rate_key") == "slidingDoor" or "sliding door" in str(design.get("name", "")).lower())
+        for c in cells
+    )
     rows = []
     for a in source:
         k = f"{a['name']} {a['code']}".lower()
@@ -215,9 +225,9 @@ GLASS_LABELS = {"clear":"Clear","frosted":"Frosted","tinted":"Tinted (Grey)",
                 "5BZT":"5mm Bronze Tinted","6BZT":"6mm Bronze Tinted","6BT":"6mm Deep Black Glass",
                 "6SMBT":"6mm Superior Mexican Blue Tinted"}
 
-# Starting values observed in Sofaamy's supplied quotation screenshots. These
-# are editable quote inputs, not a confirmed universal rate card.
-FRAME_QUOTE_RATES = {"slidingDoor": 1700.0, "slidingWindow": 1500.0,
+# Starting values observed in Sofaamy's supplied quotation sheet. These remain
+# editable quote inputs and should be confirmed against the current rate card.
+FRAME_QUOTE_RATES = {"slidingDoor": 1900.0, "slidingWindow": 1900.0,
                      "projected": 2350.0, "casement": 2350.0,
                      "fixed": 1900.0, "swingDoor": 1900.0,
                      "hingeDoor": 1900.0}
@@ -283,9 +293,259 @@ FAB = {"frame_depth": 50, "interlock": 30, "track_clear": 30,
        "glass_deduct_fixed": 70, "glass_deduct_opening": 60}
 
 
+TRIALCO_FAB = {"leaf_count": 2, "leaf_height_deduct": 70,
+               "net_height_deduct": 10, "glass_deduct": 112,
+               "net_qty": 2, "interlock_qty": 2, "glass_qty": 2}
+TRIALCO_STOCK_MM = 5800
+TRIALCO_KERF_MM = 5
+TRIALCO_INSTALLATION_PERCENT = 30
+TRIALCO_MIN_MARGIN_PERCENT = 15
+TRIALCO_TARGET_MARGIN_PERCENT = 25
+
+# Fixed unit prices from the supplied Trialco internal costing sheet image.
+# These are internal material rates, separate from customer selling rates and
+# from the source workbook catalogue values.
+TRIALCO_MATERIAL_PRICES = {
+    "frame": {"code": "TF053N / TF073N", "unit": "5.8m bar", "unit_price": 775.0},
+    "leaf": {"code": "TF065N", "unit": "5.8m bar", "unit_price": 570.0},
+    "net": {"code": "TF223N", "unit": "5.8m bar", "unit_price": 210.0},
+    "interlock": {"code": "TF224N", "unit": "5.8m bar", "unit_price": 210.0},
+    "kit": {"code": "ACC", "unit": "set", "unit_price": 38.0},
+    "corner": {"code": "ACC04C", "unit": "pcs", "unit_price": 6.5},
+    "rollers": {"code": "TRIAL-R1", "unit": "pcs", "unit_price": 15.0},
+    "locks": {"code": "ACCML", "unit": "pcs", "unit_price": 41.0},
+    "net_corners": {"code": "IT01NC", "unit": "pcs", "unit_price": 1.0},
+    "net_handle": {"code": "ACCNH", "unit": "pcs", "unit_price": 3.0},
+    "net_fibre": {"code": "ACCNF", "unit": "m²", "unit_price": 280.0},
+    "glazing": {"code": "ACCGRB", "unit": "m", "unit_price": 128.0},
+    "net_rubber": {"code": "ACCNRB", "unit": "m", "unit_price": 60.0},
+    "screws": {"code": "ACCITS", "unit": "pcs", "unit_price": 55.0},
+    "wall_plugs": {"code": "ACCWPL", "unit": "pcs", "unit_price": 4.5},
+    "drain_caps": {"code": "ACCWDC", "unit": "pcs", "unit_price": 7.0},
+    "pvc_covers": {"code": "ACCPVC", "unit": "pcs", "unit_price": 46.0},
+    "silicone": {"code": "SIL", "unit": "tube", "unit_price": 25.0},
+    "brush": {"code": "ACCITB", "unit": "m", "unit_price": 65.0},
+}
+
+TRIALCO_BASE_MATERIAL_CODES = {
+    "TF053N / TF073N", "TF065N", "TF223N", "TF224N", "ACC",
+    "5CF", "6CF", "8CF", "10CF", "12CF", "3.3PL", "3.3BZL", "4.4PL", "5.5PL",
+    "4.4BZL", "5BR", "5GR", "5BZR", "6MBR", "5BR-BLACK", "5DBR", "6SMBR",
+    "5BT", "5BZT", "6BZT", "6BT", "6SMBT", "ACC04C", "TRIAL-R1", "ACCML",
+    "IT01NC", "ACCNH", "ACCNF", "ACCGRB", "ACCNRB", "ACCITS", "ACCWPL",
+    "ACCWDC", "ACCPVC", "SIL", "ACCITB",
+}
+
+
+def is_trialco_bay(design: dict) -> bool:
+    return (design.get("category", "frame") == "frame"
+            and design.get("system") == "trialco"
+            and any(c.get("opening") == "sliding" for c in design.get("cells", [])))
+
+
+def trialco_dimensions(design: dict) -> dict:
+    frame_w = float(design["width"])
+    frame_h = float(design["height"])
+    leaf_w = frame_w / TRIALCO_FAB["leaf_count"]
+    leaf_h = frame_h - TRIALCO_FAB["leaf_height_deduct"]
+    return {"frame_w": frame_w, "frame_h": frame_h, "leaf_w": leaf_w, "leaf_h": leaf_h,
+            "net_w": leaf_w, "net_h": leaf_h - TRIALCO_FAB["net_height_deduct"],
+            "interlock_length": leaf_h,
+            "glass_w": leaf_w - TRIALCO_FAB["glass_deduct"],
+            "glass_h": leaf_h - TRIALCO_FAB["glass_deduct"]}
+
+
+def _trialco_material_row(row_id: str, description: str, quantity: float, meta: dict, formula: str) -> dict:
+    price = float(meta.get("unit_price", 0) or 0)
+    return {"id": row_id, "description": description, "code": meta.get("code", ""),
+            "quantity": round(quantity, 2), "unit": meta.get("unit", "pcs"),
+            "unit_price": price, "total": round(quantity * price, 2),
+            "formula": formula, "source": meta.get("source", "Trialco internal costing sheet"),
+            "fixed_price": meta.get("fixed_price", True)}
+
+
+def trialco_material_cost(design: dict) -> dict:
+    """Material quantities and fixed internal prices for one Trialco recipe."""
+    d = trialco_dimensions(design)
+    item_qty = max(1, int((design.get("cells") or [{}])[0].get("item_qty") or 1))
+    project_qty = max(1, int(design.get("qty") or 1)) * item_qty
+    leaf_qty = TRIALCO_FAB["leaf_count"]
+    net_qty = TRIALCO_FAB["net_qty"]
+    glass_qty = TRIALCO_FAB["glass_qty"]
+    frame_length = 2 * (d["frame_w"] + d["frame_h"])
+    leaf_length = leaf_qty * 2 * (d["leaf_w"] + d["leaf_h"])
+    net_length = net_qty * 2 * (d["net_w"] + d["net_h"])
+    interlock_length = TRIALCO_FAB["interlock_qty"] * d["interlock_length"]
+    glass_area = glass_qty * d["glass_w"] * d["glass_h"] / 1e6
+    net_area = net_qty * d["net_w"] * d["net_h"] / 1e6
+    glass_perimeter = glass_qty * 2 * (d["glass_w"] + d["glass_h"]) / 1000
+    net_perimeter = net_qty * 2 * (d["net_w"] + d["net_h"]) / 1000
+    selected_glass = (design.get("cells") or [{}])[0].get("glass", "clear")
+    glass_price = FRAME_GLASS.get(selected_glass, GLASS.get(selected_glass, 120))
+    glass_label = GLASS_LABELS.get(selected_glass, selected_glass)
+
+    def bars(cuts):
+        remaining = []
+        for length in sorted(cuts * project_qty, reverse=True):
+            need = length + TRIALCO_KERF_MM
+            index = next((i for i, free in enumerate(remaining) if free >= need), None)
+            if index is None:
+                remaining.append(TRIALCO_STOCK_MM - need)
+            else:
+                remaining[index] -= need
+        return max(1, len(remaining))
+
+    frame_cuts = [d["frame_w"], d["frame_w"], d["frame_h"], d["frame_h"]]
+    leaf_cuts = [v for _ in range(leaf_qty) for v in (d["leaf_w"], d["leaf_w"], d["leaf_h"], d["leaf_h"])]
+    net_cuts = [v for _ in range(net_qty) for v in (d["net_w"], d["net_w"], d["net_h"], d["net_h"])]
+    interlock_cuts = [d["interlock_length"]] * TRIALCO_FAB["interlock_qty"]
+    base_rows = [
+        _trialco_material_row("trialco-frame", "Trialco frame", bars(frame_cuts), TRIALCO_MATERIAL_PRICES["frame"], f"{round(frame_length * project_qty / 1000, 2)} m required · 5 mm kerf nesting · 2 × (Frame W + Frame H)"),
+        _trialco_material_row("trialco-leaf", "Trialco leaf", bars(leaf_cuts), TRIALCO_MATERIAL_PRICES["leaf"], f"{round(leaf_length * project_qty / 1000, 2)} m required · 2 leaves × 2 × (Leaf W + Leaf H)"),
+        _trialco_material_row("trialco-net", "Trialco net", bars(net_cuts), TRIALCO_MATERIAL_PRICES["net"], f"{round(net_length * project_qty / 1000, 2)} m required · 2 nets × perimeter"),
+        _trialco_material_row("trialco-interlock", "Trialco interlock", bars(interlock_cuts), TRIALCO_MATERIAL_PRICES["interlock"], f"{round(interlock_length * project_qty / 1000, 2)} m required · 2 × Leaf H"),
+        _trialco_material_row("trialco-kit", "Trialco kits", project_qty, TRIALCO_MATERIAL_PRICES["kit"], "1 set per bay"),
+        _trialco_material_row("glass", f"Glass — {glass_label}", glass_area * project_qty, {"code": selected_glass, "unit": "m²", "unit_price": glass_price}, f"{round(glass_area * project_qty, 2)} m² · 2 panels × Glass W × Glass H"),
+        _trialco_material_row("0404-corners", "0404 corners", 4 * leaf_qty * project_qty, TRIALCO_MATERIAL_PRICES["corner"], "4 corners per leaf"),
+        _trialco_material_row("trialco-rollers", "Trialco rollers", 2 * leaf_qty * project_qty, TRIALCO_MATERIAL_PRICES["rollers"], "2 rollers per leaf"),
+        _trialco_material_row("metal-locks", "Metal locks", leaf_qty * project_qty, TRIALCO_MATERIAL_PRICES["locks"], "1 lock per leaf"),
+        _trialco_material_row("net-corners", "Net corners", 4 * net_qty * project_qty, TRIALCO_MATERIAL_PRICES["net_corners"], "4 corners per net"),
+        _trialco_material_row("net-handle", "Net handle", net_qty * project_qty, TRIALCO_MATERIAL_PRICES["net_handle"], "1 handle per net"),
+        _trialco_material_row("net-fibre", "Net fibre", net_area * project_qty, TRIALCO_MATERIAL_PRICES["net_fibre"], f"{round(net_area * project_qty, 2)} m² · 2 nets × Net W × Net H"),
+        _trialco_material_row("glazing-rubber", "Glazing rubber", glass_perimeter * project_qty, TRIALCO_MATERIAL_PRICES["glazing"], f"{round(glass_perimeter * project_qty, 2)} m · glass perimeter"),
+        _trialco_material_row("net-rubber", "Net rubber", net_perimeter * project_qty, TRIALCO_MATERIAL_PRICES["net_rubber"], f"{round(net_perimeter * project_qty, 2)} m · net perimeter"),
+        _trialco_material_row("installation-screws", "Installation screws", 4 * project_qty, TRIALCO_MATERIAL_PRICES["screws"], "4 screws per bay"),
+        _trialco_material_row("wall-plugs", "Wall plugs", 4 * project_qty, TRIALCO_MATERIAL_PRICES["wall_plugs"], "4 plugs per bay"),
+        _trialco_material_row("water-drain-cap", "Water drain cap", 2 * project_qty, TRIALCO_MATERIAL_PRICES["drain_caps"], "2 caps per bay"),
+        _trialco_material_row("pvc-hole-cover", "PVC hole cover", 2 * project_qty, TRIALCO_MATERIAL_PRICES["pvc_covers"], "2 covers per bay"),
+        _trialco_material_row("silicone", "Silicone", project_qty, TRIALCO_MATERIAL_PRICES["silicone"], "1 tube per bay"),
+        _trialco_material_row("italian-brush", "Italian brush", net_perimeter * project_qty, TRIALCO_MATERIAL_PRICES["brush"], f"{round(net_perimeter * project_qty, 2)} m · net perimeter"),
+    ]
+
+    # Apply edits to existing rows, then append door-only catalogue items and
+    # custom project materials from the shared accessory editor.
+    overrides = {o.get("code"): o for o in design.get("accessory_overrides", []) if o.get("code")}
+    adjusted_base_rows = []
+    for base in base_rows:
+        override = overrides.get(base["code"])
+        if not override:
+            adjusted_base_rows.append(base)
+            continue
+        if override.get("removed") or float(override.get("qty", 0) or 0) <= 0:
+            continue
+        price_overridden = "unit_price" in override
+        meta = {"code": base["code"], "unit": base["unit"],
+                "unit_price": float(override.get("unit_price", base["unit_price"])),
+                "source": "Project material override" if price_overridden else base["source"],
+                "fixed_price": not price_overridden}
+        adjusted_base_rows.append(_trialco_material_row(
+            base["id"], override.get("name") or base["description"],
+            float(override.get("qty", 0) or 0), meta,
+            override.get("rule") or base["formula"]))
+
+    additional_rows = []
+    for accessory in frame_accessory_rows(design):
+        if accessory.get("code") in TRIALCO_BASE_MATERIAL_CODES:
+            continue
+        additional_rows.append(_trialco_material_row(
+            f"trialco-extra-{accessory.get('code')}", accessory.get("name", "Additional material"),
+            float(accessory.get("qty", 0) or 0), {
+                "code": accessory.get("code", ""), "unit": accessory.get("unit", "pcs"),
+                "unit_price": float(accessory.get("unit_price", 0) or 0),
+                "source": "Project custom material" if accessory.get("custom") else "Trialco accessory catalogue",
+                "fixed_price": not accessory.get("custom"),
+            }, accessory.get("rule") or "Project accessory quantity"))
+    rows = adjusted_base_rows + additional_rows
+    material_cost = round(sum(r["total"] for r in rows), 2)
+    installation_cost = round(material_cost * TRIALCO_INSTALLATION_PERCENT / 100, 2)
+    return {"rows": rows, "material_cost": material_cost,
+            "installation_percent": TRIALCO_INSTALLATION_PERCENT,
+            "installation_cost": installation_cost,
+            "total_cost": round(material_cost + installation_cost, 2),
+            "material_cost_per_unit": round(material_cost / project_qty, 2),
+            "installation_cost_per_unit": round(installation_cost / project_qty, 2),
+            "total_cost_per_unit": round((material_cost + installation_cost) / project_qty, 2),
+            "price_source": "Trialco internal costing sheet rates · glass catalogue rate"}
+
+
+def trialco_breakdown(design: dict) -> dict:
+    """Two-leaf Trialco bay breakdown from the site frame measurement."""
+    d = trialco_dimensions(design)
+    profiles: list[dict] = []
+    net: list[dict] = []
+    glass: list[dict] = []
+
+    def p(position, profile, member, length_mm, source_mm, adjustment_mm, note=""):
+        profiles.append({"position": position, "profile": profile, "member": member,
+                         "source_mm": round(source_mm), "adjustment_mm": round(adjustment_mm),
+                         "length_mm": round(length_mm), "qty": 1, "cuts": "90°/90°", "note": note})
+
+    p("Frame head", "trialco_frame", "Trialco frame — head", d["frame_w"], d["frame_w"], 0, "Site Frame W")
+    p("Frame sill", "trialco_frame", "Trialco frame — sill", d["frame_w"], d["frame_w"], 0, "Site Frame W")
+    p("Frame left jamb", "trialco_frame", "Trialco frame — jamb", d["frame_h"], d["frame_h"], 0, "Site Frame H")
+    p("Frame right jamb", "trialco_frame", "Trialco frame — jamb", d["frame_h"], d["frame_h"], 0, "Site Frame H")
+
+    for leaf in range(1, TRIALCO_FAB["leaf_count"] + 1):
+        p(f"Leaf {leaf} top rail", "trialco_leaf", "Trialco flat leaf — rail",
+          d["leaf_w"], d["leaf_w"], 0, "Frame W / 2")
+        p(f"Leaf {leaf} bottom rail", "trialco_leaf", "Trialco flat leaf — rail",
+          d["leaf_w"], d["leaf_w"], 0, "Frame W / 2")
+        p(f"Leaf {leaf} left stile", "trialco_leaf", "Trialco flat leaf — stile",
+          d["leaf_h"], d["frame_h"], -TRIALCO_FAB["leaf_height_deduct"], "Frame H − 70")
+        p(f"Leaf {leaf} right stile", "trialco_leaf", "Trialco flat leaf — stile",
+          d["leaf_h"], d["frame_h"], -TRIALCO_FAB["leaf_height_deduct"], "Frame H − 70")
+
+    for i in range(1, TRIALCO_FAB["interlock_qty"] + 1):
+        p(f"Interlock {i}", "trialco_interlock", "Trialco interlock adaptor",
+          d["interlock_length"], d["frame_h"], -TRIALCO_FAB["leaf_height_deduct"], "Leaf H")
+
+    for i in range(1, TRIALCO_FAB["net_qty"] + 1):
+        net.append({"section": f"N{i}", "source_w_mm": round(d["leaf_w"]),
+                    "source_h_mm": round(d["leaf_h"]), "adjustment_w_mm": 0,
+                    "adjustment_h_mm": -TRIALCO_FAB["net_height_deduct"],
+                    "w_mm": round(d["net_w"]), "h_mm": round(d["net_h"]), "qty": 1,
+                    "note": "Leaf W × (Leaf H − 10)"})
+
+    cells = design.get("cells", [])
+    for i in range(1, TRIALCO_FAB["glass_qty"] + 1):
+        cell = cells[i - 1] if i - 1 < len(cells) else (cells[0] if cells else {})
+        glass.append({"section": f"G{i}", "glass": cell.get("glass", "clear"),
+                      "source_w_mm": round(d["leaf_w"]), "source_h_mm": round(d["leaf_h"]),
+                      "adjustment_w_mm": -TRIALCO_FAB["glass_deduct"],
+                      "adjustment_h_mm": -TRIALCO_FAB["glass_deduct"],
+                      "w_mm": round(d["glass_w"]), "h_mm": round(d["glass_h"]), "qty": 1,
+                      "note": "Leaf W/H − 112"})
+
+    for index, piece in enumerate(design.get("custom_cut_pieces") or []):
+        source = float(piece.get("source_mm") or piece.get("length_mm") or 0)
+        adjustment = float(piece.get("adjustment_mm") or 0)
+        length = float(piece.get("length_mm") or source + adjustment)
+        if length <= 0:
+            continue
+        profiles.append({"position": piece.get("position") or f"Custom piece {index + 1}",
+                         "profile": piece.get("profile") or "trialco_frame",
+                         "member": piece.get("member") or "Manual fabrication piece",
+                         "source_mm": round(source), "adjustment_mm": round(adjustment),
+                         "length_mm": round(length), "qty": max(1, int(piece.get("qty") or 1)),
+                         "cuts": piece.get("cuts") or "SPECIAL / TEMPLATE", "note": piece.get("note") or ""})
+
+    return {"profiles": profiles, "net": net, "glass": glass,
+            "fabrication": {
+                "system": "trialco", "bay_count": 1, "leaf_count": TRIALCO_FAB["leaf_count"],
+                "frame": {"w_mm": round(d["frame_w"]), "h_mm": round(d["frame_h"])},
+                "leaf": {"w_mm": round(d["leaf_w"]), "h_mm": round(d["leaf_h"]), "qty": 2},
+                "net": {"w_mm": round(d["net_w"]), "h_mm": round(d["net_h"]), "qty": 2},
+                "interlock": {"length_mm": round(d["interlock_length"]), "qty": 2},
+                "glass": {"w_mm": round(d["glass_w"]), "h_mm": round(d["glass_h"]), "qty": 2},
+                "status": "Working Trialco formulas — confirm quantities and final profile cut rules with Sofaamy",
+            }}
+
+
 def design_breakdown(design: dict) -> dict:
     """One unit's full fabrication breakdown: every profile piece with
     position, deducted length and cut angles, plus glass cut sizes."""
+    if is_trialco_bay(design):
+        return trialco_breakdown(design)
     w, h = design["width"], design["height"]
     cols, rows = design["cols"], design["rows"]
     cw, rh = _col_widths(design), _row_heights(design)
@@ -314,37 +574,56 @@ def design_breakdown(design: dict) -> dict:
     for i, cell in enumerate(design["cells"]):
         sec_w, sec_h = cw[i % cols], rh[i // cols]
         tag = f"F{i + 1}"
-        if cell["opening"] == "fixed":
-            glass.append({"section": tag, "glass": cell["glass"],
-                          "source_w_mm": round(sec_w), "source_h_mm": round(sec_h),
-                          "adjustment_w_mm": -FAB["glass_deduct_fixed"],
-                          "adjustment_h_mm": -FAB["glass_deduct_fixed"],
-                          "w_mm": round(sec_w - FAB["glass_deduct_fixed"]),
-                          "h_mm": round(sec_h - FAB["glass_deduct_fixed"]),
-                          "qty": 1, "note": "fixed lite"})
-        else:
-            n = 2 if cell["opening"] == "double" else max(1, cell.get("panels") or 1)
-            panel_w = sec_w / n
-            rail_adjustment = FAB["interlock"] / 2 if n > 1 else 0
-            opening_w = panel_w + rail_adjustment
-            opening_h = sec_h - FAB["track_clear"]
-            cuts = "45°/45°" if cell["opening"] in ("casement", "awning") else "90°/90°"
-            for leaf in range(1, n + 1):
-                P(f"{tag} leaf {leaf} top rail", "frame_opening", "Opening member — rail",
-                  opening_w, 1, cuts, panel_w, rail_adjustment)
-                P(f"{tag} leaf {leaf} bottom rail", "frame_opening", "Opening member — rail",
-                  opening_w, 1, cuts, panel_w, rail_adjustment)
-                P(f"{tag} leaf {leaf} left stile", "frame_opening", "Opening member — stile",
-                  opening_h, 1, cuts, sec_h, -FAB["track_clear"])
-                P(f"{tag} leaf {leaf} right stile", "frame_opening", "Opening member — stile",
-                  opening_h, 1, cuts, sec_h, -FAB["track_clear"])
-            glass.append({"section": tag, "glass": cell["glass"],
-                          "source_w_mm": round(panel_w), "source_h_mm": round(sec_h),
-                          "adjustment_w_mm": round(rail_adjustment - FAB["glass_deduct_opening"]),
-                          "adjustment_h_mm": -FAB["glass_deduct_opening"],
-                          "w_mm": round(opening_w - FAB["glass_deduct_opening"]),
-                          "h_mm": round(opening_h - FAB["glass_deduct_opening"]),
-                          "qty": n, "note": f"{n} opening panel(s)"})
+        local = cell.get("localDivider") or cell.get("local_divider") or {}
+        local_cols = int(local.get("cols") or 1)
+        local_rows = int(local.get("rows") or 1)
+        local_widths = local.get("colWidths") or local.get("col_widths") or [sec_w / local_cols] * local_cols
+        local_heights = local.get("rowHeights") or local.get("row_heights") or [sec_h / local_rows] * local_rows
+        if len(local_widths) != local_cols: local_widths = [sec_w / local_cols] * local_cols
+        if len(local_heights) != local_rows: local_heights = [sec_h / local_rows] * local_rows
+        panes = [(local_widths[p % local_cols], local_heights[p // local_cols], p)
+                 for p in range(local_cols * local_rows)] if local_cols > 1 or local_rows > 1 else [(sec_w, sec_h, 0)]
+        if len(panes) > 1:
+            for j in range(1, local_cols):
+                P(f"{tag} local vertical {j}", "frame_internal", "Local internal member — vertical",
+                  sec_h - 2 * FAB["frame_depth"], 1, "90°/90°", sec_h, -2 * FAB["frame_depth"])
+            for r in range(1, local_rows):
+                for c in range(local_cols):
+                    P(f"{tag} local horizontal {r}.{c + 1}", "frame_internal", "Local internal member — horizontal",
+                      local_widths[c] - 2 * FAB["frame_depth"], 1, "90°/90°", local_widths[c], -2 * FAB["frame_depth"])
+        for pane_w, pane_h, pane_index in panes:
+            pane_tag = f"{tag}.{pane_index + 1}" if len(panes) > 1 else tag
+            if cell["opening"] == "fixed":
+                glass.append({"section": pane_tag, "glass": cell["glass"],
+                              "source_w_mm": round(pane_w), "source_h_mm": round(pane_h),
+                              "adjustment_w_mm": -FAB["glass_deduct_fixed"],
+                              "adjustment_h_mm": -FAB["glass_deduct_fixed"],
+                              "w_mm": round(pane_w - FAB["glass_deduct_fixed"]),
+                              "h_mm": round(pane_h - FAB["glass_deduct_fixed"]),
+                              "qty": 1, "note": "local fixed lite" if len(panes) > 1 else "fixed lite"})
+            else:
+                n = 2 if cell["opening"] == "double" else max(1, cell.get("panels") or 1)
+                panel_w = pane_w / n
+                rail_adjustment = FAB["interlock"] / 2 if n > 1 else 0
+                opening_w = panel_w + rail_adjustment
+                opening_h = pane_h - FAB["track_clear"]
+                cuts = "45°/45°" if cell["opening"] in ("casement", "awning") else "90°/90°"
+                for leaf in range(1, n + 1):
+                    P(f"{pane_tag} leaf {leaf} top rail", "frame_opening", "Opening member — rail",
+                      opening_w, 1, cuts, panel_w, rail_adjustment)
+                    P(f"{pane_tag} leaf {leaf} bottom rail", "frame_opening", "Opening member — rail",
+                      opening_w, 1, cuts, panel_w, rail_adjustment)
+                    P(f"{pane_tag} leaf {leaf} left stile", "frame_opening", "Opening member — stile",
+                      opening_h, 1, cuts, pane_h, -FAB["track_clear"])
+                    P(f"{pane_tag} leaf {leaf} right stile", "frame_opening", "Opening member — stile",
+                      opening_h, 1, cuts, pane_h, -FAB["track_clear"])
+                glass.append({"section": pane_tag, "glass": cell["glass"],
+                              "source_w_mm": round(panel_w), "source_h_mm": round(pane_h),
+                              "adjustment_w_mm": round(rail_adjustment - FAB["glass_deduct_opening"]),
+                              "adjustment_h_mm": -FAB["glass_deduct_opening"],
+                              "w_mm": round(opening_w - FAB["glass_deduct_opening"]),
+                              "h_mm": round(opening_h - FAB["glass_deduct_opening"]),
+                              "qty": n, "note": f"{n} opening panel(s)"})
     for index, piece in enumerate(design.get("custom_cut_pieces") or []):
         source = float(piece.get("source_mm") or piece.get("length_mm") or 0)
         adjustment = float(piece.get("adjustment_mm") or 0)
@@ -381,6 +660,7 @@ def calc_design_quote(design: dict) -> dict:
     qty = design.get("qty") or 1
     cw, rh = _col_widths(design), _row_heights(design)
 
+    breakdown = design_breakdown(design)
     pieces = extract_pieces(design)
     metres: dict[str, float] = {}
     for p in pieces:
@@ -390,9 +670,8 @@ def calc_design_quote(design: dict) -> dict:
 
     profile = sum(m * PROFILE_PRICES.get(pid, PROFILE_PER_M) for pid, m in metres.items())
     glass_cost = sum(
-        (cw[i % design["cols"]] * rh[i // design["cols"]] / 1e6) *
-        FRAME_GLASS.get(c.get("glass"), GLASS.get(c.get("glass"), 120))
-        for i, c in enumerate(design["cells"]))
+        (g["w_mm"] * g["h_mm"] / 1e6) * FRAME_GLASS.get(g.get("glass"), GLASS.get(g.get("glass"), 120))
+        for g in breakdown.get("glass", []))
     accessories = frame_accessory_rows(design)
     accessory_project_cost = sum(float(a.get("qty", 0) or 0) * float(a.get("unit_price", 0) or 0)
                                   for a in accessories)
@@ -400,27 +679,74 @@ def calc_design_quote(design: dict) -> dict:
     labour = area * LABOUR_PER_M2
     install = area * INSTALL_PER_M2
 
-    subtotal = profile + glass_cost + hardware + labour + install
-    margin = subtotal * (MARGIN_PCT / 100)
+    material_sheet = trialco_material_cost(design) if is_trialco_bay(design) else None
+    if material_sheet:
+        # The Trialco internal sheet is material cost + installation at 30%.
+        # It is separate from the customer-facing area-rate quote.
+        material_cost_per_unit = material_sheet["material_cost_per_unit"]
+        labour = 0
+        install = material_sheet["installation_cost_per_unit"]
+        subtotal = material_cost_per_unit + install
+        margin = 0
+    else:
+        material_cost_per_unit = profile + glass_cost + hardware
+        subtotal = profile + glass_cost + hardware + labour + install
+        margin = subtotal * (MARGIN_PCT / 100)
     internal_total = subtotal + margin
+    calculated_floor = material_sheet["total_cost"] if material_sheet else subtotal * qty
+    floor_override = max(0, float(design.get("cost_floor_override", 0) or 0))
+    internal_floor = floor_override if floor_override > 0 else calculated_floor
+    minimum_margin_percent = TRIALCO_MIN_MARGIN_PERCENT if material_sheet else None
+    target_margin_percent = TRIALCO_TARGET_MARGIN_PERCENT if material_sheet else None
+    minimum_client_net = (internal_floor / (1 - minimum_margin_percent / 100)
+                          if material_sheet else None)
+    recommended_client_net = (internal_floor / (1 - target_margin_percent / 100)
+                             if material_sheet else None)
+
+    internal_lines = ([
+        {"key": "Material cost", "detail": f"{len(material_sheet['rows'])} fixed-price material rows · per unit", "amount": material_sheet["material_cost_per_unit"]},
+        {"key": "Internal labour & operating allowance", "detail": f"{material_sheet['installation_percent']}% of material cost · per unit", "amount": material_sheet["installation_cost_per_unit"]},
+    ] if material_sheet else [
+        {"key": "Aluminium profile", "detail": f"{profile_len:.2f} m · {piece_count} cut pieces", "amount": round(profile, 2)},
+        {"key": "Glass", "detail": f"{sum(g['w_mm'] * g['h_mm'] for g in breakdown.get('glass', [])) / 1e6:.2f} m² · {len(breakdown.get('glass', []))} panel(s)" if is_trialco_bay(design) else f"{area:.2f} m² · {sections} section(s)", "amount": round(glass_cost, 2)},
+        {"key": "Hardware & accessories", "detail": f"{len(accessories)} catalogue/custom line(s)", "amount": round(hardware, 2)},
+        {"key": "Fabrication labour", "detail": f"{area:.2f} m² × GHS {LABOUR_PER_M2:.0f}/m²", "amount": round(labour, 2)},
+        {"key": "Installation", "detail": f"{area:.2f} m² × GHS {INSTALL_PER_M2:.0f}/m²", "amount": round(install, 2)},
+    ])
 
     client_lines = []
-    for i, cell in enumerate(design["cells"]):
-        sec_w = cw[i % design["cols"]]
-        sec_h = rh[i // design["cols"]]
-        rate_key = cell.get("rate_key") or FRAME_RATE_KEYS.get(cell.get("opening"), "fixed")
-        rate = cell.get("rate_per_m2")
-        if not isinstance(rate, (int, float)):
-            rate = FRAME_QUOTE_RATES.get(rate_key, FRAME_QUOTE_RATES["fixed"])
-        row_area = sec_w * sec_h / 1e6
+    if is_trialco_bay(design):
+        cell = design["cells"][0] if design.get("cells") else {}
+        rate_key = cell.get("rate_key") or "slidingWindow"
+        row_area = design["width"] * design["height"] / 1e6
         row_qty = max(1, int(cell.get("item_qty") or 1)) * qty
-        row_total = row_area * row_qty * rate
+        rate = (recommended_client_net / (row_area * row_qty)
+                if material_sheet else cell.get("rate_per_m2"))
+        if not isinstance(rate, (int, float)):
+            rate = FRAME_QUOTE_RATES.get(rate_key, FRAME_QUOTE_RATES["slidingWindow"])
         client_lines.append({
-            "description": OPENING_LABELS.get(cell.get("opening"), cell.get("opening", "Frame item")),
-            "width_mm": round(sec_w), "height_mm": round(sec_h), "qty": row_qty,
+            "description": "Trialco sliding bay", "width_mm": round(design["width"]),
+            "height_mm": round(design["height"]), "qty": row_qty,
             "m2": round(row_area * row_qty, 2), "unit_price": rate,
-            "total": round(row_total, 2), "rate_key": rate_key,
+            "total": round(row_area * row_qty * rate, 2), "rate_key": rate_key,
         })
+    else:
+        for i, cell in enumerate(design["cells"]):
+            sec_w = cw[i % design["cols"]]
+            sec_h = rh[i // design["cols"]]
+            rate_key = cell.get("rate_key") or FRAME_RATE_KEYS.get(cell.get("opening"), "fixed")
+            rate = cell.get("rate_per_m2")
+            if not isinstance(rate, (int, float)):
+                rate = FRAME_QUOTE_RATES.get(rate_key, FRAME_QUOTE_RATES["fixed"])
+            row_area = sec_w * sec_h / 1e6
+            row_qty = max(1, int(cell.get("item_qty") or 1)) * qty
+            row_total = row_area * row_qty * rate
+            client_lines.append({
+                "description": OPENING_LABELS.get(cell.get("opening"), cell.get("opening", "Frame item")),
+                "width_mm": round(sec_w), "height_mm": round(sec_h), "qty": row_qty,
+                "m2": round(row_area * row_qty, 2), "unit_price": rate,
+                "total": round(row_total, 2), "rate_key": rate_key,
+            })
     client_subtotal = sum(row["total"] for row in client_lines)
     discount_percent = max(0, float(design.get("discount_percent", 0) or 0))
     getf_nhis_percent = max(0, float(design.get("getf_nhis_percent", 5) or 0))
@@ -430,34 +756,42 @@ def calc_design_quote(design: dict) -> dict:
     getf_nhis = client_net * getf_nhis_percent / 100
     vat = client_net * vat_percent / 100
     client_grand_total = client_net + getf_nhis + vat
-    calculated_floor = subtotal * qty
-    floor_override = max(0, float(design.get("cost_floor_override", 0) or 0))
-    internal_floor = floor_override if floor_override > 0 else calculated_floor
     floor_gap = client_net - internal_floor
+    pricing_qty = qty * max(1, int((design.get("cells") or [{}])[0].get("item_qty") or 1))
+    pricing_area = area * pricing_qty
     return {
         "area": round(area, 2),
         "sections": sections,
         "profile_len": round(profile_len, 2),
         "piece_count": piece_count,
         "pieces": pieces,
+        "fabrication": breakdown.get("fabrication"),
+        "net_panels": breakdown.get("net", []),
+        "glass_breakdown": breakdown.get("glass", []),
+        "material_rows": material_sheet["rows"] if material_sheet else [],
+        "material_cost": material_sheet["material_cost"] if material_sheet else None,
+        "installation_percent": material_sheet["installation_percent"] if material_sheet else None,
+        "installation_cost": material_sheet["installation_cost"] if material_sheet else None,
+        "total_material_cost": material_sheet["total_cost"] if material_sheet else None,
+        "pricing_model": "cost-plus" if material_sheet else "rate-card",
+        "minimum_margin_percent": minimum_margin_percent,
+        "target_margin_percent": target_margin_percent,
+        "minimum_client_net": round(minimum_client_net, 2) if minimum_client_net is not None else None,
+        "recommended_client_net": round(recommended_client_net, 2) if recommended_client_net is not None else None,
+        "minimum_rate_per_m2": round(minimum_client_net / pricing_area, 2) if material_sheet else None,
+        "recommended_rate_per_m2": round(recommended_client_net / pricing_area, 2) if material_sheet else None,
         "profile_catalog": frame_source_profiles(design),
         "profile_mapping_status": "catalogue loaded; cut-role mapping pending Sofaamy confirmation",
         "accessories": accessories,
-        "lines": [
-            {"key": "Aluminium profile", "detail": f"{profile_len:.2f} m · {piece_count} cut pieces", "amount": round(profile, 2)},
-            {"key": "Glass", "detail": f"{area:.2f} m² · {sections} section(s)", "amount": round(glass_cost, 2)},
-            {"key": "Hardware & accessories", "detail": f"{len(accessories)} catalogue/custom line(s)", "amount": round(hardware, 2)},
-            {"key": "Fabrication labour", "detail": f"{area:.2f} m² × GHS {LABOUR_PER_M2:.0f}/m²", "amount": round(labour, 2)},
-            {"key": "Installation", "detail": f"{area:.2f} m² × GHS {INSTALL_PER_M2:.0f}/m²", "amount": round(install, 2)},
-        ],
+        "lines": internal_lines,
         "subtotal": round(subtotal, 2),
         "margin": round(margin, 2),
-        "margin_pct": MARGIN_PCT,
+        "margin_pct": 0 if material_sheet else MARGIN_PCT,
         "total": round(client_grand_total / qty, 2),
         "qty": qty,
         "grand_total": round(client_grand_total, 2),
         "internal_total": round(internal_total, 2),
-        "material_cost_per_unit": round(profile + glass_cost + hardware, 2),
+        "material_cost_per_unit": round(material_cost_per_unit, 2),
         "labour_cost_per_unit": round(labour, 2),
         "installation_cost_per_unit": round(install, 2),
         "internal_floor_per_unit": round(internal_floor / qty, 2),

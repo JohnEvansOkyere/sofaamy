@@ -233,13 +233,11 @@ export const FRAME_SYSTEM_ORDER = [
   'fdt_fixed', 'fdt_hinge', 'fdt_swing',
 ]
 
-// Rates observed in the supplied quotation screenshots. They are starting
-// values for the digital quote and remain editable per opening. The source
-// examples contain both 1,700/1,500 and 1,900 sliding rates, so the app must
-// never treat these as an immutable company price list.
+// Rates observed in the supplied quotation sheet. They remain editable per
+// opening and should be confirmed against the current approved price list.
 export const FRAME_QUOTE_RATES = {
-  slidingDoor: 1700,
-  slidingWindow: 1500,
+  slidingDoor: 1900,
+  slidingWindow: 1900,
   projected: 2350,
   casement: 2350,
   fixed: 1900,
@@ -248,8 +246,8 @@ export const FRAME_QUOTE_RATES = {
 }
 
 export const FRAME_RATE_SOURCES = {
-  slidingDoor: 'Supplied grouped quote example: GHS 1,700/m²',
-  slidingWindow: 'Supplied grouped quote example: GHS 1,500/m²',
+  slidingDoor: 'Supplied quotation sheet: GHS 1,900/m²',
+  slidingWindow: 'Supplied quotation sheet: GHS 1,900/m²',
   projected: 'Supplied detailed quote example: GHS 2,350/m²',
   casement: 'Starting reference based on the supplied projected-window rate; confirm with team',
   fixed: 'Starting reference based on the supplied detailed sliding rate; confirm with team',
@@ -392,7 +390,8 @@ export function frameAccessoryRows(d) {
   const movingPanels = Math.max(1, openingCells.reduce((n, c) => n + Math.max(1, Number(c.panels || 1)) * Math.max(1, Number(c.itemQty || 1)), 0))
   const doors = cells.filter(isDoorCell)
   const doubleDoors = doors.reduce((n, c) => n + (c.opening === 'double' ? Math.max(1, Number(c.itemQty || 1)) : 0), 0)
-  const hasSlidingDoor = cells.some(c => c.opening === 'sliding')
+  const hasSlidingDoor = cells.some(c => c.opening === 'sliding' &&
+    (c.rateKey === 'slidingDoor' || /sliding\s+door/i.test(d?.name || '')))
 
   const rows = system.accessories.map(a => {
     const k = accessoryKind(a)

@@ -72,12 +72,13 @@ export default function Quotations() {
             onClick={() => setFilter(f)}>{f}</span>)}</div>}>
         <div className="tbl-wrap">
           <table className="tbl">
-            <thead><tr><th>Quote No.</th><th>Client</th><th>Product</th><th>Total</th><th>Status</th><th>Date</th><th style={{minWidth:210}}></th></tr></thead>
+            <thead><tr><th>Quote No.</th><th>Client</th><th>Project</th><th>Product / profile</th><th>Total</th><th>Status</th><th>Date</th><th style={{minWidth:210}}></th></tr></thead>
             <tbody>
               {rows.map(q => (
                 <tr key={q.quote_number}>
                   <td className="t-mono">{q.quote_number}</td>
                   <td className="t-strong">{q.client_name}</td>
+                  <td className="t-muted">{q.project_number || '—'}</td>
                   <td className="t-muted">{q.product}</td>
                   <td className="t-mono">{GHS0(q.total)}</td>
                   <td><Badge>{q.status}</Badge></td>
@@ -101,7 +102,7 @@ export default function Quotations() {
                   </td>
                 </tr>
               ))}
-              {!rows.length && <tr><td colSpan={7} className="muted center" style={{ padding:24 }}>No quotations{filter !== 'All' ? ` in ${filter}` : ''} — create one in the configurator.</td></tr>}
+              {!rows.length && <tr><td colSpan={8} className="muted center" style={{ padding:24 }}>No quotations{filter !== 'All' ? ` in ${filter}` : ''} — create one in the configurator.</td></tr>}
             </tbody>
           </table>
         </div>

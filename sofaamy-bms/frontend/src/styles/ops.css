@@ -19,6 +19,12 @@
 .drawer-stats span { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; color: var(--ink-3); margin-bottom: 3px; }
 .drawer-stats b { font-size: 14px; color: var(--ink); }
 
+.job-workflow-banner { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 2px; padding:10px 12px; border:1px solid #d9e6ee; border-radius:10px; background:#f4f9fc; }
+.job-workflow-banner>div { display:grid; gap:3px; min-width:0; }
+.job-workflow-kicker { font-size:9px; font-weight:800; letter-spacing:.08em; color:var(--navy-600); }
+.job-workflow-banner b { font-size:12.5px; color:var(--navy-700); }
+.job-workflow-banner>span:last-child { font-size:11px; color:var(--ink-3); text-align:right; white-space:nowrap; }
+
 .drawer-sec { border-top: 1px solid var(--line-soft); padding: 14px 0 6px; }
 .drawer-sec h5 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .5px;
   color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
@@ -91,6 +97,10 @@
 .wa-field input:focus { border-color: #25D366; }
 
 @media (max-width: 640px) { .wa-phone { display: none; } }
+@media (max-width: 520px) {
+  .job-workflow-banner { align-items:flex-start; flex-direction:column; gap:4px; }
+  .job-workflow-banner>span:last-child { text-align:left; }
+}
 
 /* ── Reports page project selector ── */
 .rep-select { padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; font-size: 13px;

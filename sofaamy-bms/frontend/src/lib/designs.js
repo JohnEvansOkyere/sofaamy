@@ -100,6 +100,20 @@ export function resizeGrid(design, cols, rows) {
     colWidths: equalSplit(design.width, cols), rowHeights: equalSplit(design.height, rows) }
 }
 
+// Apply a divider layout to one selected section. The outer frame grid stays
+// intact; the selected section receives its own local divider geometry.
+export function setLocalDivider(design, index, cols, rows) {
+  if (index == null || !design.cells[index]) return design
+  const cw = design.colWidths?.length === design.cols ? design.colWidths : equalSplit(design.width, design.cols)
+  const rh = design.rowHeights?.length === design.rows ? design.rowHeights : equalSplit(design.height, design.rows)
+  const sectionW = cw[index % design.cols]
+  const sectionH = rh[Math.floor(index / design.cols)]
+  const localDivider = cols === 1 && rows === 1 ? null : {
+    cols, rows, colWidths:equalSplit(sectionW, cols), rowHeights:equalSplit(sectionH, rows),
+  }
+  return { ...design, cells:design.cells.map((cell, i) => i === index ? { ...cell, localDivider } : cell) }
+}
+
 // Change overall width/height, scaling section sizes proportionally.
 export function setSize(design, key, value) {
   const v = Math.max(1, Math.round(value))
@@ -145,10 +159,17 @@ export function designLayout(design, stageW, stageH) {
   const { width, height, cols, rows } = design
   const colW = design.colWidths?.length === cols ? design.colWidths : Array.from({ length: cols }, () => width / cols)
   const rowH = design.rowHeights?.length === rows ? design.rowHeights : Array.from({ length: rows }, () => height / rows)
-  const PAD = 80
-  const scale = Math.min((stageW - PAD*2) / width, (stageH - PAD*2) / height) * 0.9
+  // Leave room for dimension annotations below and beside the profile.
+  // Without this allowance a tall door/window can look fitted while its
+  // bottom dimension line is clipped by the canvas viewport.
+  const PAD = 64
+  const DIM_BOTTOM = 64
+  const DIM_RIGHT = 42
+  const usableW = Math.max(120, stageW - PAD*2 - DIM_RIGHT)
+  const usableH = Math.max(120, stageH - PAD*2 - DIM_BOTTOM)
+  const scale = Math.min(usableW / width, usableH / height) * 0.9
   const fw = width * scale, fh = height * scale
-  const ox = (stageW - fw) / 2, oy = (stageH - fh) / 2
+  const ox = PAD + (usableW - fw) / 2, oy = PAD + (usableH - fh) / 2
   const ft = Math.max(7, Math.min(15, Math.min(fw, fh) * 0.035))
   const cumX = colW.reduce((a, w) => [...a, a[a.length-1] + w], [0])
   const cumY = rowH.reduce((a, h) => [...a, a[a.length-1] + h], [0])

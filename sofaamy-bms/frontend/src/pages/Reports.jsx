@@ -5,6 +5,8 @@ import { REVENUE_TREND, PIPELINE_MIX, PRODUCT_DEMAND } from '../data/seed.js'
 import { REPORT_GROUPS, REPORT_STATUS, reportKind } from '../lib/reports.js'
 import { listDesigns, downloadReport } from '../lib/api.js'
 import { IconWallet, IconTrend, IconChart, IconFactory, IconDownload } from '../components/icons.jsx'
+import CutPlan from '../components/configurator/CutPlan.jsx'
+import '../components/configurator/configurator.css'
 
 function ReportRow({ r, project, busy, onDownload }) {
   const st = REPORT_STATUS[r.status]
@@ -72,6 +74,14 @@ export default function Reports() {
           </Card>
         ))}
       </div>
+
+      {project && ['frame', 'curtainwall'].includes(project.design?.category) && (
+        <div className="reports-production-preview">
+          <div className="section-title">Production workbench</div>
+          <div className="muted reports-production-help">Select a saved item above to review its profile breakdown, glass sizes and optimized nesting. This belongs to the factory workflow, not the design canvas.</div>
+          <CutPlan design={project.design} />
+        </div>
+      )}
 
       <div className="section-title">Management Analytics</div>
 

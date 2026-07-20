@@ -35,3 +35,15 @@ SOFAAMY/
 - **Decisions made** → `MEMORY.md`
 
 Status: **Phase 0 prototype built and demo-ready** — three-category Design Configurator (Frame / Frameless / Curtain Wall) with live GHS pricing, cutting optimization, and SmartGlazier-style fabrication drawings (glass order, hardware list, installation sheet) generated parametrically from a hardware prep library. See `MEMORY.md` for the decision log and `sofaamy-bms/README.md` to run it.
+
+
+• Backend:
+
+  cd sofaamy-bms/backend
+  .venv/bin/uvicorn app.main:app --reload
+
+  Frontend — open a second terminal:
+
+  cd sofaamy-bms/frontend
+  npm run dev
+

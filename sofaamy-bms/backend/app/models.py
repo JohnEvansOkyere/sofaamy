@@ -23,6 +23,7 @@ class Client(Base):
     location: Mapped[str] = mapped_column(String(160), default="")
     type: Mapped[str] = mapped_column(String(20), default="company")
     jobs = relationship("Job", back_populates="client")
+    projects = relationship("Project", back_populates="client")
 
 
 class Material(Base):
@@ -37,11 +38,28 @@ class Material(Base):
     reorder_level: Mapped[float] = mapped_column(Float, default=0.0)
 
 
+class Project(Base):
+    """A client project containing multiple independently quoted items."""
+    __tablename__ = "projects"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_number: Mapped[str] = mapped_column(String(30), unique=True)
+    name: Mapped[str] = mapped_column(String(160))
+    client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), nullable=True)
+    location: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    client = relationship("Client", back_populates="projects")
+    items = relationship("DesignRecord", back_populates="project")
+    quotes = relationship("Quote", back_populates="project")
+    jobs = relationship("Job", back_populates="project")
+
+
 class Job(Base):
     __tablename__ = "jobs"
     id: Mapped[int] = mapped_column(primary_key=True)
     job_number: Mapped[str] = mapped_column(String(30), unique=True)  # SOF-YYYY-NNN
     client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"))
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
     product: Mapped[str] = mapped_column(String(120))
     stage: Mapped[str] = mapped_column(String(30), default="pending")
     progress: Mapped[int] = mapped_column(Integer, default=0)
@@ -54,6 +72,7 @@ class Job(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     client = relationship("Client", back_populates="jobs")
+    project = relationship("Project", back_populates="jobs")
     quotes = relationship("Quote", back_populates="job")
 
 
@@ -118,8 +137,11 @@ class DesignRecord(Base):
     location: Mapped[str] = mapped_column(String(200), default="")
     total: Mapped[float] = mapped_column(Float, default=0.0)  # GHS grand total
     design_json: Mapped[str] = mapped_column(Text)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
     job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    project = relationship("Project", back_populates="items")
+    quotes = relationship("Quote", back_populates="design")
 
 
 class Quote(Base):
@@ -127,6 +149,8 @@ class Quote(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     quote_number: Mapped[str] = mapped_column(String(30), unique=True)
     job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
+    design_id: Mapped[int | None] = mapped_column(ForeignKey("designs.id"), nullable=True)
     client_name: Mapped[str] = mapped_column(String(160))
     product: Mapped[str] = mapped_column(String(160))
     # design config (from the configurator)
@@ -140,3 +164,5 @@ class Quote(Base):
     status: Mapped[str] = mapped_column(String(20), default="Draft")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     job = relationship("Job", back_populates="quotes")
+    project = relationship("Project", back_populates="quotes")
+    design = relationship("DesignRecord", back_populates="quotes")

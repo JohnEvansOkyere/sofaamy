@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { designBreakdown, extractPieces, multiplyPieces, profileLabel } from '../../lib/pieces.js'
 import { optimizeCutting } from '../../lib/optimize.js'
 import { PROFILES, CUTTING, GLASS } from '../../lib/products.js'
+import { frameGlassByCode } from '../../lib/frameCatalog.js'
 import { IconFactory } from '../icons.jsx'
 
 // One stock bar: proportional cut segments + waste tail
@@ -35,7 +36,7 @@ export default function CutPlan({ design }) {
   return (
     <div className="cfg-panel" style={{ marginTop: 16 }}>
       <h4><IconFactory style={{ width: 16, height: 16, color: 'var(--navy-600)' }} /> Production — Cutting Plan
-        <span className="badge b-green" style={{ marginLeft: 'auto' }}><span className="bdot" />Generated live from design</span>
+        <span className="badge b-green" style={{ marginLeft: 'auto' }}><span className="bdot" />Generated from selected item</span>
       </h4>
       <div className="cfg-body cutplan">
 
@@ -67,7 +68,7 @@ export default function CutPlan({ design }) {
                 {breakdown.glass.map((g, i) => (
                   <tr key={i}>
                     <td>{g.section} <span className="muted" style={{ fontSize: 10.5 }}>({g.note})</span></td>
-                    <td>{GLASS[g.glass]?.label || g.glass}</td>
+                    <td>{frameGlassByCode(g.glass)?.label || GLASS[g.glass]?.label || g.glass}</td>
                     <td className="r t-mono">{(g.sourceWMm ?? g.wMm).toLocaleString()} × {(g.sourceHMm ?? g.hMm).toLocaleString()}</td>
                     <td className="r t-mono">{g.wMm.toLocaleString()} × {g.hMm.toLocaleString()}</td>
                     <td className="r t-mono">{g.qty}</td>
@@ -76,11 +77,28 @@ export default function CutPlan({ design }) {
               </tbody>
             </table>
 
+            {breakdown.net?.length > 0 && <>
+              <div className="cfg-label">Net Cutting Sizes — per unit</div>
+              <table className="cut-table">
+                <thead><tr><th>Panel</th><th className="r">Source W × H</th><th className="r">Cut W × H (mm)</th><th className="r">Qty</th></tr></thead>
+                <tbody>
+                  {breakdown.net.map((n, i) => <tr key={i}>
+                    <td>{n.section} <span className="muted" style={{ fontSize: 10.5 }}>({n.note})</span></td>
+                    <td className="r t-mono">{(n.sourceWMm ?? n.wMm).toLocaleString()} × {(n.sourceHMm ?? n.hMm).toLocaleString()}</td>
+                    <td className="r t-mono">{n.wMm.toLocaleString()} × {n.hMm.toLocaleString()}</td>
+                    <td className="r t-mono">{n.qty}</td>
+                  </tr>)}
+                </tbody>
+              </table>
+            </>}
+
             <div className="cut-note">
-              Each profile row shows the measured input, the applied adjustment, and the resulting cut length.
-              Current geometry uses −2×50 mm frame depth, +15 mm opening overlap, −30 mm track, glass −70 mm
-              (fixed) / −60 mm (opening), kerf {plan.kerfMm} mm and min offcut {CUTTING.minOffcutMm} mm.
-              Exact Sofaamy source-profile mapping still requires supervisor confirmation before factory release.
+              Each profile row shows the measured input, the applied adjustment, and the resulting cut length.{' '}
+              {breakdown.fabrication
+                ? <>Trialco bay formulas: Leaf W = Frame W ÷ 2; Leaf H = Frame H − 70; Net H = Leaf H − 10; Glass W/H = Leaf W/H − 112. Kerf {plan.kerfMm} mm and min offcut {CUTTING.minOffcutMm} mm.</>
+                : <>Current generic geometry uses −2×50 mm frame depth, +15 mm opening overlap, −30 mm track, glass −70 mm
+                  (fixed) / −60 mm (opening), kerf {plan.kerfMm} mm and min offcut {CUTTING.minOffcutMm} mm.</>}
+              {' '}Exact Sofaamy source-profile mapping and production quantities still require supervisor confirmation before factory release.
             </div>
           </div>
 

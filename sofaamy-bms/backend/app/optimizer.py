@@ -9,6 +9,7 @@ Stock lengths confirmed from Sofaamy's cutting-optimizer screen
 """
 
 STOCK_MM = {"frame_outer": 5800, "frame_internal": 5800, "frame_opening": 5800,
+            "trialco_frame": 5800, "trialco_leaf": 5800, "trialco_interlock": 5800,
             "cwmullion": 5800, "cwtransom": 5800}
 DEFAULT_STOCK_MM = 6000
 DEFAULT_KERF_MM = 5
