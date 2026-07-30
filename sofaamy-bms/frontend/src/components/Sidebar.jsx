@@ -1,8 +1,11 @@
+import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { COMPANY } from '../data/seed.js'
+import { getDashboard } from '../lib/api.js'
 import {
   IconDashboard, IconCube, IconUsers, IconFile, IconRuler, IconFactory,
   IconBox, IconTruck, IconShield, IconChart, IconGear,
+  IconLayers, IconWallet,
 } from './icons.jsx'
 
 const NAV = [
@@ -11,23 +14,35 @@ const NAV = [
   ]},
   { group:'Sales', items:[
     { to:'/configurator', label:'Design Configurator', icon:IconCube, tag:'CORE' },
-    { to:'/crm',          label:'CRM & Leads',         icon:IconUsers, count:5 },
-    { to:'/quotations',   label:'Quotations',          icon:IconFile,  count:19 },
+    { to:'/crm',          label:'CRM & Leads',         icon:IconUsers },
+    { to:'/quotations',   label:'Quotations',          icon:IconFile, countKey:'quotation' },
     { to:'/surveys',      label:'Surveys',             icon:IconRuler },
   ]},
+  { group:'Finance', items:[
+    { to:'/accounts', label:'Accounts', icon:IconWallet, countKey:'accounts' },
+  ]},
   { group:'Operations', items:[
-    { to:'/production', label:'Production Pipeline', icon:IconFactory, count:34 },
+    { to:'/technical-workflow', label:'Technical Workflow', icon:IconLayers, countKey:'technical' },
+    { to:'/production', label:'Production Pipeline', icon:IconFactory, countKey:'production' },
     { to:'/inventory',  label:'Inventory & Stock',   icon:IconBox },
     { to:'/dispatch',   label:'Dispatch & Install',  icon:IconTruck },
     { to:'/quality',    label:'Quality Control',     icon:IconShield },
   ]},
   { group:'Insights', items:[
-    { to:'/reports',  label:'Reports', icon:IconChart },
+    { to:'/insights', label:'Insights & KPIs', icon:IconChart },
+    { to:'/reports',  label:'Documents & Reports', icon:IconFile },
     { to:'/settings', label:'Settings', icon:IconGear },
   ]},
 ]
 
 export default function Sidebar({ collapsed = false, onToggle }) {
+  const [counts, setCounts] = useState({})
+  useEffect(() => {
+    getDashboard().then(data => setCounts(Object.fromEntries(
+      (data.pipeline || []).map(item => [item.key, item.count]),
+    ))).catch(() => {})
+  }, [])
+
   return (
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
       <div className="sb-brand">
@@ -52,7 +67,8 @@ export default function Sidebar({ collapsed = false, onToggle }) {
                   className={({isActive}) => `sb-link ${isActive?'active':''}`}>
                   <Icon /><span>{it.label}</span>
                   {it.tag && <span className="tag">{it.tag}</span>}
-                  {it.count != null && <span className="count">{it.count}</span>}
+                  {it.countKey && counts[it.countKey] != null &&
+                    <span className="count">{counts[it.countKey]}</span>}
                 </NavLink>
               )
             })}

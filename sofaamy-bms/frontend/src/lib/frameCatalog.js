@@ -385,11 +385,11 @@ export function frameAccessoryRows(d) {
   if (!system) return (d?.accessoryOverrides || []).filter(x => !x.removed)
 
   const projectQty = Math.max(1, Number(d.qty || 1))
-  const openingCount = Math.max(1, cells.reduce((n, c) => n + Math.max(1, Number(c.itemQty || 1)), 0))
+  const openingCount = Math.max(1, cells.length)
   const openingCells = cells.filter(c => c.opening !== 'fixed')
-  const movingPanels = Math.max(1, openingCells.reduce((n, c) => n + Math.max(1, Number(c.panels || 1)) * Math.max(1, Number(c.itemQty || 1)), 0))
+  const movingPanels = Math.max(1, openingCells.reduce((n, c) => n + Math.max(1, Number(c.panels || 1)), 0))
   const doors = cells.filter(isDoorCell)
-  const doubleDoors = doors.reduce((n, c) => n + (c.opening === 'double' ? Math.max(1, Number(c.itemQty || 1)) : 0), 0)
+  const doubleDoors = doors.filter(c => c.opening === 'double').length
   const hasSlidingDoor = cells.some(c => c.opening === 'sliding' &&
     (c.rateKey === 'slidingDoor' || /sliding\s+door/i.test(d?.name || '')))
 

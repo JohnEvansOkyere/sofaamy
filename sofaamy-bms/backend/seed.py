@@ -51,6 +51,32 @@ db.add_all([models.Material(code=c, name=n, category=cat, unit=u,
 db.commit()
 ensure_engine_materials(db)
 
+# A real project container for the technical-workflow screen. The attached
+# frameless design can generate a provisional extraction; its unpaid job keeps
+# the drawing gate visibly locked until Accounts records the deposit.
+technical_project = models.Project(
+    project_number="SOF-P-2026-001",
+    name="East Legon Main Entrance",
+    client_id=client_rows[0].id,
+    location="East Legon, Accra",
+    status="accepted",
+    product_family="frameless",
+    product_system="KL Patches",
+    workflow_status="awaiting_payment",
+    extraction_method="generated",
+    drawing_method="autocad",
+    drawing_release_percent=80,
+)
+db.add(technical_project)
+db.flush()
+db.add(models.WorkflowEvent(
+    project_id=technical_project.id,
+    who="Kofi Adjei",
+    kind="measurement",
+    note="submitted site measurements and entrance photographs",
+    created_at=ago(days=2),
+))
+
 # jobs across the whole pipeline — value + staged payments tell the story
 jobs = [
     # job_no, client_idx, product, stage, value, created days ago
@@ -67,6 +93,7 @@ job_rows = {}
 for jn, ci, pr, st, val, days in jobs:
     j = models.Job(job_number=jn, client_id=ci + 1, product=pr, stage=st,
                    progress=STAGE_PROGRESS.get(st, 0), value=val,
+                   project_id=technical_project.id if jn == "SOF-2026-082" else None,
                    paid="0%", created_at=ago(days=days))
     job_rows[jn] = j
     db.add(j)
@@ -91,6 +118,7 @@ db.add(models.DesignRecord(ref="AD-DR-1", name="Double Swing Doors",
                            client_name="Adom Estates Ltd", qty=2,
                            location="Main entrance, East Legon site",
                            total=12417.60, design_json=json.dumps(swing_design),
+                           project_id=technical_project.id,
                            job_id=job_rows["SOF-2026-082"].id,
                            created_at=ago(days=1)))
 
@@ -142,6 +170,7 @@ quotes = [
 for qn, cn, pr, total, status, jn, days in quotes:
     db.add(models.Quote(quote_number=qn, client_name=cn, product=pr, total=total,
                         status=status, created_at=ago(days=days),
+                        project_id=technical_project.id if qn == "SOF-Q-2026-0136" else None,
                         job_id=job_rows[jn].id if jn else None))
 
 # activity feed

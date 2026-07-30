@@ -104,13 +104,29 @@ uses these working quantities for one two-leaf bay:
 
 ```text
 Leaves      = 2
-Net panels  = 2 (one associated with each leaf)
+Net panels  = 1 (the net covers one sliding side)
 Interlocks  = 2 (one meeting profile per leaf)
 Glass       = 2 (one panel inside each leaf)
+0404 corners = 12 (4 outer-frame corners + 4 per leaf × 2 leaves)
 ```
 
 These quantities are deliberately visible in the formula check and cutting
 list so they can be compared with Sofaamy's existing calculation tomorrow.
+
+### Two-leaf sliding opening behavior
+
+A two-leaf sliding bay does not open by sending both glass leaves away from
+each other. One leaf remains standing while the other slides across it:
+
+- **Left to right:** the left leaf moves across and overlaps the stationary
+  right leaf.
+- **Right to left:** the right leaf moves across and overlaps the stationary
+  left leaf.
+
+The exposed side is occupied by the single net panel for the bay, so the
+opening can ventilate while the insect screen remains in place. The 3D and
+wall visuals use this rule for the opening animation; it does not change the
+Trialco material quantities above.
 
 ### Trialco internal material-cost quantities
 
@@ -123,10 +139,13 @@ working two-leaf recipe and multiplied by project quantity.
 |---|---|---|
 | Frame | First-fit stock-bar nesting of the four frame cuts per bay, with 5 mm kerf | Fixed Trialco sheet rate |
 | Leaf | First-fit stock-bar nesting of the four cuts per leaf, with 5 mm kerf | Fixed Trialco sheet rate |
-| Net | First-fit stock-bar nesting of the four net-frame cuts per net, with 5 mm kerf | Fixed Trialco sheet rate |
+| Net | First-fit stock-bar nesting of the four net-frame cuts for one net per bay, with 5 mm kerf | Fixed Trialco sheet rate |
 | Interlock | First-fit stock-bar nesting of the two interlock cuts per bay, with 5 mm kerf | Fixed Trialco sheet rate |
-| Glass | `2 × Glass W × Glass H × project qty` converted to m² | Selected glass catalogue rate |
+| Glass cut estimate | `2 × Glass W × Glass H × project qty` converted to m² | Fabrication reference only |
+| Glass purchase | `Frame W × Frame H × project qty` converted to m², divided by 7.2 m²/sheet and rounded up to the next 0.5 sheet | Selected glass catalogue rate × 7.2 m²/sheet |
 | Rubber / brush | Calculated from the relevant glass or net perimeter | Fixed Trialco sheet rate |
+| 0404 corners | `4 outer-frame corners + (4 × 2 leaves)` per bay × project quantity | Fixed Trialco sheet rate |
+| Metal locks | `1 per bay × project quantity` | Fixed Trialco sheet rate |
 | Hardware / consumables | Working per-bay recipe × project quantity | Fixed Trialco sheet rate |
 
 The material rows are shown in the configurator, internal price breakdown,
@@ -155,6 +174,29 @@ The rates are intentionally kept separate from customer selling rates and
 from the source workbook catalogue values so changing a selling price does not
 silently change the internal Trialco costing sheet.
 
+### Glass-sheet purchasing rule
+
+Sofaamy's recorded calculation purchases glass by standard sheet rather than by
+the exact glass-cut area. The current working sheet size is **7.2 m²** and
+purchases are rounded up to half-sheet increments.
+
+For the example `1,250 W × 1,500 H`, quantity 5:
+
+```text
+Frame-area basis = 1.25 × 1.50 × 5 = 9.375 m²
+Sheet count      = 9.375 ÷ 7.2 = 1.3021 sheets
+Purchase qty     = 1.5 sheets (rounded up to the next 0.5)
+```
+
+The physical glass-cut estimate remains separate:
+
+```text
+10 panels × 513 × 1,318 mm = 6.76 m² cut area
+```
+
+The material-cost sheet uses **1.5 sheets** for procurement costing. The
+cutting list uses `513 × 1,318 mm` for each of the ten physical panels.
+
 ### Additional project materials
 
 The configurator's **Project accessories** editor is the extension point for
@@ -178,17 +220,22 @@ The dimensions above do not prove the production quantities. Confirm these
 items with the fabricator:
 
 1. Whether every Trialco bay has exactly two leaves.
-2. Whether one bay requires one net or two nets.
+2. Whether one net covering one sliding side is the approved Trialco recipe.
 3. Whether the interlock quantity is one or two vertical profiles per bay.
 4. Whether each leaf receives one glass panel, and whether the two panels are
    identical.
-5. Whether `112 mm` is deducted from both sides of both dimensions, or is a
+5. Whether one metal lock per bay is the approved Trialco lock recipe.
+6. Whether `112 mm` is deducted from both sides of both dimensions, or is a
    complete system allowance already covering all sides.
-6. Whether the `70 mm` leaf-height deduction includes the complete track and
+7. Whether `0404 corners = 4 outer-frame + 4 per leaf` is the approved corner
+   recipe.
+8. Whether the 7.2 m² sheet size and half-sheet rounding apply to every glass
+   type.
+9. Whether the `70 mm` leaf-height deduction includes the complete track and
    frame clearance.
-7. Whether the measured frame size is the final outer-frame size or the wall
+10. Whether the measured frame size is the final outer-frame size or the wall
    opening before installation clearance.
-8. Whether frame and leaf members are mitred or butt-cut, and whether the
+11. Whether frame and leaf members are mitred or butt-cut, and whether the
    profile manufacturer's cutting sheet adds further deductions.
 
 ## Existing generic formulas in the application
@@ -215,3 +262,6 @@ one universal deduction table.
 | Date | System | Change | Status |
 |---|---|---|---|
 | 2026-07-20 | Trialco | Added two-leaf bay formulas from today's fabrication explanation | Working assumption; pending confirmation |
+| 2026-07-23 | Trialco | Added outer-frame 0404 corners and 7.2 m² glass-sheet purchasing rule from team calculation | Team-provided working rule; verify against approved costing sheet |
+| 2026-07-23 | Trialco | Changed metal locks to one per complete bay/window | Team-provided working rule; verify against approved accessory recipe |
+| 2026-07-23 | Trialco | Changed net recipe to one net covering one sliding side per bay | Team-provided working rule; verify net perimeter and brush coverage |

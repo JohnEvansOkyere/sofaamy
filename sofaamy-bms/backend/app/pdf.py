@@ -125,7 +125,11 @@ def quote_pdf(quote_number: str, client_name: str, design_name: str,
     c.drawString(M + 100 * mm, y, _clip(colour, 21))
     y -= 4.5 * mm
     c.setFillColor(MUTED); c.setFont("Helvetica", 8.5)
-    if result.get("total_kg") is not None:   # frameless
+    if result.get("manual_quote"):
+        meta = (
+            f"Custom technical scope · approved extraction "
+            f"E{result.get('extraction_revision', '—')} · final dimensions per approved drawing")
+    elif result.get("total_kg") is not None:   # frameless
         meta = (f"{result['sections']} toughened panel(s) · {result['area']} m² · "
                 f"{result['total_kg']} kg glass per unit")
     elif (result.get("fabrication") or {}).get("system") == "trialco":
@@ -156,10 +160,15 @@ def quote_pdf(quote_number: str, client_name: str, design_name: str,
     y -= 12 * mm
     c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 9)
     c.drawString(M, y, "DESCRIPTION")
-    c.drawString(M + 45 * mm, y, "W × H")
-    c.drawString(M + 78 * mm, y, "QTY")
-    c.drawString(M + 91 * mm, y, "M²")
-    c.drawString(M + 108 * mm, y, "UNIT")
+    if result.get("commercial_quote"):
+        c.drawString(M + 78 * mm, y, "QTY")
+        c.drawString(M + 98 * mm, y, "UNIT")
+        c.drawRightString(M + 142 * mm, y, "RATE")
+    else:
+        c.drawString(M + 45 * mm, y, "W × H")
+        c.drawString(M + 78 * mm, y, "QTY")
+        c.drawString(M + 91 * mm, y, "M²")
+        c.drawString(M + 108 * mm, y, "UNIT")
     c.drawRightString(PAGE_W - M, y, "TOTAL")
     y -= 2.5 * mm
     c.setStrokeColor(NAVY); c.setLineWidth(1)
@@ -170,11 +179,16 @@ def quote_pdf(quote_number: str, client_name: str, design_name: str,
         for line in client_lines:
             y -= 7 * mm
             c.setFillColor(INK); c.setFont("Helvetica", 7.8)
-            c.drawString(M, y, str(line.get("description", "Frame item"))[:25])
-            c.drawString(M + 45 * mm, y, f"{line.get('width_mm', 0)} × {line.get('height_mm', 0)}")
-            c.drawString(M + 80 * mm, y, str(line.get("qty", 1)))
-            c.drawRightString(M + 104 * mm, y, f"{line.get('m2', 0):,.2f}")
-            c.drawRightString(M + 132 * mm, y, ghs(line.get("unit_price", 0)))
+            c.drawString(M, y, str(line.get("description", "Frame item"))[:40])
+            if result.get("commercial_quote"):
+                c.drawString(M + 80 * mm, y, f"{line.get('quantity', 1):g}")
+                c.drawString(M + 98 * mm, y, str(line.get("unit") or "item")[:12])
+                c.drawRightString(M + 142 * mm, y, ghs(line.get("unit_price", 0)))
+            else:
+                c.drawString(M + 45 * mm, y, f"{line.get('width_mm', 0)} × {line.get('height_mm', 0)}")
+                c.drawString(M + 80 * mm, y, str(line.get("qty", 1)))
+                c.drawRightString(M + 104 * mm, y, f"{line.get('m2', 0):,.2f}")
+                c.drawRightString(M + 132 * mm, y, ghs(line.get("unit_price", 0)))
             c.drawRightString(PAGE_W - M, y, ghs(line.get("total", 0)))
             c.setStrokeColor(LINE); c.setLineWidth(0.4)
             c.line(M, y - 2.2 * mm, PAGE_W - M, y - 2.2 * mm)
@@ -184,8 +198,11 @@ def quote_pdf(quote_number: str, client_name: str, design_name: str,
         c.drawString(M, y, "Fabrication and installation")
         c.drawRightString(PAGE_W - M, y, ghs(result.get("grand_total", result["total"])))
         c.setFillColor(MUTED); c.setFont("Helvetica", 8.5)
-        c.drawString(M, y - 3.8 * mm,
-                     f"{result['area']} m² · bundled client quotation · {result['sections']} section(s)")
+        detail = (
+            "Bundled customer quotation · fabrication and installation to approved technical drawings"
+            if result.get("manual_quote")
+            else f"{result['area']} m² · bundled client quotation · {result['sections']} section(s)")
+        c.drawString(M, y - 3.8 * mm, detail)
         y -= 4.5 * mm
     c.setStrokeColor(LINE); c.setLineWidth(0.5)
     c.line(M, y - 1.5 * mm, PAGE_W - M, y - 1.5 * mm)
@@ -194,8 +211,17 @@ def quote_pdf(quote_number: str, client_name: str, design_name: str,
     y -= 10 * mm
     if client_lines:
         totals = [
-            ("Subtotal", result.get("client_subtotal", result.get("grand_total", result["total"]))),
+            ("Priced lines", result.get(
+                "priced_lines",
+                result.get("client_subtotal", result.get("grand_total", result["total"])))),
         ]
+        if result.get("service_charge_percent", 0) or result.get("service_charge_amount", 0):
+            totals.append((
+                f"Service charge ({result.get('service_charge_percent', 0):.0f}%)",
+                result.get("service_charge_amount", 0)))
+        totals.append((
+            "Subtotal",
+            result.get("client_subtotal", result.get("grand_total", result["total"]))))
         if result.get("discount_percent", 0):
             totals.append((f"Discount ({result['discount_percent']:.0f}%)", -result.get("discount_amount", 0)))
         totals.extend([
@@ -264,7 +290,15 @@ def quote_pdf(quote_number: str, client_name: str, design_name: str,
 
 
 def project_quote_summary_pdf(project: dict) -> bytes:
-    """Consolidated client-facing quote index for a multi-item project."""
+    """Consolidated client-facing quotation for all items in one project.
+
+    The first page is the commercial roll-up. Each following item page carries
+    a small elevation preview, identifying metadata and that item's amount so
+    the client can connect the quoted line to the drawing.
+    """
+    from reportlab.graphics import renderPDF
+    from .reports import any_elevation
+
     buf = BytesIO()
     c = Canvas(buf, pagesize=A4)
     margin = M
@@ -279,9 +313,10 @@ def project_quote_summary_pdf(project: dict) -> bytes:
         c.setFont("Helvetica", 9); c.setFillColor(colors.HexColor("#b9c6d4"))
         c.drawString(margin, PAGE_H - 22 * mm, "Glass & Aluminium Fabrication · Accra, Ghana")
         c.setFillColor(GOLD); c.setFont("Helvetica-Bold", 13)
-        c.drawRightString(PAGE_W - margin, PAGE_H - 16 * mm, "PROJECT QUOTE SUMMARY")
+        c.drawRightString(PAGE_W - margin, PAGE_H - 16 * mm, "PROJECT QUOTATION")
         c.setFillColor(colors.white); c.setFont("Helvetica", 10)
-        c.drawRightString(PAGE_W - margin, PAGE_H - 22 * mm, project.get("project_number", "—"))
+        c.drawRightString(PAGE_W - margin, PAGE_H - 22 * mm,
+                          project.get("project_quote_number") or project.get("project_number", "—"))
         y = PAGE_H - 47 * mm
 
     def footer():
@@ -295,10 +330,12 @@ def project_quote_summary_pdf(project: dict) -> bytes:
     c.setFillColor(MUTED); c.setFont("Helvetica", 8.5)
     c.drawString(margin, y, "Client")
     c.drawString(margin + 72 * mm, y, "Project / site")
+    c.drawRightString(PAGE_W - margin, y, "Quote date")
     y -= 5 * mm
     c.setFillColor(INK); c.setFont("Helvetica-Bold", 11)
     c.drawString(margin, y, _clip(project.get("client_name") or "Walk-in Client", 34))
     c.drawString(margin + 72 * mm, y, _clip(project.get("name"), 43))
+    c.drawRightString(PAGE_W - margin, y, datetime.now().strftime("%d %b %Y"))
     y -= 5 * mm
     c.setFillColor(MUTED); c.setFont("Helvetica", 8.5)
     c.drawString(margin + 72 * mm, y, _clip(project.get("location") or "—", 43))
@@ -306,35 +343,124 @@ def project_quote_summary_pdf(project: dict) -> bytes:
 
     c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 9)
     c.drawString(margin, y, "ITEM / PROFILE")
-    c.drawString(margin + 76 * mm, y, "REFERENCE")
-    c.drawString(margin + 125 * mm, y, "STATUS")
+    c.drawString(margin + 72 * mm, y, "SIZE")
+    c.drawString(margin + 112 * mm, y, "QTY")
     c.drawRightString(PAGE_W - margin, y, "TOTAL")
     y -= 2.5 * mm; c.setStrokeColor(NAVY); c.setLineWidth(1)
     c.line(margin, y, PAGE_W - margin, y)
     for item in project.get("items", []):
-        if y < 35 * mm:
+        if y < 42 * mm:
             footer(); c.showPage(); header()
             c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 9)
             c.drawString(margin, y, "ITEM / PROFILE (continued)")
             y -= 5 * mm
         y -= 7 * mm
+        design = item.get("design") or {}
         c.setFillColor(INK); c.setFont("Helvetica", 8.5)
-        c.drawString(margin, y, _clip(item.get("name"), 30))
-        c.drawString(margin + 76 * mm, y, _clip(item.get("ref") or "—", 20))
-        quotes = item.get("quotes") or []
-        status = quotes[-1].get("status", "Draft") if quotes else "Draft"
-        c.drawString(margin + 125 * mm, y, status)
+        c.drawString(margin, y, _clip(item.get("name"), 28))
+        c.drawString(margin + 72 * mm, y, f"{design.get('width', 0)} × {design.get('height', 0)} mm")
+        c.drawString(margin + 112 * mm, y, str(item.get("qty") or design.get("qty") or 1))
         c.drawRightString(PAGE_W - margin, y, ghs(item.get("total", 0)))
-        c.setStrokeColor(LINE); c.setLineWidth(.4); c.line(margin, y - 2.2 * mm, PAGE_W - margin, y - 2.2 * mm)
+        c.setFillColor(MUTED); c.setFont("Helvetica", 7.5)
+        c.drawString(margin, y - 3.7 * mm, _clip(
+            f"{item.get('ref') or '—'} · {design.get('system') or design.get('category') or '—'} · {item.get('location') or '—'}", 82))
+        c.setStrokeColor(LINE); c.setLineWidth(.4)
+        c.line(margin, y - 6.2 * mm, PAGE_W - margin, y - 6.2 * mm)
+        y -= 4 * mm
 
-    y -= 14 * mm
-    c.setFillColor(NAVY); c.rect(PAGE_W - margin - 78 * mm, y - 3 * mm, 78 * mm, 11 * mm, stroke=0, fill=1)
+    y -= 10 * mm
+    totals = [
+        ("Subtotal", project.get("client_subtotal", 0)),
+        (f"Discount ({project.get('effective_discount_percent', 0):g}%)", -project.get("discount_amount", 0)),
+        (f"GETF + NHIS ({project.get('effective_getf_nhis_percent', 0):g}%)", project.get("getf_nhis", 0)),
+        (f"VAT ({project.get('effective_vat_percent', 0):g}%)", project.get("vat", 0)),
+    ]
+    for label, amount in totals:
+        c.setFillColor(MUTED); c.setFont("Helvetica", 9)
+        c.drawString(PAGE_W - margin - 70 * mm, y, label)
+        c.setFillColor(INK); c.drawRightString(PAGE_W - margin, y, ghs(amount))
+        y -= 5.5 * mm
+    c.setFillColor(NAVY)
+    c.rect(PAGE_W - margin - 78 * mm, y - 3 * mm, 78 * mm, 11 * mm, stroke=0, fill=1)
     c.setFillColor(colors.white); c.setFont("Helvetica-Bold", 11)
     c.drawString(PAGE_W - margin - 73 * mm, y, "PROJECT TOTAL")
-    c.drawRightString(PAGE_W - margin - 3 * mm, y, ghs(project.get("total", 0)))
-    y -= 16 * mm
+    c.drawRightString(PAGE_W - margin - 3 * mm, y, ghs(project.get("client_grand_total", 0)))
+    y -= 15 * mm
+    deposit = project.get("deposit_percent", 80)
+    deposit_amount = project.get("client_grand_total", 0) * deposit / 100
     c.setFillColor(MUTED); c.setFont("Helvetica", 8.5)
-    c.drawString(margin, y, "Each item/profile may be issued as a separate quotation. This page is the consolidated project summary.")
+    c.drawString(PAGE_W - margin - 70 * mm, y, f"Deposit ({deposit:.0f}%)")
+    c.setFillColor(INK); c.drawRightString(PAGE_W - margin, y, ghs(deposit_amount))
+    y -= 5.5 * mm
+    c.setFillColor(MUTED); c.setFont("Helvetica", 8.5)
+    c.drawString(PAGE_W - margin - 70 * mm, y, f"Balance ({100 - deposit:.0f}%)")
+    c.setFillColor(INK); c.drawRightString(PAGE_W - margin, y,
+                                            ghs(project.get("client_grand_total", 0) - deposit_amount))
+    y -= 12 * mm
+    c.setFillColor(INK); c.setFont("Helvetica-Bold", 9.5)
+    c.drawString(margin, y, "Project items and drawings")
+    y -= 5 * mm
+    c.setFillColor(MUTED); c.setFont("Helvetica", 8.5)
+    c.drawString(margin, y, "Each following page shows a small drawing and the quoted item it represents.")
     c.drawString(margin, y - 5 * mm, "Final dimensions remain subject to site verification before fabrication.")
-    footer(); c.showPage(); c.save()
+    footer(); c.showPage()
+
+    # Item detail pages: customer-facing visual previews, not factory cut lists.
+    for index, item in enumerate(project.get("items", []), start=1):
+        header()
+        design = item.get("design") or {}
+        result = item.get("result") or {}
+        c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 12)
+        c.drawString(margin, y, f"ITEM {index} OF {len(project.get('items', []))}")
+        y -= 8 * mm
+        c.setFillColor(INK); c.setFont("Helvetica-Bold", 14)
+        c.drawString(margin, y, _clip(item.get("name"), 55))
+        y -= 6 * mm
+        c.setFillColor(MUTED); c.setFont("Helvetica", 9)
+        c.drawString(margin, y, _clip(
+            f"Ref: {item.get('ref') or '—'} · {design.get('system') or design.get('category') or '—'} · "
+            f"{design.get('width', 0)} × {design.get('height', 0)} mm · Qty {item.get('qty') or design.get('qty') or 1}", 105))
+        y -= 9 * mm
+
+        try:
+            drawing = any_elevation(design, width_pt=78 * mm, max_h=42 * mm)
+            box_x, box_top = margin, y
+            box_w, box_h = 82 * mm, 66 * mm
+            c.setStrokeColor(LINE); c.setFillColor(colors.HexColor("#f7fafc"))
+            c.roundRect(box_x, box_top - box_h, box_w, box_h, 3 * mm, stroke=1, fill=1)
+            draw_x = box_x + (box_w - drawing.width) / 2
+            draw_y = box_top - 4 * mm - drawing.height
+            renderPDF.draw(drawing, c, draw_x, draw_y)
+        except Exception:
+            c.setFillColor(MUTED); c.setFont("Helvetica-Oblique", 9)
+            c.drawString(margin + 8 * mm, y - 30 * mm, "Drawing preview unavailable")
+
+        info_x = margin + 92 * mm
+        info_y = y - 5 * mm
+        for label, value in (
+            ("Project location", project.get("location") or "—"),
+            ("Item location", item.get("location") or "—"),
+            ("System", design.get("system") or design.get("category") or "—"),
+            ("Dimensions", f"{design.get('width', 0)} × {design.get('height', 0)} mm"),
+            ("Quantity", str(item.get("qty") or design.get("qty") or 1)),
+        ):
+            c.setFillColor(MUTED); c.setFont("Helvetica", 8.5)
+            c.drawString(info_x, info_y, label)
+            c.setFillColor(INK); c.setFont("Helvetica-Bold", 9)
+            c.drawString(info_x, info_y - 4.2 * mm, _clip(value, 34))
+            info_y -= 13 * mm
+
+        c.setStrokeColor(LINE); c.line(margin, y - 73 * mm, PAGE_W - margin, y - 73 * mm)
+        total_y = y - 83 * mm
+        c.setFillColor(MUTED); c.setFont("Helvetica", 9)
+        c.drawString(PAGE_W - margin - 70 * mm, total_y, "Quoted item total")
+        c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 13)
+        c.drawRightString(PAGE_W - margin, total_y,
+                          ghs(item.get("total", result.get("client_grand_total", 0))))
+        c.setFillColor(MUTED); c.setFont("Helvetica", 8.5)
+        c.drawString(margin, total_y - 10 * mm,
+                     "The drawing is a client reference image. Fabrication dimensions are issued separately in the production documents.")
+        footer(); c.showPage()
+
+    c.save()
     return buf.getvalue()

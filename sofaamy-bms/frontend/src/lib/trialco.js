@@ -14,7 +14,7 @@ export const TRIALCO_FORMULAS = {
   leafProfile: 'trialco_leaf',
   netProfile: 'trialco_net',
   interlockProfile: 'trialco_interlock',
-  netQtyPerBay: 2,
+  netQtyPerBay: 1,
   interlockQtyPerBay: 2,
   glassQtyPerBay: 2,
 }

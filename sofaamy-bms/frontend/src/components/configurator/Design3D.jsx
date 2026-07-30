@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Line, OrbitControls, Text } from '@react-three/drei'
+import { DoubleSide } from 'three'
 import { FRAMES, GLASS } from '../../lib/products.js'
 import { frameGlassByCode } from '../../lib/frameCatalog.js'
 import './configurator.css'
@@ -40,6 +41,49 @@ function Glass({ b, tint }) {
       <meshPhysicalMaterial color={tint} transparent opacity={0.38}
         metalness={0.2} roughness={0.08} transmission={0.05} />
     </mesh>
+  )
+}
+
+function NetScreen({ panel, frameColor, openAmount }) {
+  const amount = Math.max(0, Math.min(1, openAmount))
+  if (amount <= 0.01) return null
+
+  const w = Math.max(panel.width - SASH_FACE * 2, 80)
+  const h = Math.max(panel.height - SASH_FACE * 2 - 10, 80)
+  const border = Math.min(22, Math.max(12, SASH_FACE * 0.45))
+  const screen = '#5f7778'
+  const meshOpacity = 0.08 + amount * 0.2
+  const lineOpacity = 0.22 + amount * 0.35
+  const lineCount = 7
+
+  return (
+    <group position={[M(panel.cx), M(panel.cy), M(-28)]}>
+      <mesh position={[0, 0, M(-2)]} renderOrder={4}>
+        <planeGeometry args={[M(w - border * 2), M(h - border * 2)]} />
+        <meshBasicMaterial color={screen} transparent opacity={meshOpacity} side={DoubleSide} depthWrite={false} />
+      </mesh>
+      {[
+        [0, h / 2 - border / 2, w, border],
+        [0, -h / 2 + border / 2, w, border],
+        [-w / 2 + border / 2, 0, border, h],
+        [w / 2 - border / 2, 0, border, h],
+      ].map(([x, y, bw, bh], i) => (
+        <mesh key={`net-border-${i}`} position={[M(x), M(y), 0]}>
+          <boxGeometry args={[M(bw), M(bh), M(10)]} />
+          <meshStandardMaterial color={frameColor} metalness={0.55} roughness={0.35} />
+        </mesh>
+      ))}
+      {Array.from({ length:lineCount }).map((_, i) => {
+        const x = -M((w - border * 2) / 2) + M((w - border * 2) * (i + 1) / (lineCount + 1))
+        return <Line key={`net-v-${i}`} points={[[x, -M(h - border * 2) / 2, M(4)], [x, M(h - border * 2) / 2, M(4)]]}
+          color={screen} lineWidth={0.6} transparent opacity={lineOpacity} depthTest={false} />
+      })}
+      {Array.from({ length:lineCount }).map((_, i) => {
+        const y = -M((h - border * 2) / 2) + M((h - border * 2) * (i + 1) / (lineCount + 1))
+        return <Line key={`net-h-${i}`} points={[[-M(w - border * 2) / 2, y, M(4)], [M(w - border * 2) / 2, y, M(4)]]}
+          color={screen} lineWidth={0.6} transparent opacity={lineOpacity} depthTest={false} />
+      })}
+    </group>
   )
 }
 
@@ -252,7 +296,7 @@ function buildGeometry(d) {
   return { members, fixedGlass, panels }
 }
 
-function AnimatedPanel({ panel, frameColor, openAmount, fabrication }) {
+function AnimatedPanel({ panel, frameColor, openAmount, fabrication, slideMoving, slideStationary, slideTargetCx }) {
   const ref = useRef(null)
   const base = useMemo(() => ({ x:M(panel.cx), y:M(panel.cy), z:M(panel.z) }), [panel])
 
@@ -263,9 +307,18 @@ function AnimatedPanel({ panel, frameColor, openAmount, fabrication }) {
     const opening = panel.opening
     let x = base.x, y = base.y, z = base.z, rx = 0, ry = 0
 
-    if (opening === 'sliding') {
-      // The lead panel moves behind its neighbour; for three panels the last
-      // panel opens the other way to make the motion visually legible.
+    if (opening === 'sliding' && slideMoving && slideTargetCx != null) {
+      // A two-leaf slider opens on one side: one leaf stays in place while
+      // the other travels across to overlap it. This leaves the net visible
+      // on the side vacated by the moving leaf.
+      x += M(slideTargetCx - panel.cx) * ease
+      z = base.z * (1 - ease) + M(22) * ease
+    } else if (opening === 'sliding' && slideStationary) {
+      // Keep the standing leaf behind the moving leaf once the leaves meet.
+      z = base.z * (1 - ease) + M(-18) * ease
+    } else if (opening === 'sliding') {
+      // Preserve the catalogue fallback for single- and three-panel sliders;
+      // the confirmed two-leaf behavior is handled by the branches above.
       const direction = panel.slideIndex === 0 ? -1 : panel.slideIndex === panel.slideCount - 1 ? 1 : 0
       x += M(direction * panel.width * 0.44 * ease)
     } else if (opening === 'awning') {
@@ -350,7 +403,7 @@ function CameraRig({ mode, design, wall }) {
   return <OrbitControls ref={controls} enableDamping dampingFactor={0.12} enabled={mode === 'orbit'} />
 }
 
-function VisualizerControls({ wall, settings, setSetting, hasOpening, maximized, onMaximize }) {
+function VisualizerControls({ wall, settings, setSetting, hasOpening, hasSliding, maximized, onMaximize }) {
   return (
     <div className="viz-controls">
       <div className="viz-control-group">
@@ -380,6 +433,15 @@ function VisualizerControls({ wall, settings, setSetting, hasOpening, maximized,
         <input type="range" min="0" max="1" step="0.01" value={settings.openAmount} onChange={e => setSetting('openAmount', +e.target.value)} />
         <span>{Math.round(settings.openAmount * 100)}%</span>
       </div>}
+      {hasSliding && <div className="viz-control-group">
+        <span className="viz-control-label">Slide</span>
+        <button className={settings.slideDirection === 'left-to-right' ? 'on' : ''}
+          onClick={() => setSetting('slideDirection', 'left-to-right')}
+          title="Move the left leaf across to the right leaf">L → R</button>
+        <button className={settings.slideDirection === 'right-to-left' ? 'on' : ''}
+          onClick={() => setSetting('slideDirection', 'right-to-left')}
+          title="Move the right leaf across to the left leaf">R → L</button>
+      </div>}
       <div className="viz-control-group viz-display-action">
         <button onClick={onMaximize}>{maximized ? 'Minimize' : 'Maximize'}</button>
       </div>
@@ -398,12 +460,17 @@ export default function Design3D({ design, wall = false, onDesignPatch, fabricat
     floorColor: design.floorColor || '#cfd6dc',
     frameColor: defaultFrame,
     openAmount: 0,
+    slideDirection: design.visualSlideDirection || 'left-to-right',
     fabrication: fabricationDefault,
   })
 
   useEffect(() => {
     setSettings(s => ({ ...s, frameColor:design.customFrameColor || (FRAMES[design.frame] || FRAMES.mill).color }))
   }, [design.customFrameColor, design.frame])
+
+  useEffect(() => {
+    if (design.visualSlideDirection) setSettings(s => ({ ...s, slideDirection:design.visualSlideDirection }))
+  }, [design.visualSlideDirection])
 
   useEffect(() => {
     const onFullscreen = () => setMaximized(document.fullscreenElement === shellRef.current)
@@ -427,8 +494,15 @@ export default function Design3D({ design, wall = false, onDesignPatch, fabricat
       onDesignPatch(key === 'view' ? { visualView:value } : { [key]:value })
     }
     if (onDesignPatch && key === 'frameColor') onDesignPatch({ customFrameColor:value })
+    if (onDesignPatch && key === 'slideDirection') onDesignPatch({ visualSlideDirection:value })
   }
   const hasOpening = geometry.panels.length > 0
+  const slidingPanels = geometry.panels.filter(panel => panel.opening === 'sliding').sort((a, b) => a.cx - b.cx)
+  const hasSliding = slidingPanels.length > 0
+  const movingSlideIndex = settings.slideDirection === 'right-to-left' ? slidingPanels.length - 1 : 0
+  const stationarySlideIndex = slidingPanels.length === 2
+    ? (movingSlideIndex === 0 ? 1 : 0)
+    : null
   const s = Math.max(design.width, design.height) / 1000
 
   return (
@@ -443,12 +517,20 @@ export default function Design3D({ design, wall = false, onDesignPatch, fabricat
           {wall && <Wall d={design} wallColor={settings.wallColor} floorColor={settings.floorColor} />}
           {geometry.members.map((b, i) => <Member key={i} b={b} color={settings.frameColor} />)}
           {geometry.fixedGlass.map((g, i) => <Glass key={i} b={g} tint={g.tint} />)}
-          {geometry.panels.map((p, i) => <AnimatedPanel key={i} panel={p} frameColor={settings.frameColor} openAmount={settings.openAmount} fabrication={settings.fabrication} />)}
+          {stationarySlideIndex != null && <NetScreen panel={slidingPanels[movingSlideIndex]} frameColor={settings.frameColor} openAmount={settings.openAmount} />}
+          {geometry.panels.map((p, i) => {
+            const slideIndex = slidingPanels.indexOf(p)
+            const isTwoLeafSlider = slideIndex >= 0 && slidingPanels.length === 2
+            return <AnimatedPanel key={i} panel={p} frameColor={settings.frameColor} openAmount={settings.openAmount} fabrication={settings.fabrication}
+              slideMoving={isTwoLeafSlider && slideIndex === movingSlideIndex}
+              slideStationary={isTwoLeafSlider && slideIndex === stationarySlideIndex}
+              slideTargetCx={isTwoLeafSlider ? slidingPanels[stationarySlideIndex]?.cx : null} />
+          })}
           {settings.fabrication && <FabricationDimensions d={design} geometry={geometry} />}
         </group>
         <CameraRig mode={settings.view} design={design} wall={wall} />
       </Canvas>
-      <VisualizerControls wall={wall} settings={settings} setSetting={setSetting} hasOpening={hasOpening} maximized={maximized} onMaximize={toggleMaximize} />
+      <VisualizerControls wall={wall} settings={settings} setSetting={setSetting} hasOpening={hasOpening} hasSliding={hasSliding} maximized={maximized} onMaximize={toggleMaximize} />
       <div className="viz-badge">{wall ? 'Client wall preview' : 'Interactive 3D model'} · {settings.view === 'inside' ? 'Inside view' : settings.view[0].toUpperCase() + settings.view.slice(1)}</div>
     </div>
   )

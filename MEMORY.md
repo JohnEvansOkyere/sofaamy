@@ -9,6 +9,11 @@ Read MEMORY.md at the start of every session before doing anything. Never contra
 
 ---
 
+## 2026-07-29, Phase 1 revision integrity uses one approved E/Q/R chain
+**What was decided:** The first production-safety implementation makes the latest approved extraction the only current material/commercial basis. Quotation acceptance, drawing work, drawing approval, factory release, and project stock issue must stay aligned to that extraction. Approved drawing files are immutable, releases freeze an E/Q/R/file manifest, and approving a newer extraction supersedes older downstream release paths.
+**Why:** The technical workflow gap analysis identifies silent revision mixing as the highest operational risk. A visible workflow is not production-safe if an old extraction can re-enter reports, inventory, drawings, or factory work.
+**What was rejected:** Adding more workflow screens before enforcing revision integrity; continuing to issue project stock from a fresh configurator calculation after an approved extraction exists; overwriting approved drawing files or silently switching a released pack to newer records.
+
 ## 2026-07-07, Competitive positioning vs EvA Cloud
 **What was decided:** Position the Sofaamy build as *tailored + owned + local* against EvA Cloud (off-the-shelf Indian fenestration ERP). Win themes: tailored not adapted, Ghana-native (WhatsApp/GHS/local support), Sofaamy owns it (no recurring foreign SaaS rent), feature parity where it counts, full product range.
 **Why:** Sofaamy is impressed by EvA and leaning toward buying it; we can't out-feature a mature product on day one, so we out-fit it and match parity on what they value.

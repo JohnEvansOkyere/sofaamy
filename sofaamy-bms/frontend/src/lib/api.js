@@ -40,21 +40,33 @@ export async function createJobFromDesign(clientName, design) {
 }
 
 async function downloadBlob(res, fallbackName) {
+  const file = await responseFile(res, fallbackName)
+  const a = document.createElement('a')
+  a.href = file.url; a.download = file.name
+  document.body.appendChild(a); a.click(); a.remove()
+  URL.revokeObjectURL(file.url)
+  return file.name
+}
+
+async function responseFile(res, fallbackName) {
   const cd = res.headers.get('Content-Disposition') || ''
   const name = /filename="([^"]+)"/.exec(cd)?.[1] || fallbackName
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url; a.download = name
-  document.body.appendChild(a); a.click(); a.remove()
-  URL.revokeObjectURL(url)
-  return name
+  return { name, url }
 }
 
 // kind: 'cutting-list' | 'work-order' | 'boq' → downloads the PDF
 export async function downloadReport(kind, clientName, design) {
   const res = await post(`/api/reports/${kind}`, { client_name: clientName, project_id: design.projectId || null, design })
   return downloadBlob(res, `${kind}.pdf`)
+}
+
+// Generate a temporary browser URL for the in-app PDF viewer.
+// The caller owns the URL and must revoke it when the viewer closes.
+export async function previewReport(kind, clientName, design) {
+  const res = await post(`/api/reports/${kind}`, { client_name: clientName, project_id: design.projectId || null, design })
+  return responseFile(res, `${kind}.pdf`)
 }
 
 // Persist a design so it can be reopened later (saved templates)
@@ -86,10 +98,67 @@ export async function getProject(projectId) {
   return res.json()
 }
 
+export const getProjectWorkflow = (projectId) =>
+  getJSON(`/api/projects/${projectId}/workflow`)
+
+export const updateProjectWorkflow = (projectId, data) =>
+  post(`/api/projects/${projectId}/workflow`, data).then(r => r.json())
+
+export const createExtraction = (projectId, data) =>
+  post(`/api/projects/${projectId}/extractions`, data).then(r => r.json())
+
+export const generateExtractionFromDesign = (projectId, data = {}) =>
+  post(`/api/projects/${projectId}/extractions/from-design`, data).then(r => r.json())
+
+export const approveExtraction = (extractionId, approvedBy = 'Technical Supervisor') =>
+  post(`/api/extractions/${extractionId}/approve`, { approved_by: approvedBy }).then(r => r.json())
+
+export const createQuoteFromExtraction = (projectId, data) =>
+  post(`/api/projects/${projectId}/quotes/from-extraction`, data).then(r => r.json())
+
+export const createDrawingTask = (projectId, data) =>
+  post(`/api/projects/${projectId}/drawing-tasks`, data).then(r => r.json())
+
+export const approveExistingConfiguratorDesign = (projectId, data = {}) =>
+  post(`/api/projects/${projectId}/drawing-tasks/use-existing-design`, {
+    approved_by: data.approved_by || 'Technical Supervisor',
+    notes: data.notes || 'Existing saved configurator design accepted without changes.',
+  }).then(r => r.json())
+
+export const createDrawingRevision = (taskId, data) =>
+  post(`/api/drawing-tasks/${taskId}/revisions`, data).then(r => r.json())
+
+export async function uploadDrawingFile(revisionId, kind, file) {
+  const res = await fetch(
+    `${BASE}/api/drawing-revisions/${revisionId}/files/${kind}?filename=${encodeURIComponent(file.name)}`,
+    { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file },
+  )
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
+export const approveDrawingRevision = (revisionId, approvedBy = 'Technical Supervisor') =>
+  post(`/api/drawing-revisions/${revisionId}/approve`, { approved_by: approvedBy }).then(r => r.json())
+
+export const releaseProjectToFactory = (projectId, drawingRevisionId, data = {}) =>
+  post(`/api/projects/${projectId}/production-releases`, {
+    drawing_revision_id: drawingRevisionId,
+    released_by: data.released_by || 'Technical Supervisor',
+    notes: data.notes || '',
+  }).then(r => r.json())
+
+export const drawingFileUrl = (downloadUrl) => `${BASE}${downloadUrl}`
+
 export async function downloadProjectQuoteSummary(projectId) {
   const res = await fetch(`${BASE}/api/projects/${projectId}/quote-summary/pdf`)
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
   return downloadBlob(res, `project-quote-summary-${projectId}.pdf`)
+}
+
+export async function downloadProjectMaterialBOQ(projectId) {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/material-boq/pdf`)
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return downloadBlob(res, `project-material-boq-${projectId}.pdf`)
 }
 
 // Public client view of a shared design (no auth — signed token)
@@ -106,6 +175,7 @@ async function getJSON(path) {
 }
 
 export const listJobs = () => getJSON('/api/jobs')
+export const listProductionJobs = () => getJSON('/api/production/jobs')
 export const listQuotes = () => getJSON('/api/quotes')
 export const getJob = (jobNumber) => getJSON(`/api/jobs/${jobNumber}`)
 export const getDashboard = () => getJSON('/api/dashboard')
@@ -128,4 +198,10 @@ export async function downloadDeliveryNote(jobNumber) {
   const res = await fetch(`${BASE}/api/jobs/${jobNumber}/delivery-note`)
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
   return downloadBlob(res, `delivery-note-${jobNumber}.pdf`)
+}
+
+export async function downloadQuotationPdf(quoteNumber) {
+  const res = await fetch(`${BASE}/api/quotes/${quoteNumber}/pdf`)
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return downloadBlob(res, `${quoteNumber}.pdf`)
 }

@@ -1,9 +1,12 @@
 """SQLite database setup (SQLAlchemy 2.0)."""
+import os
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
 # SQLite file lives next to the backend package
-SQLALCHEMY_DATABASE_URL = "sqlite:///./sofaamy.db"
+SQLALCHEMY_DATABASE_URL = os.environ.get(
+    "SOFAAMY_DATABASE_URL", "sqlite:///./sofaamy.db")
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,

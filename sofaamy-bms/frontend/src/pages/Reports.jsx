@@ -1,16 +1,15 @@
 import { useEffect, useState } from 'react'
-import { PageHead, Card, Stat, Badge } from '../components/ui.jsx'
-import { AreaChart, Donut, BarList } from '../components/charts.jsx'
-import { REVENUE_TREND, PIPELINE_MIX, PRODUCT_DEMAND } from '../data/seed.js'
+import { Link } from 'react-router-dom'
+import { PageHead, Card, Badge } from '../components/ui.jsx'
 import { REPORT_GROUPS, REPORT_STATUS, reportKind } from '../lib/reports.js'
-import { listDesigns, downloadReport } from '../lib/api.js'
-import { IconWallet, IconTrend, IconChart, IconFactory, IconDownload } from '../components/icons.jsx'
+import { listDesigns, listProjects, downloadReport, downloadProjectQuoteSummary, downloadProjectMaterialBOQ } from '../lib/api.js'
+import { IconChart, IconDownload } from '../components/icons.jsx'
 import CutPlan from '../components/configurator/CutPlan.jsx'
 import '../components/configurator/configurator.css'
 
-function ReportRow({ r, project, busy, onDownload }) {
+function ReportRow({ r, item, busy, onDownload }) {
   const st = REPORT_STATUS[r.status]
-  const kind = project ? reportKind(r, project.design?.category || 'frame') : null
+  const kind = item ? reportKind(r, item.design?.category || 'frame') : null
   return (
     <div className="flex between items-center" style={{ padding:'8px 0', borderBottom:'1px solid var(--line-soft)', gap:10 }}>
       <div style={{ minWidth:0 }}>
@@ -29,20 +28,68 @@ function ReportRow({ r, project, busy, onDownload }) {
 
 export default function Reports() {
   const [designs, setDesigns] = useState([])
-  const [selId, setSelId] = useState('')
+  const [projects, setProjects] = useState([])
+  const [selectedProjectId, setSelectedProjectId] = useState('')
+  const [selectedItemId, setSelectedItemId] = useState('')
   const [busy, setBusy] = useState(null)
   const [msg, setMsg] = useState('')
   const [offline, setOffline] = useState(false)
 
-  useEffect(() => { listDesigns().then(setDesigns).catch(() => setOffline(true)) }, [])
+  useEffect(() => {
+    Promise.all([listProjects(), listDesigns()])
+      .then(([projectRows, designRows]) => { setProjects(projectRows); setDesigns(designRows) })
+      .catch(() => setOffline(true))
+  }, [])
 
-  const project = designs.find(d => String(d.id) === selId)
+  const selectedProject = projects.find(p => String(p.id) === String(selectedProjectId))
+  const projectItems = selectedProject
+    ? designs.filter(d => String(d.project_id || '') === String(selectedProject.id))
+    : designs
+  const selectedItem = designs.find(d => String(d.id) === String(selectedItemId))
+
+  function onProjectChange(value) {
+    setSelectedProjectId(value)
+    setSelectedItemId('')
+    setMsg('')
+  }
+
+  function onItemChange(value) {
+    setSelectedItemId(value)
+    setMsg('')
+  }
+
+  async function onDownloadProjectQuote() {
+    if (!selectedProject) return
+    setBusy('project-quote'); setMsg('')
+    try {
+      await downloadProjectQuoteSummary(selectedProject.id)
+      setMsg(`📄 Project quotation — ${selectedProject.project_number} downloaded`)
+    } catch (e) {
+      setMsg(`⚠️ ${String(e.message || e)}`)
+    }
+    setBusy(null)
+  }
+
+  async function onDownloadProjectMaterialBOQ() {
+    if (!selectedProject) return
+    setBusy('project-material-boq'); setMsg('')
+    try {
+      await downloadProjectMaterialBOQ(selectedProject.id)
+      setMsg(`📦 Project material pack — ${selectedProject.project_number} downloaded`)
+    } catch (e) {
+      setMsg(`⚠️ ${String(e.message || e)}`)
+    }
+    setBusy(null)
+  }
 
   async function onDownload(kind, name) {
     setBusy(name); setMsg('')
     try {
-      await downloadReport(kind, project.client_name || '', project.design)
-      setMsg(`📄 ${name} — ${project.ref || project.name} downloaded`)
+      await downloadReport(kind, selectedItem.client_name || '', {
+        ...selectedItem.design,
+        projectId: selectedItem.project_id || null,
+      })
+      setMsg(`📄 ${name} — ${selectedItem.ref || selectedItem.name} downloaded`)
     } catch (e) {
       setMsg(`⚠️ ${String(e.message || e)}`)
     }
@@ -52,62 +99,74 @@ export default function Reports() {
   return (
     <>
       <PageHead title="Reports" subtitle="Every document the system produces — from quotation to factory floor to handover.">
+        <Link to="/insights" className="btn btn-ghost"><IconChart/> Insights & KPIs</Link>
         {offline
           ? <Badge tone="orange">backend offline — start the API to download documents</Badge>
-          : <select className="rep-select" value={selId} onChange={e => { setSelId(e.target.value); setMsg('') }}>
-              <option value="">Select a project to download its documents…</option>
-              {designs.map(d => (
-                <option key={d.id} value={d.id}>
-                  {(d.ref || d.name)} — {d.name}{d.client_name ? ` · ${d.client_name}` : ''}
-                </option>
-              ))}
-            </select>}
+          : <>
+              <select className="rep-select" value={selectedProjectId} onChange={e => onProjectChange(e.target.value)}>
+                <option value="">Select a full project…</option>
+                {projects.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.project_number} · {p.name} · {p.item_count} item{p.item_count === 1 ? '' : 's'}
+                  </option>
+                ))}
+              </select>
+              <select className="rep-select" value={selectedItemId} onChange={e => onItemChange(e.target.value)}>
+                <option value="">Select an individual item…</option>
+                {projectItems.map(d => (
+                  <option key={d.id} value={d.id}>
+                    {(d.ref || d.name)} — {d.name}{d.client_name ? ` · ${d.client_name}` : ''}
+                  </option>
+                ))}
+              </select>
+            </>}
       </PageHead>
       {msg && <div className="muted mb" style={{ fontSize:12.5 }}>{msg}</div>}
+
+      {selectedProject && <Card title="Full project" sub="Project-level documents include every saved item under this project.">
+        <div className="flex between items-center" style={{ gap:12 }}>
+          <div>
+            <div className="t-strong">{selectedProject.name}</div>
+            <div className="muted" style={{ fontSize:11.5 }}>
+              {selectedProject.project_number} · {selectedProject.client_name || 'Walk-in Client'} · {selectedProject.item_count} item{selectedProject.item_count === 1 ? '' : 's'}
+            </div>
+          </div>
+          <div className="flex gap-sm wrap" style={{ justifyContent:'flex-end' }}>
+            <button className="btn btn-ghost btn-sm" disabled={
+              busy === 'project-material-boq'
+              || (!selectedProject.item_count && !selectedProject.approved_extraction_revision)}
+              onClick={onDownloadProjectMaterialBOQ}>
+              <IconDownload style={{ width:13, height:13 }}/>{busy === 'project-material-boq'
+                ? 'Preparing…'
+                : selectedProject.approved_extraction_revision
+                  ? `Approved E${selectedProject.approved_extraction_revision} material report`
+                  : 'All material lists PDF'}
+            </button>
+            <button className="btn btn-primary btn-sm" disabled={busy === 'project-quote' || !selectedProject.item_count}
+              onClick={onDownloadProjectQuote}>
+              <IconDownload style={{ width:13, height:13 }}/>{busy === 'project-quote' ? 'Preparing…' : 'Project quotation PDF'}
+            </button>
+          </div>
+        </div>
+      </Card>}
 
       <div className="grid g-2 mb">
         {REPORT_GROUPS.map(g => (
           <Card key={g.id} title={g.title} sub={g.sub}>
             {g.reports.map((r, i) => (
-              <ReportRow key={i} r={r} project={project} busy={busy} onDownload={onDownload} />
+              <ReportRow key={i} r={r} item={selectedItem} busy={busy} onDownload={onDownload} />
             ))}
           </Card>
         ))}
       </div>
 
-      {project && ['frame', 'curtainwall'].includes(project.design?.category) && (
+      {selectedItem && ['frame', 'curtainwall'].includes(selectedItem.design?.category) && (
         <div className="reports-production-preview">
           <div className="section-title">Production workbench</div>
           <div className="muted reports-production-help">Select a saved item above to review its profile breakdown, glass sizes and optimized nesting. This belongs to the factory workflow, not the design canvas.</div>
-          <CutPlan design={project.design} />
+          <CutPlan design={selectedItem.design} />
         </div>
       )}
-
-      <div className="section-title">Management Analytics</div>
-
-      <div className="grid g-4 mb">
-        <Stat label="Total Revenue" value="₵486,200" trend="+18.4%" dir="up" tone="green" icon={<IconWallet/>} />
-        <Stat label="Jobs Completed" value="41" trend="+7" dir="up" tone="blue" icon={<IconFactory/>} />
-        <Stat label="Gross Margin" value="21.4%" trend="+1.1%" dir="up" tone="purple" icon={<IconTrend/>} />
-        <Stat label="Material Waste" value="8.2%" trend="↓ 1.5%" dir="up" tone="orange" icon={<IconChart/>} />
-      </div>
-
-      <div className="grid mb" style={{ gridTemplateColumns:'1.6fr 1fr' }}>
-        <Card title="Revenue" sub="Weekly (₵ thousands)"><AreaChart data={REVENUE_TREND} color="#1E8449" /></Card>
-        <Card title="Work in Progress" sub="Jobs by stage"><Donut data={PIPELINE_MIX} /></Card>
-      </div>
-
-      <div className="grid g-2">
-        <Card title="Revenue by Product" sub="Share of orders"><BarList data={PRODUCT_DEMAND} color="#2471A3" /></Card>
-        <Card title="Team Performance" sub="Jobs handled this month">
-          <BarList data={[
-            { label:'Kwame Mensah (Supervisor)', value:12 },
-            { label:'Yaa Boateng (Supervisor)', value:9 },
-            { label:'Kofi Adjei (Field Rep)', value:14 },
-            { label:'Abena Sarpong (Field Rep)', value:11 },
-          ]} color="#6C3483" />
-        </Card>
-      </div>
     </>
   )
 }

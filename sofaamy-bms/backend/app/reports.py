@@ -131,12 +131,221 @@ def _trialco_material_table(result):
         ])
     rows.extend([
         ["", "", "", "", "Material cost", ghs(result.get("material_cost", 0) or 0)],
-        ["", "", "", "", f"Installation ({result.get('installation_percent', 30)}%)", ghs(result.get("installation_cost", 0) or 0)],
-        ["", "", "", "", "Total internal cost", ghs(result.get("total_material_cost", 0) or 0)],
+        ["", "", "", "", f"Service charge ({result.get('service_charge_percent', 0)}%)", ghs(result.get("service_charge_amount", 0) or 0)],
+        ["", "", "", "", "Material + service subtotal", ghs(result.get("total_material_cost", 0) or 0)],
     ])
     table = Table(rows, colWidths=[43 * mm, 29 * mm, 18 * mm, 22 * mm, 29 * mm, 31 * mm], repeatRows=1)
     table.setStyle(BASE_STYLE)
     return table
+
+
+def _approved_extraction_table(rows: list[dict]):
+    """Material and price rows from the latest approved extraction revision."""
+    table_rows = [["Material", "Code", "Category", "Qty", "Unit price", "Total"]]
+    total = 0.0
+    for item in rows:
+        quantity = float(item.get("quantity", 0) or 0)
+        unit_price = float(item.get("unit_price", 0) or 0)
+        line_total = float(
+            item.get("total", quantity * unit_price) or 0)
+        total += line_total
+        table_rows.append([
+            _cell(item.get("description") or item.get("material") or "—"),
+            _cell(item.get("code") or "—"),
+            _cell(item.get("category") or "Material"),
+            _cell(f"{quantity:g} {item.get('unit') or ''}".strip()),
+            _cell(ghs(unit_price)),
+            _cell(ghs(line_total)),
+        ])
+    table_rows.append(["", "", "", "", "Approved material total", ghs(total)])
+    table = Table(
+        table_rows,
+        colWidths=[48 * mm, 25 * mm, 25 * mm, 23 * mm, 28 * mm, 31 * mm],
+        repeatRows=1)
+    table.setStyle(BASE_STYLE)
+    return table
+
+
+def project_material_boq_pdf(project: dict) -> bytes:
+    """Internal material pack for every saved item in one project.
+
+    Item sections retain traceability. Only coded material rows produced by a
+    confirmed item recipe are merged into the final purchase summary; generic
+    systems remain visible as working estimates until their fabrication rules
+    are confirmed.
+    """
+    flow = []
+    items = project.get("items") or []
+    consolidated = {}
+    exact_material_total = 0.0
+    working_estimate_total = 0.0
+
+    flow.append(Paragraph("Project information", H2))
+    meta = [
+        ["Project", project.get("name") or "—", "Project number", project.get("project_number") or "—"],
+        ["Client", project.get("client_name") or "Walk-in Client", "Location", project.get("location") or "—"],
+        ["Items", str(len(items)), "Date", f"{datetime.now():%d %b %Y}"],
+    ]
+    t = Table([[_cell(v) for v in row] for row in meta], colWidths=[27 * mm, 65 * mm, 31 * mm, 57 * mm])
+    t.setStyle(BASE_STYLE)
+    flow.append(t)
+    flow.append(Paragraph(
+        "This is an INTERNAL production and purchasing document. Each item keeps its own system recipe and quantity. "
+        "The final purchase summary merges only matching coded materials and units.", NOTE))
+
+    approved_extraction = project.get("approved_extraction")
+    if approved_extraction:
+        rows = approved_extraction.get("items") or []
+        flow.append(Paragraph(
+            f"Approved extraction E{approved_extraction.get('revision')} — "
+            f"{approved_extraction.get('method', 'manual').title()}", H2))
+        flow.append(_approved_extraction_table(rows))
+        if approved_extraction.get("pricing_source") == "approved_quotation":
+            service_charge_percent = float(
+                approved_extraction.get("service_charge_percent", 0) or 0)
+            pricing_rows = [
+                ["Approved quotation", approved_extraction.get("quotation_number") or "—"],
+                ["Priced material total", ghs(approved_extraction.get("subtotal", 0) or 0)],
+                [f"Service charge ({service_charge_percent:g}%)",
+                 ghs(approved_extraction.get("service_charge_amount", 0) or 0)],
+                ["Total priced material scope",
+                 ghs(approved_extraction.get("priced_total", 0) or 0)],
+            ]
+            pricing_table = Table(
+                [[_cell(value) for value in row] for row in pricing_rows],
+                colWidths=[75 * mm, 61 * mm])
+            pricing_table.setStyle(META_STYLE)
+            flow.append(Paragraph("Approved commercial pricing", H2))
+            flow.append(pricing_table)
+        flow.append(Paragraph(
+            f"Source of truth: approved extraction E{approved_extraction.get('revision')}. "
+            + (
+                f"Technical quantities come from E{approved_extraction.get('revision')}; "
+                f"unit prices and service charge percentage come from approved quotation "
+                f"{approved_extraction.get('quotation_number')}."
+                if approved_extraction.get("pricing_source") == "approved_quotation"
+                else "This report uses the technically edited quantities and unit prices instead of recalculating the original configurator material list."
+            )
+            + " "
+            "Earlier extraction revisions remain in the project audit history.", NOTE))
+        return _build(
+            "APPROVED PROJECT MATERIAL LIST & COSTING",
+            f"{project.get('project_number') or '—'} · {project.get('name') or '—'}",
+            flow)
+
+    for index, item in enumerate(items, start=1):
+        design = item.get("design") or {}
+        result = item.get("result") or {}
+        qty = result.get("qty") or design.get("qty") or item.get("qty") or 1
+        system = design.get("system") or design.get("category") or "—"
+        flow.append(Paragraph(
+            f"Item {index}: {item.get('name') or design.get('name') or 'Saved item'}", H2))
+        flow.append(Paragraph(
+            f"Ref: <b>{item.get('ref') or design.get('ref') or '—'}</b> · {system} · "
+            f"{design.get('width', 0)} × {design.get('height', 0)} mm · Qty: <b>{qty}</b> · "
+            f"Location: {item.get('location') or design.get('location') or '—'}", SUB))
+
+        material_rows = result.get("material_rows") or []
+        if material_rows:
+            rows = [["Material", "Code", "Qty", "Unit", "Unit price", "Total"]]
+            item_material_total = 0.0
+            for material in material_rows:
+                quantity = float(material.get("quantity", 0) or 0)
+                total = float(material.get("total", 0) or 0)
+                item_material_total += total
+                code = material.get("code") or "—"
+                unit = material.get("unit") or "—"
+                key = (str(code), str(unit))
+                entry = consolidated.setdefault(key, {
+                    "description": material.get("description") or "—",
+                    "code": code,
+                    "quantity": 0.0,
+                    "unit": unit,
+                    "unit_price": float(material.get("unit_price", 0) or 0),
+                    "total": 0.0,
+                    "items": [],
+                })
+                entry["quantity"] += quantity
+                entry["total"] += total
+                price = float(material.get("unit_price", 0) or 0)
+                if abs(entry["unit_price"] - price) > 0.01:
+                    entry["unit_price"] = None
+                item_ref = item.get("ref") or design.get("ref") or f"Item {index}"
+                if item_ref not in entry["items"]:
+                    entry["items"].append(item_ref)
+                rows.append([
+                    _cell(material.get("description", "—")), _cell(code),
+                    _cell(f"{quantity:g}"), _cell(unit),
+                    _cell(ghs(float(material.get("unit_price", 0) or 0))), _cell(ghs(total)),
+                ])
+            rows.append(["", "", "", "", "Material cost", ghs(item_material_total)])
+            rows.append(["", "", "", "", f"Service charge ({result.get('service_charge_percent', 0)}%)",
+                         ghs(result.get("service_charge_amount", 0) or 0)])
+            rows.append(["", "", "", "", "Material + service subtotal",
+                         ghs(result.get("total_material_cost", result.get("total_cost", 0)) or 0)])
+            t = Table(rows, colWidths=[43 * mm, 29 * mm, 18 * mm, 22 * mm, 29 * mm, 31 * mm], repeatRows=1)
+            t.setStyle(BASE_STYLE)
+            flow.append(t)
+            flow.append(Paragraph(
+                "Coded material recipe available for this item. Quantities are the item/project totals produced by its system engine.", NOTE))
+            exact_material_total += item_material_total
+        else:
+            source_profiles = result.get("profile_catalog") or []
+            if source_profiles:
+                flow.append(Paragraph("Catalogue profile references", H2))
+                rows = [["Profile", "Code", "Stock length", "Listed value"]] + [
+                    [_cell(p.get("description", "—")), _cell(p.get("code", "—")),
+                     _cell(f"{float(p.get('stock_mm', 0) or 0):g} mm"),
+                     _cell(ghs(float(p.get("listed_price", 0) or 0)))]
+                    for p in source_profiles
+                ]
+                t = Table(rows, colWidths=[69 * mm, 32 * mm, 31 * mm, 40 * mm], repeatRows=1)
+                t.setStyle(BASE_STYLE)
+                flow.append(t)
+
+            lines = result.get("lines") or []
+            if lines:
+                flow.append(Paragraph("Working material and cost summary", H2))
+                rows = [["Cost line", "Basis", "Project amount"]]
+                for line in lines:
+                    amount = float(line.get("amount", 0) or 0) * float(qty)
+                    rows.append([_cell(line.get("key", "—")), _cell(line.get("detail", "—")), _cell(ghs(amount))])
+                t = Table(rows, colWidths=[50 * mm, 94 * mm, 28 * mm], repeatRows=1)
+                t.setStyle(BASE_STYLE)
+                flow.append(t)
+                working_estimate_total += float(result.get("internal_floor", result.get("grand_total", 0)) or 0)
+            flow.append(Paragraph(
+                "Working estimate only: this system does not yet have a confirmed coded material recipe, so its rows are not merged into the consolidated purchase list.", NOTE))
+
+    flow.append(PageBreak())
+    flow.append(Paragraph("Consolidated project purchase list", H2))
+    if consolidated:
+        rows = [["Material", "Code", "Total qty", "Unit", "Unit price", "Total", "Used by"]]
+        for entry in sorted(consolidated.values(), key=lambda value: (value["code"], value["unit"])):
+            unit_price = "Mixed" if entry["unit_price"] is None else ghs(entry["unit_price"])
+            rows.append([
+                _cell(entry["description"]), _cell(entry["code"]), _cell(f"{entry['quantity']:g}"),
+                _cell(entry["unit"]), _cell(unit_price), _cell(ghs(entry["total"])),
+                _cell(", ".join(entry["items"])),
+            ])
+        rows.append(["", "", "", "", "Exact material cost", ghs(exact_material_total), ""])
+        t = Table(rows, colWidths=[36 * mm, 27 * mm, 19 * mm, 20 * mm, 27 * mm, 28 * mm, 25 * mm], repeatRows=1)
+        t.setStyle(BASE_STYLE)
+        flow.append(t)
+    else:
+        flow.append(Paragraph("No coded material rows are available for consolidation yet.", NOTE))
+
+    flow.append(Paragraph("Project material status", H2))
+    status_rows = [
+        ["Coded material rows available", ghs(exact_material_total)],
+        ["Working-estimate item costs", ghs(working_estimate_total)],
+    ]
+    t = Table([[_cell(label), _cell(amount)] for label, amount in status_rows], colWidths=[82 * mm, 54 * mm])
+    t.setStyle(BASE_STYLE)
+    flow.append(t)
+    flow.append(Paragraph(
+        "Before factory release, the supervisor should confirm any working-estimate system recipes, stock-bar nesting, glass sheet rules, and accessory allowances.", NOTE))
+    return _build("PROJECT INTERNAL MATERIAL BOQ", f"{project.get('project_number') or 'Project'} · {project.get('name') or '—'} · {datetime.now():%d %b %Y}", flow)
 
 
 # ── 1. CUTTING LIST ──────────────────────────────────────────
@@ -292,22 +501,32 @@ def work_order_pdf(design: dict, result: dict, pieces_per_unit: list[dict]) -> b
         "special-piece notes and approved deductions before issuing it to production.", NOTE))
 
     flow.append(PageBreak())
-    flow.append(Paragraph("Accessories & hardware — PROJECT ISSUE LIST", H2))
-    accessory_rows = [["Code", "Description", "Project qty", "Unit value"]]
-    for a in result.get("accessories") or []:
-        accessory_rows.append([
-            _cell(a.get("code", "—")), _cell(a.get("name", "—")),
-            _cell(f"{float(a.get('qty', 0) or 0):g}"),
-            _cell(ghs(float(a.get("unit_price", a.get("listed_value", 0)) or 0))),
-        ])
-    if len(accessory_rows) == 1:
-        accessory_rows.append([_cell("—"), _cell("No accessory recipe saved"), _cell("—"), _cell(ghs(0))])
-    t = Table(accessory_rows, colWidths=[34 * mm, 94 * mm, 22 * mm, 28 * mm], repeatRows=1)
-    t.setStyle(BASE_STYLE)
-    flow.append(t)
-    flow.append(Paragraph(
-        "Accessory quantities are project totals derived from the selected system and editable project overrides. "
-        "Confirm the issue list against the approved assembly practice before production release.", NOTE))
+    approved_rows = result.get("approved_extraction_rows") or []
+    if approved_rows:
+        revision = result.get("approved_extraction_revision")
+        flow.append(Paragraph(
+            f"Approved extraction E{revision} — PROJECT MATERIAL ISSUE LIST", H2))
+        flow.append(_approved_extraction_table(approved_rows))
+        flow.append(Paragraph(
+            f"Factory material issue quantities and prices come from approved extraction E{revision}. "
+            "The cut-piece geometry above remains tied to the approved drawing and must be reviewed if an extraction edit changes fabrication dimensions.", NOTE))
+    else:
+        flow.append(Paragraph("Accessories & hardware — PROJECT ISSUE LIST", H2))
+        accessory_rows = [["Code", "Description", "Project qty", "Unit value"]]
+        for a in result.get("accessories") or []:
+            accessory_rows.append([
+                _cell(a.get("code", "—")), _cell(a.get("name", "—")),
+                _cell(f"{float(a.get('qty', 0) or 0):g}"),
+                _cell(ghs(float(a.get("unit_price", a.get("listed_value", 0)) or 0))),
+            ])
+        if len(accessory_rows) == 1:
+            accessory_rows.append([_cell("—"), _cell("No accessory recipe saved"), _cell("—"), _cell(ghs(0))])
+        t = Table(accessory_rows, colWidths=[34 * mm, 94 * mm, 22 * mm, 28 * mm], repeatRows=1)
+        t.setStyle(BASE_STYLE)
+        flow.append(t)
+        flow.append(Paragraph(
+            "Accessory quantities are project totals derived from the selected system and editable project overrides. "
+            "Confirm the issue list against the approved assembly practice before production release.", NOTE))
 
     flow.append(Paragraph("Production stages — sign off each stage", H2))
     rows = [["Stage", "Done by", "Date", "Checked (QA)"]] + [[s, "", "", ""] for s in STAGES]
@@ -352,6 +571,20 @@ def boq_pdf(design: dict, result: dict, demand: list[dict], plan: dict) -> bytes
     cols = design["cols"]
     qty = result["qty"]
     flow = []
+
+    approved_rows = result.get("approved_extraction_rows") or []
+    if approved_rows:
+        revision = result.get("approved_extraction_revision")
+        flow.append(Paragraph(
+            f"Approved extraction E{revision} — material and pricing source", H2))
+        flow.append(_approved_extraction_table(approved_rows))
+        flow.append(Paragraph("Internal cost floor & negotiation control", H2))
+        flow.append(_cost_floor_table(result))
+        flow.append(Paragraph(
+            f"This report uses approved extraction E{revision}. The original configurator calculation is retained for geometry and drawing traceability, but its material quantities and prices do not override this approved revision.", NOTE))
+        return _build(
+            "INTERNAL BILL OF QUANTITIES — APPROVED EXTRACTION",
+            _meta_line(design, result), flow)
 
     # Trialco has a dedicated internal costing-sheet workflow. Keep this
     # aligned with the configurator and cutting list instead of mixing the
@@ -741,6 +974,22 @@ def hardware_list_pdf(design: dict, result: dict) -> bytes:
     qty = result["qty"]
     flow = []
 
+    approved_rows = result.get("approved_extraction_rows") or []
+    approved_hardware = [
+        row for row in approved_rows
+        if str(row.get("category") or "").lower()
+        in {"hardware", "accessory", "accessories", "fitting", "fittings"}]
+    if approved_rows:
+        revision = result.get("approved_extraction_revision")
+        rows = approved_hardware or approved_rows
+        flow.append(Paragraph(
+            f"Approved extraction E{revision} — issue list", H2))
+        flow.append(_approved_extraction_table(rows))
+        flow.append(Paragraph(
+            f"This list reads approved extraction E{revision}. Where the technical team classified hardware/accessory rows, only those rows are shown; otherwise the complete approved material list is retained.", NOTE))
+        return _build("APPROVED HARDWARE & MATERIAL ISSUE LIST",
+                      _meta_line(design, result), flow)
+
     rows = [["Qty", "Part number", "Description", "Finish", "Unit cost", "Subtotal"]]
     total = 0.0
     for h in bd["hardware"]:
@@ -777,12 +1026,19 @@ def fl_work_order_pdf(design: dict, result: dict) -> bytes:
     t.setStyle(BASE_STYLE)
     flow.append(t)
 
-    flow.append(Paragraph("Hardware — PER UNIT", H2))
-    rows = [["Qty", "Part number", "Description"]] + [
-        [str(h["qty"]), h["code"], h["desc"]] for h in bd["hardware"]]
-    t = Table(rows, colWidths=[14 * mm, 36 * mm, 106 * mm])
-    t.setStyle(BASE_STYLE)
-    flow.append(t)
+    approved_rows = result.get("approved_extraction_rows") or []
+    if approved_rows:
+        revision = result.get("approved_extraction_revision")
+        flow.append(Paragraph(
+            f"Approved extraction E{revision} — PROJECT MATERIAL ISSUE LIST", H2))
+        flow.append(_approved_extraction_table(approved_rows))
+    else:
+        flow.append(Paragraph("Hardware — PER UNIT", H2))
+        rows = [["Qty", "Part number", "Description"]] + [
+            [str(h["qty"]), h["code"], h["desc"]] for h in bd["hardware"]]
+        t = Table(rows, colWidths=[14 * mm, 36 * mm, 106 * mm])
+        t.setStyle(BASE_STYLE)
+        flow.append(t)
 
     flow.append(Paragraph("Production stages — sign off each stage", H2))
     rows = [["Stage", "Done by", "Date", "Checked (QA)"]] + [[s, "", "", ""] for s in FL_STAGES]
@@ -1014,6 +1270,21 @@ CELL_MUTED = ParagraphStyle("cellm", fontName="Helvetica", fontSize=8, textColor
 def price_breakdown_pdf(design: dict, result: dict, client_name: str = "") -> bytes:
     qty = result["qty"]
     flow = []
+
+    approved_rows = result.get("approved_extraction_rows") or []
+    if approved_rows:
+        revision = result.get("approved_extraction_revision")
+        flow.append(Paragraph(
+            f"Approved extraction E{revision} — edited material costing", H2))
+        flow.append(_approved_extraction_table(approved_rows))
+        flow.append(Paragraph("Minimum-price control", H2))
+        flow.append(_cost_floor_table(result))
+        flow.append(Paragraph(
+            f"Client: {client_name or 'Walk-in Client'}. INTERNAL DOCUMENT — management only. "
+            f"Material quantities and prices come from approved extraction E{revision}; labour and installation remain the configured project allowances until separately revised.", NOTE))
+        return _build(
+            "PRICE BREAKDOWN — APPROVED EXTRACTION",
+            _meta_line(design, result), flow)
 
     flow.append(Paragraph("Cost lines — PER UNIT", H2))
     rows = [["Description", "Basis", "Amount"]] + [

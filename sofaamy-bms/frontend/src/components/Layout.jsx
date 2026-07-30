@@ -9,11 +9,14 @@ const META = {
   '/crm':         ['CRM & Leads', 'Opportunities and clients'],
   '/quotations':  ['Quotations', 'Estimates and quote pipeline'],
   '/surveys':     ['Surveys', 'Site measurement & verification'],
+  '/technical-workflow':['Technical Workflow', 'Controlled project release chain'],
+  '/accounts':    ['Accounts', 'Payments and customer balances'],
   '/production':  ['Production Pipeline', 'Factory floor tracking'],
   '/inventory':   ['Inventory & Stock', 'Materials and reorder alerts'],
   '/dispatch':    ['Dispatch & Install', 'Delivery and installation tracking'],
   '/quality':     ['Quality Control', 'QA checkpoints'],
-  '/reports':     ['Reports', 'Analytics and performance'],
+  '/reports':     ['Documents & Reports', 'Operational documents and downloads'],
+  '/insights':    ['Insights & KPIs', 'Commercial and operational performance'],
   '/settings':    ['Settings', 'Company & system configuration'],
 }
 

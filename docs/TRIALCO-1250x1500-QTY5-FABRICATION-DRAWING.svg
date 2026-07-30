@@ -1,0 +1,235 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1350" viewBox="0 0 1800 1350" role="img" aria-labelledby="title desc">
+  <title id="title">Trialco two-leaf sliding window fabrication drawing, 1250 by 1500 millimetres, quantity 5</title>
+  <desc id="desc">Large annotated front elevation and assembly detail showing Trialco outer frame, two sliding leaves, glass, insect nets, interlocks, rollers, corners, locks, glazing rubber, brush, wall fixing and project material quantities.</desc>
+
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#233b63"/>
+    </marker>
+    <marker id="callout" markerWidth="9" markerHeight="9" refX="4.5" refY="4.5" orient="auto">
+      <circle cx="4.5" cy="4.5" r="3.2" fill="#ef6c3d"/>
+    </marker>
+    <pattern id="netPattern" width="12" height="12" patternUnits="userSpaceOnUse">
+      <path d="M0 0L12 12M12 0L0 12" stroke="#3a9b72" stroke-width="1" opacity="0.38"/>
+    </pattern>
+    <pattern id="wallPattern" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M0 12H24M12 0V12M0 24V12M24 12V24" fill="none" stroke="#aeb8c6" stroke-width="2"/>
+    </pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#182b4b" flood-opacity="0.14"/>
+    </filter>
+    <style>
+      .title { font: 700 30px Arial, sans-serif; fill:#172b4d; }
+      .subtitle { font: 400 16px Arial, sans-serif; fill:#53657e; }
+      .section { font: 700 20px Arial, sans-serif; fill:#172b4d; }
+      .label { font: 600 15px Arial, sans-serif; fill:#172b4d; }
+      .small { font: 400 13px Arial, sans-serif; fill:#53657e; }
+      .tiny { font: 400 11px Arial, sans-serif; fill:#53657e; }
+      .white { fill:#fff; }
+      .dimension { stroke:#233b63; stroke-width:2; marker-start:url(#arrow); marker-end:url(#arrow); }
+      .extension { stroke:#8494aa; stroke-width:1.5; stroke-dasharray:5 5; }
+      .call { stroke:#ef6c3d; stroke-width:2; fill:none; marker-end:url(#callout); }
+      .frame { stroke:#244f83; stroke-width:24; fill:#d9e6f4; }
+      .leaf { stroke:#4a6d91; stroke-width:14; fill:#dff5f7; }
+      .glass { fill:#bdebf2; opacity:.8; }
+      .net { fill:url(#netPattern); stroke:#3a9b72; stroke-width:4; stroke-dasharray:8 5; opacity:.9; }
+      .interlock { fill:#ef6c3d; stroke:#a9482a; stroke-width:3; }
+      .hardware { fill:#f3b541; stroke:#a66d08; stroke-width:2; }
+      .rubber { stroke:#222e3d; stroke-width:5; fill:none; }
+      .track { fill:#66758b; stroke:#26384e; stroke-width:2; }
+      .card { fill:#fff; stroke:#cbd5e1; stroke-width:1.5; rx:12; }
+      .qty { font:700 19px Arial, sans-serif; fill:#172b4d; }
+      .code { font:700 12px Arial, sans-serif; fill:#ef6c3d; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1350" fill="#f5f8fc"/>
+  <rect x="40" y="35" width="1720" height="1280" rx="18" fill="#ffffff" stroke="#d8e1ec"/>
+
+  <text x="80" y="90" class="title">TRIALCO TWO-LEAF SLIDING WINDOW — FABRICATION VIEW</text>
+  <text x="80" y="120" class="subtitle">Frame 1,250 × 1,500 mm · one complete bay · design quantity 5 · working fabrication recipe</text>
+  <rect x="1450" y="68" width="240" height="54" rx="27" fill="#e9f5ef" stroke="#8cc6a8"/>
+  <text x="1570" y="91" text-anchor="middle" class="label" fill="#28754d">PROJECT QUANTITY</text>
+  <text x="1570" y="112" text-anchor="middle" class="qty">5 COMPLETE BAYS</text>
+
+  <!-- Main front elevation -->
+  <text x="90" y="170" class="section">A. Front elevation — one bay</text>
+  <text x="90" y="194" class="small">The two leaves slide past each other inside the fixed outer frame.</text>
+
+  <!-- dimension lines -->
+  <line x1="180" y1="220" x2="880" y2="220" class="dimension"/>
+  <line x1="180" y1="235" x2="180" y2="260" class="extension"/>
+  <line x1="880" y1="235" x2="880" y2="260" class="extension"/>
+  <rect x="450" y="201" width="160" height="32" rx="8" fill="#fff"/>
+  <text x="530" y="223" text-anchor="middle" class="label">1,250 mm FRAME W</text>
+
+  <line x1="145" y1="270" x2="145" y2="1080" class="dimension"/>
+  <line x1="160" y1="270" x2="180" y2="270" class="extension"/>
+  <line x1="160" y1="1080" x2="180" y2="1080" class="extension"/>
+  <rect x="88" y="635" width="115" height="34" rx="8" fill="#fff" transform="rotate(-90 145 652)"/>
+  <text x="145" y="657" text-anchor="middle" class="label" transform="rotate(-90 145 657)">1,500 mm FRAME H</text>
+
+  <!-- outer frame -->
+  <rect x="180" y="270" width="700" height="810" rx="2" class="frame" filter="url(#shadow)"/>
+  <!-- track / sill -->
+  <rect x="180" y="1040" width="700" height="40" class="track"/>
+  <path d="M205 1042H855M205 1056H855M205 1070H855" stroke="#bdc8d5" stroke-width="3"/>
+
+  <!-- left leaf -->
+  <rect x="215" y="315" width="315" height="725" class="leaf"/>
+  <rect x="237" y="337" width="271" height="681" class="glass"/>
+  <rect x="237" y="337" width="271" height="681" class="rubber"/>
+  <!-- left net, shown as inset/overlaid panel -->
+  <rect x="250" y="350" width="245" height="655" class="net"/>
+  <!-- right leaf -->
+  <rect x="530" y="315" width="315" height="725" class="leaf"/>
+  <rect x="552" y="337" width="271" height="681" class="glass"/>
+  <rect x="552" y="337" width="271" height="681" class="rubber"/>
+  <!-- The single net covers one sliding side of the complete bay. -->
+
+  <!-- central two interlocks -->
+  <rect x="509" y="310" width="16" height="735" class="interlock"/>
+  <rect x="530" y="310" width="16" height="735" class="interlock"/>
+  <path d="M525 405h5M525 415h5M525 425h5" stroke="#fff" stroke-width="2"/>
+  <path d="M530 405h-5M530 415h-5M530 425h-5" stroke="#fff" stroke-width="2"/>
+
+  <!-- 0404 corners -->
+  <g class="hardware">
+    <!-- outer-frame corners: 4 per bay -->
+    <rect x="168" y="258" width="20" height="20"/><rect x="872" y="258" width="20" height="20"/>
+    <rect x="168" y="1072" width="20" height="20"/><rect x="872" y="1072" width="20" height="20"/>
+    <!-- leaf corners: 4 per leaf, 8 per bay -->
+    <rect x="210" y="310" width="18" height="18"/><rect x="517" y="310" width="18" height="18"/>
+    <rect x="210" y="1025" width="18" height="18"/><rect x="517" y="1025" width="18" height="18"/>
+    <rect x="525" y="310" width="18" height="18"/><rect x="832" y="310" width="18" height="18"/>
+    <rect x="525" y="1025" width="18" height="18"/><rect x="832" y="1025" width="18" height="18"/>
+  </g>
+
+  <!-- rollers -->
+  <g class="hardware">
+    <circle cx="295" cy="1033" r="12"/><circle cx="455" cy="1033" r="12"/>
+    <circle cx="610" cy="1033" r="12"/><circle cx="770" cy="1033" r="12"/>
+  </g>
+  <!-- locks and handles -->
+  <rect x="490" y="580" width="24" height="58" rx="5" class="hardware"/>
+  <circle cx="480" cy="650" r="10" class="hardware"/><circle cx="566" cy="650" r="10" class="hardware"/>
+
+  <!-- elevation labels -->
+  <path d="M205 285L75 260" class="call"/>
+  <text x="80" y="247" class="label">Fixed outer frame</text>
+  <text x="80" y="265" class="small">TF053N / TF073N · 4 cuts</text>
+
+  <path d="M365 660L55 700" class="call"/>
+  <text x="75" y="695" class="label">Left sliding leaf</text>
+  <text x="75" y="713" class="small">625 × 1,430 mm · TF065N</text>
+
+  <path d="M515 470L900 390" class="call"/>
+  <text x="920" y="380" class="label">Two interlocks at meeting line</text>
+  <text x="920" y="398" class="small">2 × 1,430 mm · TF224N</text>
+
+  <path d="M675 690L900 660" class="call"/>
+  <text x="920" y="650" class="label">Glass inside each leaf</text>
+  <text x="920" y="668" class="small">2 × 513 × 1,318 mm</text>
+
+  <path d="M285 800L900 820" class="call"/>
+  <text x="920" y="810" class="label">Net panel over/in front of leaf</text>
+  <text x="920" y="828" class="small">1 × 625 × 1,420 mm · TF223N · one sliding side</text>
+
+  <path d="M610 1035L900 955" class="call"/>
+  <text x="920" y="945" class="label">Rollers on bottom track</text>
+  <text x="920" y="963" class="small">2 rollers per leaf · 4 per bay</text>
+
+  <path d="M480 650L900 1060" class="call"/>
+  <text x="920" y="1052" class="label">Locks and net handles</text>
+  <text x="920" y="1070" class="small">Metal locks: 1 per bay · net handles: 2 per bay</text>
+
+  <!-- section detail -->
+  <text x="1000" y="170" class="section">B. How the materials are fixed</text>
+  <text x="1000" y="194" class="small">Indicative assembly detail — confirm exact profile grooves and fixing practice with the fabricator.</text>
+
+  <!-- wall / opening section -->
+  <rect x="1020" y="245" width="145" height="350" fill="url(#wallPattern)" stroke="#8795a8" stroke-width="2"/>
+  <rect x="1165" y="245" width="48" height="350" class="frame"/>
+  <rect x="1213" y="270" width="220" height="65" class="leaf"/>
+  <rect x="1233" y="284" width="180" height="36" class="glass"/>
+  <path d="M1233 284H1413V320H1233Z" class="rubber"/>
+  <rect x="1213" y="500" width="220" height="54" class="net"/>
+  <rect x="1165" y="545" width="268" height="38" class="track"/>
+  <circle cx="1270" cy="548" r="12" class="hardware"/><circle cx="1370" cy="548" r="12" class="hardware"/>
+  <rect x="1445" y="245" width="35" height="350" fill="#dfe7f0" stroke="#a7b4c4" stroke-width="2"/>
+
+  <!-- fixing screws/plugs -->
+  <g>
+    <circle cx="1188" cy="315" r="8" fill="#ef6c3d"/>
+    <circle cx="1188" cy="430" r="8" fill="#ef6c3d"/>
+    <circle cx="1188" cy="535" r="8" fill="#ef6c3d"/>
+    <path d="M1188 315L970 270" class="call"/>
+    <path d="M1188 430L970 430" class="call"/>
+    <path d="M1188 535L970 590" class="call"/>
+  </g>
+  <text x="835" y="258" class="label">Wall plug + installation screw</text>
+  <text x="835" y="276" class="small">Fix outer frame to wall/opening at approved fixing points</text>
+  <text x="835" y="418" class="label">Frame profile</text>
+  <text x="835" y="436" class="small">Outer frame is fixed first and checked for level/plumb</text>
+  <text x="835" y="585" class="label">Drain / sill zone</text>
+  <text x="835" y="603" class="small">Drain caps and PVC covers close the prepared openings</text>
+
+  <!-- assembly sequence cards -->
+  <rect x="1000" y="635" width="700" height="315" class="card"/>
+  <text x="1030" y="675" class="section">Assembly sequence</text>
+  <g>
+    <circle cx="1045" cy="720" r="18" fill="#233b63"/><text x="1045" y="726" text-anchor="middle" fill="#fff" class="label">1</text>
+    <text x="1080" y="716" class="label">Fix the outer frame</text>
+    <text x="1080" y="736" class="small">Use wall plugs, installation screws, level, plumb and silicone at the perimeter.</text>
+
+    <circle cx="1045" cy="785" r="18" fill="#233b63"/><text x="1045" y="791" text-anchor="middle" fill="#fff" class="label">2</text>
+    <text x="1080" y="781" class="label">Assemble the two leaves</text>
+    <text x="1080" y="801" class="small">Join rails and stiles with 0404 corners; fit two rollers under each leaf.</text>
+
+    <circle cx="1045" cy="850" r="18" fill="#233b63"/><text x="1045" y="856" text-anchor="middle" fill="#fff" class="label">3</text>
+    <text x="1080" y="846" class="label">Fit glass and net panels</text>
+    <text x="1080" y="866" class="small">Seat glass with glazing rubber; fit net fibre with net corners, handle and Italian brush.</text>
+
+    <circle cx="1045" cy="915" r="18" fill="#233b63"/><text x="1045" y="921" text-anchor="middle" fill="#fff" class="label">4</text>
+    <text x="1080" y="911" class="label">Install, align and test</text>
+    <text x="1080" y="931" class="small">Place leaves on the track, fit the two interlocks, locks, drain caps and PVC covers.</text>
+  </g>
+
+  <!-- project quantity summary -->
+  <text x="90" y="1150" class="section">C. Project material summary — design quantity 5</text>
+  <text x="90" y="1176" class="small">The drawing shows one bay; the quantities below are for five identical complete bays.</text>
+
+  <g>
+    <rect x="90" y="1200" width="195" height="75" class="card"/>
+    <text x="110" y="1225" class="code">ALUMINIUM PROFILE</text>
+    <text x="110" y="1253" class="qty">5 frame bars</text>
+    <text x="110" y="1270" class="tiny">8 leaf · 8 net · 3 interlock</text>
+
+    <rect x="305" y="1200" width="195" height="75" class="card"/>
+    <text x="325" y="1225" class="code">GLASS / NET</text>
+    <text x="325" y="1253" class="qty">1.5 glass sheets</text>
+    <text x="325" y="1270" class="tiny">9.375 m² basis · 4.44 m² net fibre</text>
+
+    <rect x="520" y="1200" width="195" height="75" class="card"/>
+    <text x="540" y="1225" class="code">HARDWARE</text>
+    <text x="540" y="1253" class="qty">60 corners</text>
+    <text x="540" y="1270" class="tiny">20 rollers · 5 locks</text>
+
+    <rect x="735" y="1200" width="225" height="75" class="card"/>
+    <text x="755" y="1225" class="code">PERIMETER MATERIALS</text>
+    <text x="755" y="1253" class="qty">36.62 m glazing rubber</text>
+    <text x="755" y="1270" class="tiny">20.45 m net rubber + brush</text>
+
+    <rect x="980" y="1200" width="330" height="75" class="card"/>
+    <text x="1000" y="1225" class="code">FIXING / CONSUMABLES</text>
+    <text x="1000" y="1253" class="qty">20 screws · 20 plugs</text>
+    <text x="1000" y="1270" class="tiny">10 drain caps · 10 PVC covers · 5 silicone</text>
+
+    <rect x="1330" y="1200" width="350" height="75" rx="12" fill="#fff4ee" stroke="#f1b49d"/>
+    <text x="1350" y="1225" class="code">WORKING INTERNAL COST</text>
+    <text x="1350" y="1253" class="qty">GHS 32,115.34 total</text>
+    <text x="1350" y="1270" class="tiny">Includes 30% installation allowance</text>
+  </g>
+
+  <text x="90" y="1300" class="tiny">Working drawing only · dimensions and quantities must be checked against Sofaamy's approved Trialco fabrication practice before production release.</text>
+</svg>

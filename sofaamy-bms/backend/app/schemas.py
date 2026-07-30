@@ -68,7 +68,6 @@ class DesignCell(BaseModel):
     glass: str = "clear"
     opening: str = "fixed"
     panels: int = 1
-    itemQty: int = 1
     rateKey: str = ""
     ratePerM2: float | None = None
     # frameless panel type (fixed|door|hinged|slider) or curtain wall
@@ -176,8 +175,6 @@ class DesignIn(BaseModel):
         d["custom_frame_color"] = d.pop("customFrameColor")
         d["visual_view"] = d.pop("visualView")
         for cell in d.get("cells", []):
-            if "itemQty" in cell:
-                cell["item_qty"] = cell.pop("itemQty")
             if "rateKey" in cell:
                 cell["rate_key"] = cell.pop("rateKey")
             if "ratePerM2" in cell:
@@ -245,6 +242,114 @@ class ProjectIn(BaseModel):
     client_name: str = ""
     client_id: int | None = None
     location: str = ""
+    product_family: str = "frame"
+    product_system: str = ""
+
+
+class ProjectWorkflowIn(BaseModel):
+    product_family: str | None = None
+    product_system: str | None = None
+    workflow_status: str | None = None
+    extraction_method: str | None = None
+    drawing_method: str | None = None
+    drawing_release_percent: float | None = None
+    who: str = "Kwame Mensah"
+
+
+class ExtractionItemIn(BaseModel):
+    code: str = ""
+    material: str
+    category: str = "Material"
+    quantity: float = 1
+    unit: str = "pcs"
+    unit_price: float = 0
+    source: str = "manual"
+    notes: str = ""
+
+
+class ExtractionIn(BaseModel):
+    method: str = "manual"
+    recipe_status: str = "manual"
+    notes: str = ""
+    created_by: str = "Technical Team"
+    items: list[ExtractionItemIn] = []
+
+
+class ExtractionApprovalIn(BaseModel):
+    approved_by: str = "Technical Supervisor"
+
+
+class GeneratedExtractionIn(BaseModel):
+    design_id: int | None = None
+    created_by: str = "Technical Team"
+    notes: str = ""
+
+
+class CommercialQuoteLineIn(BaseModel):
+    """One editable selling line prepared by the quotation team.
+
+    Rows linked to an extraction item keep their approved technical
+    description, quantity and unit; quotation staff only set the selling
+    rate.  Rows without an extraction item are commercial additions such as
+    labour, transport or installation.
+    """
+    extraction_item_id: int | None = None
+    code: str = ""
+    description: str
+    quantity: float = 1
+    unit: str = "item"
+    unit_price: float = 0
+
+
+class ExtractionQuoteIn(BaseModel):
+    extraction_id: int
+    product: str
+    lines: list[CommercialQuoteLineIn] = []
+    # Kept for older clients/tests while the quotation desk moves to
+    # itemised commercial lines.
+    client_total: float | None = None
+    service_charge_percent: float | None = None
+    # Backward-compatible input name used by quotations created before the
+    # charge was correctly separated from physical installation.
+    installation_percent: float | None = None
+    discount_percent: float = 0
+    getf_nhis_percent: float = 5
+    vat_percent: float = 15
+    deposit_percent: float = 80
+    valid_days: int = 3
+    client_phone: str = ""
+    client_email: str = ""
+    notes: str = ""
+    created_by: str = "Quotation Team"
+
+
+class DrawingTaskIn(BaseModel):
+    method: str = "configurator"
+    extraction_id: int | None = None
+    quote_id: int | None = None
+    assigned_to: str = ""
+    brief: str = ""
+    created_by: str = "Technical Supervisor"
+
+
+class DrawingRevisionIn(BaseModel):
+    notes: str = ""
+    submitted_by: str = "Technical Team"
+
+
+class DrawingApprovalIn(BaseModel):
+    approved_by: str = "Technical Supervisor"
+
+
+class ExistingDesignApprovalIn(BaseModel):
+    approved_by: str = "Technical Supervisor"
+    notes: str = "Existing saved configurator design accepted without changes."
+
+
+class ProductionReleaseIn(BaseModel):
+    drawing_revision_id: int
+    released_by: str = "Technical Supervisor"
+    notes: str = ""
 
 
 class ReceiveStockIn(BaseModel):

@@ -1,20 +1,22 @@
-"""Job lifecycle — stages, gates and side-effects.
+"""Factory job lifecycle — stages, technical gates and side-effects.
 
-The pipeline every job walks, with Sofaamy's configurable deposit gate before
-production, balance before close-out, and automatic material issue when
-production starts.
+Accounts clears the commercial payment gate before Technical can approve and
+release a factory pack. Production receives only that released technical work
+and owns no payment approval actions.
 """
 from datetime import datetime
+import json
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import models
+from .inventory_catalog import SYSTEM_MATERIALS
 from .pricing import extract_pieces_any, frameless_breakdown
 
 # Factory stages (CLAUDE.md; confirm exact list with Sofaamy)
 STAGES = [
-    ("pending",    "Awaiting Deposit", 0),
+    ("pending",    "Ready for Cutting", 0),
     ("cutting",    "Cutting",          12),
     ("processing", "Processing",       25),
     ("holes",      "Holes / Routing",  38),
@@ -56,28 +58,109 @@ def latest_qc(db: Session, job: models.Job) -> models.QcCheck | None:
                       .order_by(models.QcCheck.created_at.desc())).first()
 
 
+def latest_approved_extraction(
+        project: models.Project | None) -> models.TechnicalExtraction | None:
+    if project is None:
+        return None
+    return next((
+        row for row in sorted(
+            project.extractions or [],
+            key=lambda value: value.revision, reverse=True)
+        if row.status == "approved"), None)
+
+
+def current_production_release(
+        project: models.Project | None,
+        extraction: models.TechnicalExtraction | None
+) -> models.ProductionRelease | None:
+    if project is None or extraction is None:
+        return None
+    current_quote_ids = {
+        quote.id for quote in project.quotes or []
+        if quote.extraction_id == extraction.id
+        and quote.status in ("Accepted", "Approved")
+    }
+    return next((
+        row for row in sorted(
+            project.production_releases or [],
+            key=lambda value: value.created_at, reverse=True)
+        if row.status == "current"
+        and row.extraction_id == extraction.id
+        and row.quote_id in current_quote_ids
+        and row.drawing_revision.status == "approved"
+    ), None)
+
+
+def normalize_unit(unit: str) -> str:
+    value = unit.lower().replace("²", "2").replace(" ", "")
+    return {
+        "pc": "pcs", "piece": "pcs", "pieces": "pcs",
+        "each": "pcs", "unit": "pcs", "units": "pcs",
+        "sqm": "m2", "squaremetre": "m2", "squaremeter": "m2",
+        "metre": "m", "metres": "m", "meter": "m", "meters": "m",
+    }.get(value, value)
+
+
+def material_issue_block_reason(
+        db: Session, extraction: models.TechnicalExtraction) -> str | None:
+    """Validate that every inventory row in the approved extraction can issue."""
+    problems = []
+    non_stock_categories = {"service", "labour", "installation", "tax", "fee"}
+    for item in extraction.items or []:
+        if item.category.strip().lower() in non_stock_categories:
+            continue
+        code = item.code.strip()
+        if not code:
+            problems.append(f"{item.material}: missing stock code")
+            continue
+        material = db.scalar(
+            select(models.Material).where(models.Material.code == code))
+        if material is None:
+            problems.append(f"{code}: not found in inventory")
+            continue
+        if normalize_unit(item.unit) != normalize_unit(material.unit):
+            problems.append(
+                f"{code}: extraction unit {item.unit} does not match "
+                f"inventory unit {material.unit}")
+            continue
+        if material.stock + 0.0001 < item.quantity:
+            problems.append(
+                f"{code}: need {item.quantity:g} {material.unit}, "
+                f"only {material.stock:g} available")
+    if not problems:
+        return None
+    sample = "; ".join(problems[:3])
+    if len(problems) > 3:
+        sample += f"; +{len(problems) - 3} more"
+    return (
+        f"Approved extraction E{extraction.revision} cannot be issued: {sample}")
+
+
 def advance_block_reason(db: Session, job: models.Job) -> str | None:
     """Why this job cannot move to the next stage (None = free to move)."""
     nxt_i = stage_index(job.stage) + 1
     if nxt_i >= len(STAGE_KEYS):
         return "Job is already completed"
     nxt = STAGE_KEYS[nxt_i]
-    if job.stage == "pending" and job.value:
-        deposit_percent = max(0, min(100, float(job.deposit_percent or 80)))
-        required = job.value * deposit_percent / 100
-        if paid_amount(db, job) + 0.5 < required:
-            need = required - paid_amount(db, job)
-            return f"{deposit_percent:.0f}% deposit required before production — GHS {need:,.2f} outstanding"
+    if job.stage == "pending":
+        if not job.project_id or not job.project:
+            return "Current approved technical factory release required before cutting"
+        extraction = latest_approved_extraction(job.project)
+        if extraction is None:
+            return "Approved technical extraction required before cutting"
+        if current_production_release(job.project, extraction) is None:
+            return (
+                f"Current factory release aligned to extraction "
+                f"E{extraction.revision} required before cutting")
+        issue_block = material_issue_block_reason(db, extraction)
+        if issue_block:
+            return issue_block
     if job.stage == "qa":
         qc = latest_qc(db, job)
         if qc is None:
             return "QA inspection not recorded yet"
         if qc.result != "pass":
             return "Last QA inspection flagged REWORK — re-inspect before dispatch"
-    if nxt == "done" and job.value:
-        if paid_amount(db, job) + 0.5 < job.value:
-            need = job.value - paid_amount(db, job)
-            return f"Balance payment required to close job — GHS {need:,.2f} outstanding"
     return None
 
 
@@ -99,79 +182,76 @@ FRAME_GLASS_CODE = "GL-CLR-6"   # frame glass tracked coarsely for now
 def issue_materials(db: Session, job: models.Job) -> list[str]:
     """Deduct stock for a job's bill of materials when it enters Cutting.
     Returns human-readable lines of what was issued (skips unknown codes)."""
-    rec = db.scalars(select(models.DesignRecord)
-                     .where(models.DesignRecord.job_id == job.id)).first()
-    if rec is None:
-        return []
-    import json
-    from . import schemas
-    design = schemas.DesignIn(**json.loads(rec.design_json)).engine_dict()
-    qty = design.get("qty") or 1
-
     wants: list[tuple[str, float, str]] = []   # (code, qty, unit-note)
-    if design.get("category") == "frameless":
-        bd = frameless_breakdown(design)
-        code = FL_GLASS_CODE.get(design.get("glass_id") or "temp10")
-        if code:
-            wants.append((code, round(bd["total_area"] * qty, 2), "m²"))
-        for h in bd["hardware"]:
-            wants.append((h["code"], h["qty"] * qty, "pcs"))
+    extraction = latest_approved_extraction(job.project)
+    if extraction is not None:
+        if current_production_release(job.project, extraction) is None:
+            return []
+        wants.extend(
+            (item.code.strip(), float(item.quantity), item.unit.strip())
+            for item in extraction.items or []
+            if item.code.strip() and item.quantity > 0)
     else:
-        metres: dict[str, float] = {}
-        for p in extract_pieces_any(design):
-            metres[p["profile"]] = metres.get(p["profile"], 0) + p["length_mm"] * p["qty"] / 1000
-        for pid, m in metres.items():
-            code = PROFILE_CODE.get(pid)
+        # Legacy jobs without a project retain the old design-derived issue
+        # path. Project jobs are gated on a released approved extraction.
+        rec = db.scalars(select(models.DesignRecord)
+                         .where(models.DesignRecord.job_id == job.id)).first()
+        if rec is None:
+            return []
+        import json
+        from . import schemas
+        design = schemas.DesignIn(**json.loads(rec.design_json)).engine_dict()
+        qty = design.get("qty") or 1
+        if design.get("category") == "frameless":
+            bd = frameless_breakdown(design)
+            code = FL_GLASS_CODE.get(design.get("glass_id") or "temp10")
             if code:
-                wants.append((code, round(m * qty, 2), "m"))
-        area = (design["width"] / 1000) * (design["height"] / 1000)
-        wants.append((FRAME_GLASS_CODE, round(area * qty, 2), "m²"))
+                wants.append((code, round(bd["total_area"] * qty, 2), "m2"))
+            for hardware in bd["hardware"]:
+                wants.append((
+                    hardware["code"], hardware["qty"] * qty, "pcs"))
+        else:
+            metres: dict[str, float] = {}
+            for piece in extract_pieces_any(design):
+                profile = piece["profile"]
+                metres[profile] = (
+                    metres.get(profile, 0)
+                    + piece["length_mm"] * piece["qty"] / 1000)
+            for profile, length in metres.items():
+                code = PROFILE_CODE.get(profile)
+                if code:
+                    wants.append((code, round(length * qty, 2), "m"))
+            area = (design["width"] / 1000) * (design["height"] / 1000)
+            wants.append((FRAME_GLASS_CODE, round(area * qty, 2), "m2"))
 
     issued: list[str] = []
     for code, q, unit in wants:
         mat = db.scalar(select(models.Material).where(models.Material.code == code))
         if mat is None or q <= 0:
             continue
+        if normalize_unit(unit) != normalize_unit(mat.unit):
+            continue
         mat.stock = round(mat.stock - q, 2)
         db.add(models.StockMove(material_id=mat.id, delta=-q,
-                                reason=f"Issued to {job.job_number}",
-                                job_number=job.job_number))
+                                reason=(
+                                    f"Issued to {job.job_number}"
+                                    + (
+                                        f" from approved extraction "
+                                        f"E{extraction.revision}"
+                                        if extraction else "")),
+                                job_number=job.job_number,
+                                extraction_id=(
+                                    extraction.id if extraction else None),
+                                extraction_revision=(
+                                    extraction.revision if extraction else None)))
         issued.append(f"{q} {mat.unit} {mat.code}")
     return issued
 
 
-# ── materials the engines reference — inserted if missing so material
-# issue matches on existing databases too (additive only) ──
-ENGINE_MATERIALS = [
-    # code, name, category, unit, unit_price (GHS, PLACEHOLDER), stock, reorder
-    ("CW-MULLION", "Curtain Wall Mullion",          "Profile", "m", 140, 220, 120),
-    ("CW-TRANSOM", "Curtain Wall Transom",          "Profile", "m", 130, 180, 120),
-    ("GL-TMP-8",   "Tempered Glass 8mm",            "Glass", "m2", 390, 85, 40),
-    ("GL-TMP-10",  "Tempered Glass 10mm",           "Glass", "m2", 480, 120, 60),
-    ("GL-TMP-12",  "Tempered Glass 12mm",           "Glass", "m2", 620, 45, 30),
-    ("GL-FRST-10", "Frosted Tempered 10mm",         "Glass", "m2", 540, 30, 20),
-    ("GL-LAM-13",  "Laminated Glass 13.52mm",       "Glass", "m2", 750, 18, 15),
-    ("BL 203",     "Glass Clamp",                   "Hardware", "pcs", 36, 240, 100),
-    ("CSM-50W",    "Patch Lock c/w Floor Strike",   "Hardware", "pcs", 185, 26, 12),
-    ("JQ 104(900MM)", "Pull Handle 900mm Pair",     "Hardware", "pcs", 262, 18, 10),
-    ("KL-HD 203-6","Floor Spring / Pivot Set",      "Hardware", "pcs", 470, 14, 8),
-    ("KL-M102/T",  "Bottom Door Patch",             "Hardware", "pcs", 110, 30, 15),
-    ("KL-M202",    "Top Door Patch",                "Hardware", "pcs", 110, 28, 15),
-    ("KL-M402",    "Over-panel Patch",              "Hardware", "pcs", 185, 20, 10),
-    ("SH-90",      "Shower Hinge",                  "Hardware", "pcs", 150, 40, 20),
-    ("SH-KNOB",    "Shower Knob",                   "Hardware", "pcs", 60, 35, 15),
-    ("SL-ROLLER",  "Sliding Roller Set",            "Hardware", "set", 220, 30, 15),
-    ("SCL SET",    "SCL Sliding Set",               "Hardware", "set", 950, 10, 6),
-    ("SH005 SET",  "SH005 Sliding Set",             "Hardware", "set", 850, 8, 6),
-    ("ND-SET",     "Non-Digging Spring Set",        "Hardware", "set", 690, 9, 5),
-    ("SANHE-SET",  "San He Patch Set",              "Hardware", "set", 650, 7, 5),
-    ("SPIDER-SET", "Spider Fitting Set",            "Hardware", "set", 780, 6, 4),
-]
-
-
 def ensure_engine_materials(db: Session) -> int:
+    """Add every known system material without overwriting later real data."""
     added = 0
-    for code, name, cat, unit, price, stock, reorder in ENGINE_MATERIALS:
+    for code, name, cat, unit, price, stock, reorder in SYSTEM_MATERIALS:
         if db.scalar(select(models.Material).where(models.Material.code == code)) is None:
             db.add(models.Material(code=code, name=name, category=cat, unit=unit,
                                    unit_price=price, stock=stock, reorder_level=reorder))
@@ -185,8 +265,11 @@ def ensure_engine_materials(db: Session) -> int:
 def job_summary(db: Session, j: models.Job) -> dict:
     paid = paid_amount(db, j)
     qc = latest_qc(db, j)
+    extraction = latest_approved_extraction(j.project) if j.project else None
+    release = current_production_release(j.project, extraction)
     return {
         "id": j.job_number, "job_number": j.job_number,
+        "project_id": j.project_id,
         "client": j.client.name if j.client else "—",
         "client_phone": j.client.phone if j.client else "",
         "product": j.product, "stage": j.stage,
@@ -196,6 +279,17 @@ def job_summary(db: Session, j: models.Job) -> dict:
         "balance": round(max(j.value - paid, 0), 2),
         "deposit_percent": round(j.deposit_percent or 80, 2),
         "paid": f"{paid_pct(db, j)}%",
+        "production_authorized": bool(release),
+        "factory_release": ({
+            "release_number": release.release_number,
+            "extraction_revision": release.extraction_revision,
+            "quotation_number": release.quotation_number,
+            "drawing_revision": (
+                release.drawing_revision_number
+                if release.drawing_revision_number is not None
+                else release.drawing_revision.revision),
+            "files": json.loads(release.file_manifest or "[]"),
+        } if release else None),
         "qc": qc.result if qc else None,
         "driver": j.driver, "vehicle": j.vehicle, "dn_number": j.dn_number,
         "delivered_at": j.delivered_at.isoformat() if j.delivered_at else None,

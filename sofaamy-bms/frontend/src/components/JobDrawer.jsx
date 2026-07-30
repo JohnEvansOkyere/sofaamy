@@ -2,22 +2,21 @@ import { useEffect, useState } from 'react'
 import { Badge } from './ui.jsx'
 import WhatsAppModal from './WhatsAppModal.jsx'
 import { IconWhatsApp, IconDownload, IconCheck, IconTruck } from './icons.jsx'
-import { getJob, advanceJob, addPayment, addQc, assignDispatch,
+import { getJob, advanceJob, addQc, assignDispatch,
          downloadDeliveryNote, downloadReport } from '../lib/api.js'
-import { GHS0, timeAgo, stageMessage, deliveryMessage } from '../lib/whatsapp.js'
+import { timeAgo, stageMessage, deliveryMessage } from '../lib/whatsapp.js'
 import '../styles/ops.css'
 
 const QC_ITEMS = ['Dimensions within tolerance (±1 mm)', 'Glass free of chips / scratches',
                   'Edgework & polish clean', 'Hardware fitted & operating', 'Finish / colour matches spec']
 
-// Slide-over with everything about one job: stage timeline with the
-// commercial gates, payments, QA, dispatch, documents, activity.
+// Slide-over for one technically released factory job: production stages,
+// QA, dispatch, controlled documents and activity.
 export default function JobDrawer({ jobNumber, onClose, onChanged }) {
   const [job, setJob] = useState(null)
   const [err, setErr] = useState(null)
   const [busy, setBusy] = useState(false)
   const [wa, setWa] = useState(null)          // { message, link?, attachment? }
-  const [pay, setPay] = useState({ amount: '', kind: 'deposit', method: 'momo' })
   const [qcTicks, setQcTicks] = useState(QC_ITEMS.map(() => true))
   const [qcNote, setQcNote] = useState('')
   const [disp, setDisp] = useState({ driver: '', vehicle: '' })
@@ -28,9 +27,6 @@ export default function JobDrawer({ jobNumber, onClose, onChanged }) {
     .then(j => {
       setJob(j)
       setDisp({ driver: j.driver || '', vehicle: j.vehicle || '' })
-      const suggest = j.paid_amount <= 0 ? j.value / 2 : j.balance
-      setPay(p => ({ ...p, amount: suggest > 0 ? String(Math.round(suggest * 100) / 100) : '',
-                     kind: j.paid_amount <= 0 ? 'deposit' : 'balance' }))
     })
     .catch(e => setErr(String(e)))
   useEffect(() => { refresh() }, [jobNumber])
@@ -65,7 +61,7 @@ export default function JobDrawer({ jobNumber, onClose, onChanged }) {
   const waDelivery = () => setWa({
     message: deliveryMessage({ client: job.client, jobNumber: job.job_number,
       product: job.product, dnNumber: job.dn_number, driver: job.driver,
-      vehicle: job.vehicle, balance: job.balance }),
+      vehicle: job.vehicle }),
   })
 
   return (
@@ -81,10 +77,16 @@ export default function JobDrawer({ jobNumber, onClose, onChanged }) {
         </div>
 
         <div className="drawer-stats">
-          <div><span>Contract</span><b>{GHS0(job.value)}</b></div>
-          <div><span>Paid</span><b style={{ color: 'var(--green)' }}>{GHS0(job.paid_amount)}</b></div>
-          <div><span>Balance</span><b style={{ color: job.balance > 0 ? 'var(--orange)' : 'var(--green)' }}>{GHS0(job.balance)}</b></div>
-          <div><span>Status</span><Badge tone={job.paid === '100%' ? 'green' : 'orange'}>{job.paid} paid</Badge></div>
+          <div><span>Factory release</span><b>{job.factory_release?.release_number || 'Not released'}</b></div>
+          <div><span>Technical basis</span><b>
+            {job.factory_release
+              ? `E${job.factory_release.extraction_revision} · R${job.factory_release.drawing_revision}`
+              : '—'}
+          </b></div>
+          <div><span>Progress</span><b>{job.progress}%</b></div>
+          <div><span>Status</span><Badge tone={job.stage === 'done' ? 'green' : 'blue'}>
+            {job.stage === 'done' ? 'Completed' : 'In production'}
+          </Badge></div>
         </div>
 
         <div className="job-workflow-banner">
@@ -118,34 +120,6 @@ export default function JobDrawer({ jobNumber, onClose, onChanged }) {
           <button className="btn btn-ghost btn-block" style={{ color: '#1da851' }} onClick={waStage}>
             <IconWhatsApp style={{ width: 15, height: 15 }}/> WhatsApp progress update to client
           </button>
-        </div>
-
-        {/* ── payments ── */}
-        <div className="drawer-sec">
-          <h5>Commercial check · payments</h5>
-          {job.payments.length === 0 && <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>No payments recorded — {job.deposit_percent || 80}% deposit required to start production.</div>}
-          {job.payments.map((p, i) => (
-            <div key={i} className="pay-row">
-              <Badge tone={p.kind === 'deposit' ? 'blue' : 'green'}>{p.kind}</Badge>
-              <span className="muted" style={{ fontSize: 12 }}>{p.method}{p.ref ? ` · ${p.ref}` : ''} · {timeAgo(p.at)}</span>
-              <b>{GHS0(p.amount)}</b>
-            </div>
-          ))}
-          {job.balance > 0 && (
-            <div className="pay-form">
-              <input type="number" placeholder="Amount (GHS)" value={pay.amount}
-                onChange={e => setPay(p => ({ ...p, amount: e.target.value }))}/>
-              <select value={pay.kind} onChange={e => setPay(p => ({ ...p, kind: e.target.value }))}>
-                <option value="deposit">Deposit</option><option value="balance">Balance</option><option value="other">Other</option>
-              </select>
-              <select value={pay.method} onChange={e => setPay(p => ({ ...p, method: e.target.value }))}>
-                <option value="momo">MoMo</option><option value="bank">Bank</option><option value="cash">Cash</option><option value="cheque">Cheque</option>
-              </select>
-              <button className="btn btn-gold" disabled={busy || !(+pay.amount > 0)}
-                onClick={() => act(() => addPayment(job.job_number, { ...pay, amount: +pay.amount }),
-                  `${GHS0(+pay.amount)} ${pay.kind} recorded`)}>Record</button>
-            </div>
-          )}
         </div>
 
         {/* ── QA (at the QA stage) ── */}

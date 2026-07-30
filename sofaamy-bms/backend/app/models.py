@@ -47,11 +47,31 @@ class Project(Base):
     client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), nullable=True)
     location: Mapped[str] = mapped_column(String(200), default="")
     status: Mapped[str] = mapped_column(String(20), default="draft")
+    product_family: Mapped[str] = mapped_column(String(30), default="frame")
+    product_system: Mapped[str] = mapped_column(String(80), default="")
+    workflow_status: Mapped[str] = mapped_column(
+        String(40), default="measurement_received")
+    extraction_method: Mapped[str] = mapped_column(String(20), default="manual")
+    drawing_method: Mapped[str] = mapped_column(String(20), default="configurator")
+    drawing_release_percent: Mapped[float] = mapped_column(Float, default=80.0)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     client = relationship("Client", back_populates="projects")
     items = relationship("DesignRecord", back_populates="project")
     quotes = relationship("Quote", back_populates="project")
     jobs = relationship("Job", back_populates="project")
+    extractions = relationship(
+        "TechnicalExtraction", back_populates="project",
+        cascade="all, delete-orphan")
+    drawing_tasks = relationship(
+        "DrawingTask", back_populates="project",
+        cascade="all, delete-orphan")
+    production_releases = relationship(
+        "ProductionRelease", back_populates="project",
+        cascade="all, delete-orphan")
+    workflow_events = relationship(
+        "WorkflowEvent", back_populates="project",
+        cascade="all, delete-orphan")
 
 
 class Job(Base):
@@ -122,6 +142,10 @@ class StockMove(Base):
     delta: Mapped[float] = mapped_column(Float)
     reason: Mapped[str] = mapped_column(String(120), default="")
     job_number: Mapped[str] = mapped_column(String(30), default="")
+    extraction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("technical_extractions.id"), nullable=True)
+    extraction_revision: Mapped[int | None] = mapped_column(
+        Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -151,6 +175,8 @@ class Quote(Base):
     job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
     design_id: Mapped[int | None] = mapped_column(ForeignKey("designs.id"), nullable=True)
+    extraction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("technical_extractions.id"), nullable=True)
     client_name: Mapped[str] = mapped_column(String(160))
     product: Mapped[str] = mapped_column(String(160))
     # design config (from the configurator)
@@ -166,3 +192,142 @@ class Quote(Base):
     job = relationship("Job", back_populates="quotes")
     project = relationship("Project", back_populates="quotes")
     design = relationship("DesignRecord", back_populates="quotes")
+    extraction = relationship("TechnicalExtraction", back_populates="quotes")
+
+
+class TechnicalExtraction(Base):
+    """A revision-controlled material take-off prepared before quotation.
+
+    It is product-neutral: Frame, Frameless and Balustrade all use this record,
+    while the method states whether the rows were generated, manual or hybrid.
+    """
+    __tablename__ = "technical_extractions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    method: Mapped[str] = mapped_column(String(20), default="manual")
+    recipe_status: Mapped[str] = mapped_column(String(20), default="manual")
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(80), default="")
+    approved_by: Mapped[str] = mapped_column(String(80), default="")
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    project = relationship("Project", back_populates="extractions")
+    items = relationship(
+        "ExtractionItem", back_populates="extraction",
+        cascade="all, delete-orphan")
+    drawing_tasks = relationship("DrawingTask", back_populates="extraction")
+    quotes = relationship("Quote", back_populates="extraction")
+
+
+class ExtractionItem(Base):
+    __tablename__ = "extraction_items"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    extraction_id: Mapped[int] = mapped_column(
+        ForeignKey("technical_extractions.id"))
+    code: Mapped[str] = mapped_column(String(60), default="")
+    material: Mapped[str] = mapped_column(String(180))
+    category: Mapped[str] = mapped_column(String(50), default="Material")
+    quantity: Mapped[float] = mapped_column(Float, default=1.0)
+    unit: Mapped[str] = mapped_column(String(20), default="pcs")
+    unit_price: Mapped[float] = mapped_column(Float, default=0.0)
+    source: Mapped[str] = mapped_column(String(20), default="manual")
+    notes: Mapped[str] = mapped_column(String(240), default="")
+    extraction = relationship("TechnicalExtraction", back_populates="items")
+
+
+class DrawingTask(Base):
+    """The handoff to either the built-in configurator or AutoCAD."""
+    __tablename__ = "drawing_tasks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    extraction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("technical_extractions.id"), nullable=True)
+    quote_id: Mapped[int | None] = mapped_column(
+        ForeignKey("quotes.id"), nullable=True)
+    method: Mapped[str] = mapped_column(String(20), default="configurator")
+    status: Mapped[str] = mapped_column(String(30), default="assigned")
+    assigned_to: Mapped[str] = mapped_column(String(100), default="")
+    brief: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(80), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    project = relationship("Project", back_populates="drawing_tasks")
+    extraction = relationship("TechnicalExtraction", back_populates="drawing_tasks")
+    revisions = relationship(
+        "DrawingRevision", back_populates="task",
+        cascade="all, delete-orphan")
+
+
+class DrawingRevision(Base):
+    """One immutable submission of client and/or factory drawing outputs."""
+    __tablename__ = "drawing_revisions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    drawing_task_id: Mapped[int] = mapped_column(ForeignKey("drawing_tasks.id"))
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(30), default="under_review")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    submitted_by: Mapped[str] = mapped_column(String(80), default="")
+    approved_by: Mapped[str] = mapped_column(String(80), default="")
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    task = relationship("DrawingTask", back_populates="revisions")
+    files = relationship(
+        "DrawingFile", back_populates="revision",
+        cascade="all, delete-orphan")
+    production_releases = relationship(
+        "ProductionRelease", back_populates="drawing_revision")
+
+
+class DrawingFile(Base):
+    __tablename__ = "drawing_files"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    drawing_revision_id: Mapped[int] = mapped_column(
+        ForeignKey("drawing_revisions.id"))
+    kind: Mapped[str] = mapped_column(String(30))
+    filename: Mapped[str] = mapped_column(String(180))
+    stored_name: Mapped[str] = mapped_column(String(220), unique=True)
+    content_type: Mapped[str] = mapped_column(String(100), default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    revision = relationship("DrawingRevision", back_populates="files")
+
+
+class ProductionRelease(Base):
+    """Frozen factory authorization tied to one approved E/Q/R chain."""
+    __tablename__ = "production_releases"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    release_number: Mapped[str] = mapped_column(String(60), default="")
+    status: Mapped[str] = mapped_column(String(20), default="current")
+    extraction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("technical_extractions.id"), nullable=True)
+    extraction_revision: Mapped[int | None] = mapped_column(
+        Integer, nullable=True)
+    quote_id: Mapped[int | None] = mapped_column(
+        ForeignKey("quotes.id"), nullable=True)
+    quotation_number: Mapped[str] = mapped_column(String(40), default="")
+    drawing_revision_id: Mapped[int] = mapped_column(
+        ForeignKey("drawing_revisions.id"))
+    drawing_revision_number: Mapped[int | None] = mapped_column(
+        Integer, nullable=True)
+    file_manifest: Mapped[str] = mapped_column(Text, default="[]")
+    released_by: Mapped[str] = mapped_column(String(80))
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    project = relationship("Project", back_populates="production_releases")
+    drawing_revision = relationship(
+        "DrawingRevision", back_populates="production_releases")
+
+
+class WorkflowEvent(Base):
+    """Project-level audit trail before and alongside the factory Job."""
+    __tablename__ = "workflow_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    who: Mapped[str] = mapped_column(String(80), default="System")
+    kind: Mapped[str] = mapped_column(String(30), default="workflow")
+    note: Mapped[str] = mapped_column(String(400), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    project = relationship("Project", back_populates="workflow_events")

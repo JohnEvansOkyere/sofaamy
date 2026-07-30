@@ -53,9 +53,9 @@ input,select,textarea{font-family:inherit;font-size:14px;}
 ::-webkit-scrollbar-thumb:hover{background:#b4c2ce;}
 
 /* ---------- LAYOUT SHELL ---------- */
-.shell{display:flex;min-height:100vh;}
-.main-col{flex:1;min-width:0;display:flex;flex-direction:column;}
-.content{padding:26px 30px 60px;max-width:1440px;width:100%;margin:0 auto;}
+.shell{display:flex;min-width:0;width:100%;min-height:100vh;overflow-x:clip;}
+.main-col{flex:1;min-width:0;display:flex;flex-direction:column;overflow-x:hidden;}
+.content{min-width:0;padding:26px 30px 60px;max-width:1440px;width:100%;margin:0 auto;}
 .content-wide{max-width:none;padding:18px 22px 60px;}
 
 /* ---------- SIDEBAR ---------- */
@@ -63,7 +63,7 @@ input,select,textarea{font-family:inherit;font-size:14px;}
   width:var(--sidebar-w);flex-shrink:0;
   background:linear-gradient(185deg,var(--navy-900),var(--navy-700));
   color:#cdd9e4;display:flex;flex-direction:column;
-  position:sticky;top:0;height:100vh;
+  position:sticky;top:0;left:0;z-index:30;height:100vh;
 }
 .sb-brand{display:flex;align-items:center;gap:11px;padding:20px 20px 18px;}
 .sb-logo{

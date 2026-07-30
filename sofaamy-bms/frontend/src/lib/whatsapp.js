@@ -43,14 +43,13 @@ export function stageMessage({ client, jobNumber, product, stageLabel, progress 
   ].join('\n')
 }
 
-export function deliveryMessage({ client, jobNumber, product, dnNumber, driver, vehicle, balance }) {
+export function deliveryMessage({ client, jobNumber, product, dnNumber, driver, vehicle }) {
   return [
     `Hello ${firstName(client)}! 🚚`,
     ``,
     `Your *${product}* (${jobNumber}) is scheduled for delivery.`,
     `Delivery note: ${dnNumber}`,
     driver ? `Driver: ${driver}${vehicle ? ` · ${vehicle}` : ''}` : null,
-    balance > 0 ? `Balance due on delivery: *${GHS0(balance)}*` : `Fully paid — thank you! ✅`,
     ``,
     `— Sofaamy Co. Ltd`,
   ].filter(l => l !== null).join('\n')

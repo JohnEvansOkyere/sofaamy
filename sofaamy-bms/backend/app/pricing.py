@@ -165,11 +165,11 @@ def frame_accessory_rows(design: dict) -> list[dict]:
     source = FRAME_SOURCE_ACCESSORIES.get(design.get("system"), [])
     cells = design.get("cells") or []
     project_qty = max(1, int(design.get("qty") or 1))
-    opening_count = max(1, sum(max(1, int(c.get("item_qty") or 1)) for c in cells))
+    opening_count = max(1, len(cells))
     moving = [c for c in cells if c.get("opening") != "fixed"]
-    moving_panels = max(1, sum(max(1, int(c.get("panels") or 1)) * max(1, int(c.get("item_qty") or 1)) for c in moving))
+    moving_panels = max(1, sum(max(1, int(c.get("panels") or 1)) for c in moving))
     doors = [c for c in cells if c.get("opening") in ("single", "double")]
-    double_doors = sum(max(1, int(c.get("item_qty") or 1)) for c in doors if c.get("opening") == "double")
+    double_doors = sum(1 for c in doors if c.get("opening") == "double")
     has_sliding_door = any(
         c.get("opening") == "sliding"
         and (c.get("rate_key") == "slidingDoor" or "sliding door" in str(design.get("name", "")).lower())
@@ -295,9 +295,11 @@ FAB = {"frame_depth": 50, "interlock": 30, "track_clear": 30,
 
 TRIALCO_FAB = {"leaf_count": 2, "leaf_height_deduct": 70,
                "net_height_deduct": 10, "glass_deduct": 112,
-               "net_qty": 2, "interlock_qty": 2, "glass_qty": 2}
+               "net_qty": 1, "interlock_qty": 2, "glass_qty": 2}
 TRIALCO_STOCK_MM = 5800
 TRIALCO_KERF_MM = 5
+TRIALCO_GLASS_SHEET_M2 = 7.2
+TRIALCO_GLASS_SHEET_INCREMENT = 0.5
 TRIALCO_INSTALLATION_PERCENT = 30
 TRIALCO_MIN_MARGIN_PERCENT = 15
 TRIALCO_TARGET_MARGIN_PERCENT = 25
@@ -367,8 +369,7 @@ def _trialco_material_row(row_id: str, description: str, quantity: float, meta: 
 def trialco_material_cost(design: dict) -> dict:
     """Material quantities and fixed internal prices for one Trialco recipe."""
     d = trialco_dimensions(design)
-    item_qty = max(1, int((design.get("cells") or [{}])[0].get("item_qty") or 1))
-    project_qty = max(1, int(design.get("qty") or 1)) * item_qty
+    project_qty = max(1, int(design.get("qty") or 1))
     leaf_qty = TRIALCO_FAB["leaf_count"]
     net_qty = TRIALCO_FAB["net_qty"]
     glass_qty = TRIALCO_FAB["glass_qty"]
@@ -376,7 +377,11 @@ def trialco_material_cost(design: dict) -> dict:
     leaf_length = leaf_qty * 2 * (d["leaf_w"] + d["leaf_h"])
     net_length = net_qty * 2 * (d["net_w"] + d["net_h"])
     interlock_length = TRIALCO_FAB["interlock_qty"] * d["interlock_length"]
-    glass_area = glass_qty * d["glass_w"] * d["glass_h"] / 1e6
+    glass_cut_area = glass_qty * d["glass_w"] * d["glass_h"] / 1e6 * project_qty
+    glass_purchase_area = d["frame_w"] * d["frame_h"] / 1e6 * project_qty
+    glass_sheet_qty = math.ceil(
+        (glass_purchase_area / TRIALCO_GLASS_SHEET_M2) / TRIALCO_GLASS_SHEET_INCREMENT
+    ) * TRIALCO_GLASS_SHEET_INCREMENT
     net_area = net_qty * d["net_w"] * d["net_h"] / 1e6
     glass_perimeter = glass_qty * 2 * (d["glass_w"] + d["glass_h"]) / 1000
     net_perimeter = net_qty * 2 * (d["net_w"] + d["net_h"]) / 1000
@@ -402,16 +407,16 @@ def trialco_material_cost(design: dict) -> dict:
     base_rows = [
         _trialco_material_row("trialco-frame", "Trialco frame", bars(frame_cuts), TRIALCO_MATERIAL_PRICES["frame"], f"{round(frame_length * project_qty / 1000, 2)} m required · 5 mm kerf nesting · 2 × (Frame W + Frame H)"),
         _trialco_material_row("trialco-leaf", "Trialco leaf", bars(leaf_cuts), TRIALCO_MATERIAL_PRICES["leaf"], f"{round(leaf_length * project_qty / 1000, 2)} m required · 2 leaves × 2 × (Leaf W + Leaf H)"),
-        _trialco_material_row("trialco-net", "Trialco net", bars(net_cuts), TRIALCO_MATERIAL_PRICES["net"], f"{round(net_length * project_qty / 1000, 2)} m required · 2 nets × perimeter"),
+        _trialco_material_row("trialco-net", "Trialco net", bars(net_cuts), TRIALCO_MATERIAL_PRICES["net"], f"{round(net_length * project_qty / 1000, 2)} m required · {net_qty} net × perimeter"),
         _trialco_material_row("trialco-interlock", "Trialco interlock", bars(interlock_cuts), TRIALCO_MATERIAL_PRICES["interlock"], f"{round(interlock_length * project_qty / 1000, 2)} m required · 2 × Leaf H"),
         _trialco_material_row("trialco-kit", "Trialco kits", project_qty, TRIALCO_MATERIAL_PRICES["kit"], "1 set per bay"),
-        _trialco_material_row("glass", f"Glass — {glass_label}", glass_area * project_qty, {"code": selected_glass, "unit": "m²", "unit_price": glass_price}, f"{round(glass_area * project_qty, 2)} m² · 2 panels × Glass W × Glass H"),
-        _trialco_material_row("0404-corners", "0404 corners", 4 * leaf_qty * project_qty, TRIALCO_MATERIAL_PRICES["corner"], "4 corners per leaf"),
+        _trialco_material_row("glass", f"Glass — {glass_label}", glass_sheet_qty, {"code": selected_glass, "unit": f"{TRIALCO_GLASS_SHEET_M2}m² sheet", "unit_price": glass_price * TRIALCO_GLASS_SHEET_M2}, f"{round(glass_purchase_area, 2)} m² frame-area basis ÷ {TRIALCO_GLASS_SHEET_M2} m²/sheet = {glass_sheet_qty:g} sheets (rounded to 0.5); cut estimate {round(glass_cut_area, 2)} m² · 2 panels × Glass W × Glass H"),
+        _trialco_material_row("0404-corners", "0404 corners", 4 * (1 + leaf_qty) * project_qty, TRIALCO_MATERIAL_PRICES["corner"], "4 outer-frame corners + 4 corners per leaf"),
         _trialco_material_row("trialco-rollers", "Trialco rollers", 2 * leaf_qty * project_qty, TRIALCO_MATERIAL_PRICES["rollers"], "2 rollers per leaf"),
-        _trialco_material_row("metal-locks", "Metal locks", leaf_qty * project_qty, TRIALCO_MATERIAL_PRICES["locks"], "1 lock per leaf"),
+        _trialco_material_row("metal-locks", "Metal locks", project_qty, TRIALCO_MATERIAL_PRICES["locks"], "1 lock per bay"),
         _trialco_material_row("net-corners", "Net corners", 4 * net_qty * project_qty, TRIALCO_MATERIAL_PRICES["net_corners"], "4 corners per net"),
         _trialco_material_row("net-handle", "Net handle", net_qty * project_qty, TRIALCO_MATERIAL_PRICES["net_handle"], "1 handle per net"),
-        _trialco_material_row("net-fibre", "Net fibre", net_area * project_qty, TRIALCO_MATERIAL_PRICES["net_fibre"], f"{round(net_area * project_qty, 2)} m² · 2 nets × Net W × Net H"),
+        _trialco_material_row("net-fibre", "Net fibre", net_area * project_qty, TRIALCO_MATERIAL_PRICES["net_fibre"], f"{round(net_area * project_qty, 2)} m² · {net_qty} net × Net W × Net H"),
         _trialco_material_row("glazing-rubber", "Glazing rubber", glass_perimeter * project_qty, TRIALCO_MATERIAL_PRICES["glazing"], f"{round(glass_perimeter * project_qty, 2)} m · glass perimeter"),
         _trialco_material_row("net-rubber", "Net rubber", net_perimeter * project_qty, TRIALCO_MATERIAL_PRICES["net_rubber"], f"{round(net_perimeter * project_qty, 2)} m · net perimeter"),
         _trialco_material_row("installation-screws", "Installation screws", 4 * project_qty, TRIALCO_MATERIAL_PRICES["screws"], "4 screws per bay"),
@@ -465,7 +470,11 @@ def trialco_material_cost(design: dict) -> dict:
             "material_cost_per_unit": round(material_cost / project_qty, 2),
             "installation_cost_per_unit": round(installation_cost / project_qty, 2),
             "total_cost_per_unit": round((material_cost + installation_cost) / project_qty, 2),
-            "price_source": "Trialco internal costing sheet rates · glass catalogue rate"}
+            "glass_cut_area_m2": round(glass_cut_area, 2),
+            "glass_purchase_area_m2": round(glass_purchase_area, 2),
+            "glass_sheet_qty": glass_sheet_qty,
+            "glass_sheet_area_m2": TRIALCO_GLASS_SHEET_M2,
+            "price_source": "Trialco internal costing sheet rates · glass catalogue sheet rate"}
 
 
 def trialco_breakdown(design: dict) -> dict:
@@ -719,7 +728,7 @@ def calc_design_quote(design: dict) -> dict:
         cell = design["cells"][0] if design.get("cells") else {}
         rate_key = cell.get("rate_key") or "slidingWindow"
         row_area = design["width"] * design["height"] / 1e6
-        row_qty = max(1, int(cell.get("item_qty") or 1)) * qty
+        row_qty = qty
         rate = (recommended_client_net / (row_area * row_qty)
                 if material_sheet else cell.get("rate_per_m2"))
         if not isinstance(rate, (int, float)):
@@ -739,7 +748,7 @@ def calc_design_quote(design: dict) -> dict:
             if not isinstance(rate, (int, float)):
                 rate = FRAME_QUOTE_RATES.get(rate_key, FRAME_QUOTE_RATES["fixed"])
             row_area = sec_w * sec_h / 1e6
-            row_qty = max(1, int(cell.get("item_qty") or 1)) * qty
+            row_qty = qty
             row_total = row_area * row_qty * rate
             client_lines.append({
                 "description": OPENING_LABELS.get(cell.get("opening"), cell.get("opening", "Frame item")),
@@ -757,7 +766,7 @@ def calc_design_quote(design: dict) -> dict:
     vat = client_net * vat_percent / 100
     client_grand_total = client_net + getf_nhis + vat
     floor_gap = client_net - internal_floor
-    pricing_qty = qty * max(1, int((design.get("cells") or [{}])[0].get("item_qty") or 1))
+    pricing_qty = qty
     pricing_area = area * pricing_qty
     return {
         "area": round(area, 2),

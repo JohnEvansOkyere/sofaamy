@@ -38,7 +38,7 @@ export default function Inventory() {
 
   return (
     <>
-      <PageHead title="Inventory & Stock" subtitle="Issued automatically when a job enters Cutting; received here.">
+      <PageHead title="Inventory & Stock" subtitle="Issued automatically from the approved extraction when a job enters Cutting; catalogue opening balances and prices are provisional until the physical count and supplier rate update.">
         {live
           ? <span className="badge b-green"><span className="bdot"/>Live · from database</span>
           : <span className="badge b-orange"><span className="bdot"/>Backend offline</span>}
@@ -96,7 +96,11 @@ export default function Inventory() {
               </b>
               <div>
                 <b className="t-mono" style={{ fontSize:11.5 }}>{mv.code}</b> <span className="t-muted">{mv.reason}</span>
-                <div className="muted" style={{ fontSize:11 }}>{mv.job ? `${mv.job} · ` : ''}{timeAgo(mv.at)}</div>
+                <div className="muted" style={{ fontSize:11 }}>
+                  {mv.job ? `${mv.job} · ` : ''}
+                  {mv.extraction_revision ? `Extraction E${mv.extraction_revision} · ` : ''}
+                  {timeAgo(mv.at)}
+                </div>
               </div>
             </div>
           ))}

@@ -85,7 +85,7 @@ export function calcDesignQuote(d) {
       const c = d.cells[0] || {}
       const rateKey = c.rateKey || 'slidingWindow'
       const rowArea = d.width * d.height / 1e6
-      const rowQty = Math.max(1, Number(c.itemQty || 1)) * qty
+      const rowQty = qty
       const unitPrice = materialSheet
         ? recommendedClientNet / (rowArea * rowQty)
         : (Number.isFinite(c.ratePerM2) ? c.ratePerM2 : frameRateForRateKey(rateKey))
@@ -98,7 +98,7 @@ export function calcDesignQuote(d) {
       const rateKey = c.rateKey || frameRateKeyForOpening(c.opening)
       const unitPrice = Number.isFinite(c.ratePerM2) ? c.ratePerM2 : frameRateForRateKey(rateKey)
       const rowArea = size.wMm * size.hMm / 1e6
-      const rowQty = Math.max(1, Number(c.itemQty || 1)) * qty
+      const rowQty = qty
       return {
         description: OPENINGS[c.opening]?.label || c.opening,
         widthMm: Math.round(size.wMm), heightMm: Math.round(size.hMm),
@@ -116,9 +116,7 @@ export function calcDesignQuote(d) {
   const clientVat = clientNet * vatPercent / 100
   const clientGrandTotal = clientNet + clientGetfNhis + clientVat
   const floorGap = clientNet - internalFloor
-  const pricingQty = materialSheet
-    ? qty * Math.max(1, Number(d.cells?.[0]?.itemQty || 1))
-    : qty
+  const pricingQty = qty
   const pricingArea = area * pricingQty
 
   return {

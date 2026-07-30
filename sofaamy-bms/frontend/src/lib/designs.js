@@ -41,7 +41,6 @@ export const templateById = (id) => {
 const makeCells = (cols, rows, opening, rateKey) =>
   Array.from({ length: cols * rows }, () => ({
     glass:'5CF', opening, panels:1,
-    itemQty:1,
     rateKey: rateKey || frameRateKeyForOpening(opening),
     ratePerM2: frameRateForRateKey(rateKey || frameRateKeyForOpening(opening)),
   }))
@@ -75,7 +74,7 @@ export function buildDesign(t) {
     accessoryOverrides:[], customCutPieces:[], siteImages:[],
     clientPhone:'', clientEmail:'', jobDescription:'', colourDescription:'', quoteValidDays:3, costFloorOverride:0,
     depositPercent:80, discountPercent:0, getfNhisPercent:5, vatPercent:15,
-    wallColor:'#ded8cc', floorColor:'#cfd6dc', customFrameColor:'', visualView:'orbit',
+    wallColor:'#ded8cc', floorColor:'#cfd6dc', customFrameColor:'', visualView:'orbit', visualSlideDirection:'left-to-right',
     width:t.w, height:t.h, cols:t.cols, rows:t.rows, frame:'mill',
     colWidths: equalSplit(t.w, t.cols), rowHeights: equalSplit(t.h, t.rows),
     cells: makeCells(t.cols, t.rows, t.opening, rateKey) }
@@ -89,7 +88,7 @@ export function resizeGrid(design, cols, rows) {
   const fallbackRate = design.cells[0]?.ratePerM2 || frameRateForRateKey(fallbackRateKey)
   const fresh = design.category === 'curtainwall'
     ? () => ({ type:'vision', glass:'reflective', opening:'fixed', panels:1 })
-    : () => ({ glass:fallbackGlass, opening:fallback, panels:1, itemQty:1, rateKey:fallbackRateKey, ratePerM2:fallbackRate })
+    : () => ({ glass:fallbackGlass, opening:fallback, panels:1, rateKey:fallbackRateKey, ratePerM2:fallbackRate })
   const cells = []
   for (let r = 0; r < rows; r++)
     for (let c = 0; c < cols; c++) {

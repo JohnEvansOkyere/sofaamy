@@ -2,6 +2,21 @@
 
 This note records how the system maps the supplied company evidence into two different documents.
 
+## 0. Ownership boundary
+
+The Design Configurator is a technical workspace. It owns measurements,
+sections, openings, glass/profile selection, material quantities, fabrication
+details, previews, cutting lists, and work orders. It does not issue a quote,
+show project money, set taxes or payment percentages, record client acceptance,
+or authorize production.
+
+The Quotations page owns the commercial workflow. It receives the latest
+approved extraction, keeps its material descriptions, quantities, and units
+locked, allows quotation staff to set selling rates and add commercial lines,
+stores an immutable itemised quote snapshot, generates the customer PDF,
+records client acceptance, and authorizes production only after payment and
+drawing gates are complete.
+
 ## 1. Customer quotation
 
 The customer-facing PDF follows the supplied Excel quotation style, but adds traceability:
