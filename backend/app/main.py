@@ -16,6 +16,7 @@ from sqlalchemy import select, func
 import hashlib
 import hmac
 import json
+import os
 
 from .database import Base, engine, get_db, SessionLocal
 from . import models, schemas, lifecycle as lc
@@ -89,7 +90,12 @@ app.add_middleware(
     expose_headers=["Content-Disposition", "X-Quote-Number"],
 )
 
-DRAWING_STORAGE = Path(__file__).resolve().parent.parent / "uploads" / "drawings"
+# Serverless (Vercel) has a read-only filesystem — only /tmp is writable there,
+# so uploaded drawings are ephemeral until moved to Supabase Storage.
+DRAWING_STORAGE = Path(os.environ.get(
+    "SOFAAMY_UPLOAD_DIR",
+    "/tmp/sofaamy-uploads/drawings" if os.environ.get("VERCEL")
+    else str(Path(__file__).resolve().parent.parent / "uploads" / "drawings")))
 DRAWING_STORAGE.mkdir(parents=True, exist_ok=True)
 
 PRODUCT_FAMILIES = {"frame", "frameless", "balustrade", "other"}

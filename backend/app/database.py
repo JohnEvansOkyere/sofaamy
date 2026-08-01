@@ -6,8 +6,12 @@ from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
 # Default: SQLite file next to the backend package. Set SOFAAMY_DATABASE_URL
 # to a postgresql:// URL (e.g. Supabase) for cloud deployment.
+# On Vercel the filesystem is read-only except /tmp, so the SQLite fallback
+# lives there (ephemeral — real deployments must set SOFAAMY_DATABASE_URL).
+_default_sqlite = ("sqlite:////tmp/sofaamy.db" if os.environ.get("VERCEL")
+                   else "sqlite:///./sofaamy.db")
 SQLALCHEMY_DATABASE_URL = os.environ.get(
-    "SOFAAMY_DATABASE_URL", "sqlite:///./sofaamy.db")
+    "SOFAAMY_DATABASE_URL", _default_sqlite)
 if SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
     # Supabase/Heroku-style URLs; SQLAlchemy needs the postgresql:// scheme
     SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace(

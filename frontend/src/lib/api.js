@@ -1,9 +1,11 @@
 // ============================================================
 // API CLIENT — Sofaamy Cloud API (FastAPI).
-// Base URL: VITE_API_URL, default http://127.0.0.1:8000
+// Base URL: VITE_API_URL if set; otherwise same-origin in production
+// (Vercel routes /api/* to the backend service) and 127.0.0.1:8000 in dev
 // (run the backend with:  uvicorn app.main:app --reload)
 // ============================================================
-const BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+const BASE = import.meta.env.VITE_API_URL ??
+  (import.meta.env.PROD ? '' : 'http://127.0.0.1:8000')
 
 async function post(path, body) {
   const res = await fetch(`${BASE}${path}`, {

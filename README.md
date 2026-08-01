@@ -49,3 +49,21 @@ Status: **Phase 0 prototype built and demo-ready** — three-category Design Con
   cd frontend
   npm run dev
 
+## Deploy (Vercel — both services)
+
+`vercel.json` defines two Vercel services: `frontend` (Vite, serves `/`) and
+`backend` (FastAPI, serves `/api/*`). Import the GitHub repo into a Vercel
+project and it deploys both under one domain — the frontend calls the API
+same-origin, no `VITE_API_URL` needed.
+
+Environment variables to set in Vercel:
+
+- `SOFAAMY_DATABASE_URL` — Supabase Postgres URL. Without it the backend
+  falls back to an **ephemeral** SQLite in `/tmp` (data resets on cold start).
+- Uploaded drawings land in `/tmp` on Vercel (ephemeral) until moved to
+  Supabase Storage; override the path with `SOFAAMY_UPLOAD_DIR` if needed.
+
+After pointing at Supabase for the first time, run the schema/seed once:
+`SOFAAMY_DATABASE_URL=... python backend/seed.py` (WARNING: seed.py drops all
+tables first — never run it against a database with real data).
+
