@@ -48,9 +48,9 @@ const PROCUREMENT_STATUS = {
 
 const PIPELINE_PHASES = [
   {
-    key: 'setup', label: 'Project setup', page: 'setup',
+    key: 'setup', label: 'Measurement', page: 'extraction',
     statuses: ['measurement_received'],
-    description: 'Measurement and technical defaults',
+    description: 'Site measurement received',
   },
   {
     key: 'extraction', label: 'Extraction', page: 'extraction',
@@ -75,7 +75,6 @@ const PIPELINE_PHASES = [
 ]
 
 const TECHNICAL_PAGES = [
-  ['setup', 'Project Setup'],
   ['extraction', 'Extraction'],
   ['commercial', 'Commercial Gate'],
   ['drawings', 'Drawings'],
@@ -83,7 +82,7 @@ const TECHNICAL_PAGES = [
 ]
 
 function pageForStatus(status) {
-  return PIPELINE_PHASES.find(phase => phase.statuses.includes(status))?.page || 'setup'
+  return PIPELINE_PHASES.find(phase => phase.statuses.includes(status))?.page || 'extraction'
 }
 
 function messageFrom(error) {
@@ -640,15 +639,12 @@ export default function TechnicalWorkflow() {
   const [selectedId, setSelectedId] = useState(
     searchParams.get('project') ? Number(searchParams.get('project')) : null)
   const [workflow, setWorkflow] = useState(null)
-  const [activePage, setActivePage] = useState('setup')
+  const [activePage, setActivePage] = useState('extraction')
   const [extractionSeed, setExtractionSeed] = useState(null)
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState(null)
   const [error, setError] = useState('')
-  const [settings, setSettings] = useState({
-    product_family: 'frame', product_system: '',
-    extraction_method: 'manual', drawing_method: 'configurator',
-  })
+  const [settings, setSettings] = useState({ product_family: 'frame', product_system: '' })
 
   const fire = message => {
     setToast(message)
@@ -669,8 +665,6 @@ export default function TechnicalWorkflow() {
       setSettings({
         product_family: data.project.product_family,
         product_system: data.project.product_system,
-        extraction_method: data.project.extraction_method,
-        drawing_method: data.project.drawing_method,
       })
     }).catch(error => setError(messageFrom(error)))
   }, [selectedId])
@@ -694,7 +688,7 @@ export default function TechnicalWorkflow() {
   const saveSettings = () => act(async () => {
     const data = await updateProjectWorkflow(selectedId, settings)
     setWorkflow(data)
-  }, 'Technical project settings saved')
+  }, 'Product details saved')
 
   return (
     <>
@@ -743,8 +737,8 @@ export default function TechnicalWorkflow() {
               ))}
             </nav>
 
-            {activePage === 'setup' && <Card title="Project setup" sub="Confirm the technical defaults used for extraction and drawing work.">
-              <div className="tw-form-grid four">
+            {activePage === 'extraction' && <Card title="Technical extraction" sub="Prepare and approve the material quantities required before commercial pricing begins.">
+              <div className="tw-form-grid">
                 <Field label="Product family">
                   <select value={settings.product_family} onChange={e => setSettings(s => ({ ...s, product_family: e.target.value }))}>
                     {Object.entries(FAMILY_LABEL).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
@@ -753,21 +747,12 @@ export default function TechnicalWorkflow() {
                 <Field label="Product / profile system">
                   <input placeholder="e.g. Trialco" value={settings.product_system} onChange={e => setSettings(s => ({ ...s, product_system: e.target.value }))} />
                 </Field>
-                <Field label="Default extraction">
-                  <select value={settings.extraction_method} onChange={e => setSettings(s => ({ ...s, extraction_method: e.target.value }))}>
-                    <option value="manual">Manual</option><option value="generated">Generated</option><option value="hybrid">Hybrid</option>
-                  </select>
-                </Field>
-                <Field label="Default drawing">
-                  <select value={settings.drawing_method} onChange={e => setSettings(s => ({ ...s, drawing_method: e.target.value }))}>
-                    <option value="configurator">Configurator</option><option value="autocad">AutoCAD</option>
-                  </select>
-                </Field>
               </div>
-              <button className="btn btn-primary btn-sm" disabled={busy} onClick={saveSettings}>Save project settings</button>
-            </Card>}
-
-            {activePage === 'extraction' && <Card title="Technical extraction" sub="Prepare and approve the material quantities required before commercial pricing begins.">
+              {(settings.product_family !== workflow.project.product_family
+                || settings.product_system !== workflow.project.product_system) && (
+                <button className="btn btn-ghost btn-sm" disabled={busy} onClick={saveSettings}>Save product details</button>
+              )}
+              <div className="divider" />
               <ExtractionEditor project={{ ...workflow.project, item_count: activeProject?.item_count || 0 }}
                 seed={extractionSeed} onSeedUsed={() => setExtractionSeed(null)}
                 onSaved={setWorkflow} busy={busy} act={act} />
