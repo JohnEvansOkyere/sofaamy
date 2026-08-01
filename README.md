@@ -18,7 +18,9 @@ SOFAAMY/
 │   └── reference/             ← client-facing originals (proposals, pricing, blueprint, requirements)
 │       └── source/            ← editable .docx sources
 │
-├── sofaamy-bms/               ← THE product (monorepo: frontend, backend, docs, infra)
+├── frontend/                  ← THE product — React + Vite PWA
+├── backend/                   ← THE product — FastAPI
+├── infra/                     ← deploy config
 │
 ├── prototypes/                ← pre-build assets
 │   ├── configurator/          ← working react-konva configurator demo (GHS pricing) — seed for the product
@@ -34,16 +36,16 @@ SOFAAMY/
 - **How to build here** → `CLAUDE.md`
 - **Decisions made** → `MEMORY.md`
 
-Status: **Phase 0 prototype built and demo-ready** — three-category Design Configurator (Frame / Frameless / Curtain Wall) with live GHS pricing, cutting optimization, and SmartGlazier-style fabrication drawings (glass order, hardware list, installation sheet) generated parametrically from a hardware prep library. See `MEMORY.md` for the decision log and `sofaamy-bms/README.md` to run it.
+Status: **Phase 0 prototype built and demo-ready** — three-category Design Configurator (Frame / Frameless / Curtain Wall) with live GHS pricing, cutting optimization, and SmartGlazier-style fabrication drawings (glass order, hardware list, installation sheet) generated parametrically from a hardware prep library. See `MEMORY.md` for the decision log and `backend/README.md` to run it.
 
 
 • Backend:
 
-  cd sofaamy-bms/backend
+  cd backend
   .venv/bin/uvicorn app.main:app --reload
 
   Frontend — open a second terminal:
 
-  cd sofaamy-bms/frontend
+  cd frontend
   npm run dev
 

@@ -170,7 +170,7 @@ M3 production/cutting optimization + QR dispatch/install tracking, M4 inventory 
 ## 12. Repository Structure
 
 ```
-sofaamy-bms/
+.  (repo root)
 ├── frontend/     React + Vite + Tailwind PWA (configurator, dashboards, mobile capture)
 ├── backend/      FastAPI (auth, jobs, quotes, pricing, BOM, notifications)
 ├── docs/         scope, ERD, API contracts, demo script

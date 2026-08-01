@@ -131,11 +131,10 @@ Do not swap these without asking — they were proposed to the client.
 ## Repo layout
 
 ```
-docs/                  scope (PROJECT_OUTLINE.md), CHECKLIST.md, reference/ (client docs)
-sofaamy-bms/frontend   React PWA
-sofaamy-bms/backend    FastAPI
-sofaamy-bms/docs       ERD, API contracts, demo script
-sofaamy-bms/infra      deploy config
+docs/                  scope (PROJECT_OUTLINE.md), CHECKLIST.md, reference/ (client docs), ERD, API contracts, demo script
+frontend/              React PWA
+backend/               FastAPI
+infra/                 deploy config
 prototypes/configurator  working react-konva configurator demo (seed for frontend)
 prototypes/static-demo   early static HTML demo
 archive/               superseded files (old PDFs, zips) — pending deletion decision
@@ -164,7 +163,7 @@ Engagement docs live under `docs/reference/` (proposal, pricing, architecture bl
 ## Current state
 
 - `prototypes/configurator/` — working react-konva window configurator with a live GHS pricing engine (profiles, glass types, opening types, frame colours, dimension lines). This is the strongest demo asset and the seed for `frontend/`.
-- `sofaamy-bms/` — new tailored monorepo, scaffolding in progress.
+- `frontend/` + `backend/` at repo root — the product (moved out of the former `sofaamy-bms/` monorepo folder for deployment).
 - Engagement docs under `docs/reference/`: proposal, pricing proposal, technical architecture blueprint, information requirements v2.
 
 ## Immediate priority

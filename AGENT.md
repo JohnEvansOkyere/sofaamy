@@ -45,7 +45,7 @@ For a new task, use this sequence:
 1. `MEMORY.md` — decisions and rejected alternatives.
 2. `docs/PROJECT_OUTLINE.md` — client scope, competitive positioning, roadmap.
 3. `docs/CHECKLIST.md` — outstanding inputs and build status.
-4. `sofaamy-bms/docs/ARCHITECTURE.md` — the current one-data-spine model.
+4. `docs/ARCHITECTURE.md` — the current one-data-spine model.
 5. `docs/DOMAIN-GUIDE.md` — domain vocabulary and fabrication concepts.
 6. `docs/SOFAAMY-QUESTIONS.md` — unanswered client questions and placeholders.
 7. `docs/MEETING-REQUIREMENTS.md` — the 15 July requirements-meeting agenda
@@ -72,16 +72,15 @@ SOFAAMY/
 │   ├── MEETING-REQUIREMENTS.md       latest document-first requirements list
 │   ├── SOFAAMY-QUESTIONS.md          unanswered questions and placeholder map
 │   └── reference/                    proposals, blueprint, client originals
-├── sofaamy-bms/
-│   ├── frontend/                     React/Vite application and demo UX
-│   ├── backend/                      FastAPI + SQLAlchemy + SQLite API
-│   ├── docs/ARCHITECTURE.md          current data-spine architecture
-│   └── images/                       client drawings, PDFs, screenshots, data
+├── frontend/                         React/Vite application and demo UX
+├── backend/                          FastAPI + SQLAlchemy + SQLite API
+├── docs/ARCHITECTURE.md              current data-spine architecture
+├── images/                           client drawings, PDFs, screenshots, data
 ├── prototypes/                       earlier configurator/static demos
 └── archive/                          superseded proposals and zip snapshots
 ```
 
-`sofaamy-bms/` is the product. `prototypes/` is reference/seed material, not
+`frontend/` + `backend/` at root are the product. `prototypes/` is reference/seed material, not
 the default place for new product work.
 
 ## Architecture and data spine
@@ -122,7 +121,7 @@ and backend parity tests or hand-checks aligned.
 
 ### Backend
 
-- FastAPI entrypoint: `sofaamy-bms/backend/app/main.py`.
+- FastAPI entrypoint: `backend/app/main.py`.
 - SQLite connection: `app/database.py`; local DB file is `sofaamy.db`.
 - SQLAlchemy entities: `app/models.py`.
 - Request models and design JSON translation: `app/schemas.py`.
@@ -230,7 +229,7 @@ When a new file arrives:
 
 ### Important current evidence
 
-The newly supplied files in `sofaamy-bms/frame-sources/` are valuable. Their
+The newly supplied files in `frame-sources/` are valuable. Their
 Frame catalogue master data is now integrated into the frontend catalogue
 (`frontend/src/lib/frameCatalog.js`), while the fabrication and costing rules
 remain pending validation:
@@ -345,18 +344,18 @@ clearance validation.
 From the repository root:
 
 ```bash
-cd sofaamy-bms/frontend
+cd frontend
 npm run build
 ```
 
 For backend syntax/import checks:
 
 ```bash
-cd sofaamy-bms/backend
+cd backend
 python3 -m py_compile app/*.py seed.py
 ```
 
-For an API smoke test, start the backend from `sofaamy-bms/backend` with
+For an API smoke test, start the backend from `backend/` with
 `uvicorn app.main:app --reload`, then check `/`, `/api/dashboard`,
 `/api/designs`, and the relevant PDF/report route. The backend is optional for
 the frontend demo, so an offline badge is expected when it is not running.

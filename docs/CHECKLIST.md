@@ -55,7 +55,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked/needs dec
 
 ## C. Build Phases
 
-### Phase 0 — Demo-to-win  ✅ BUILT & VERIFIED (`sofaamy-bms/`)
+### Phase 0 — Demo-to-win  ✅ BUILT & VERIFIED (`frontend/` + `backend/` at repo root)
 - [x] Sofaamy-branded app shell + full dashboard (11 modules, populated)
 - [x] Multiple product templates (window, door, sliding, partition, curtain wall, frameless, balustrade, canopy)
 - [x] Fully-interactive react-konva configurator (dimensions, panels, opening, glass, finish)

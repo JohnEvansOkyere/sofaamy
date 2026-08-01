@@ -1,0 +1,129 @@
+.completed-projects {
+  margin-top:28px;
+  overflow:hidden;
+}
+
+.completed-projects-head {
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:24px;
+  padding:18px 20px;
+  border-bottom:1px solid var(--line);
+}
+
+.completed-projects-head > div {
+  display:grid;
+  gap:3px;
+}
+
+.completed-projects-head > div > span {
+  color:var(--navy-500);
+  font-size:9px;
+  font-weight:800;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+}
+
+.completed-projects-head h2 {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  color:var(--ink);
+  font-size:16px;
+}
+
+.completed-projects-head h2 small {
+  display:grid;
+  place-items:center;
+  min-width:23px;
+  height:23px;
+  padding:0 6px;
+  border-radius:12px;
+  background:var(--green-soft);
+  color:var(--green);
+  font-size:10px;
+}
+
+.completed-projects-head p {
+  color:var(--ink-3);
+  font-size:11px;
+}
+
+.completed-search {
+  display:grid;
+  gap:5px;
+  width:min(360px, 100%);
+  color:var(--ink-3);
+  font-size:9.5px;
+  font-weight:700;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+}
+
+.completed-search input {
+  width:100%;
+  padding:9px 11px;
+  border:1px solid var(--line);
+  border-radius:8px;
+  background:var(--surface);
+  color:var(--ink);
+  font-size:12px;
+  outline:none;
+  text-transform:none;
+}
+
+.completed-search input:focus {
+  border-color:var(--navy-500);
+  box-shadow:0 0 0 2px rgba(22,73,112,.08);
+}
+
+.completed-projects-table th,
+.completed-projects-table td {
+  white-space:nowrap;
+}
+
+.completed-empty {
+  padding:28px !important;
+  color:var(--ink-3) !important;
+  text-align:center;
+}
+
+.completed-pagination {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  padding:12px 16px;
+  border-top:1px solid var(--line);
+  color:var(--ink-3);
+  font-size:10.5px;
+}
+
+.completed-pagination > div {
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+
+.completed-pagination b {
+  color:var(--ink-2);
+  font-size:10.5px;
+}
+
+@media (max-width:760px) {
+  .completed-projects-head {
+    align-items:stretch;
+    flex-direction:column;
+    gap:14px;
+  }
+
+  .completed-search {
+    width:100%;
+  }
+
+  .completed-pagination {
+    align-items:flex-start;
+    flex-direction:column;
+  }
+}

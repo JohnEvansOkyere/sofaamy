@@ -1,0 +1,166 @@
+.accounts-alert {
+  margin-bottom: 18px;
+  padding: 10px 14px;
+  border: 1px solid #efc9c5;
+  border-radius: 9px;
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 12.5px;
+}
+
+.accounts-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(330px, .8fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.accounts-filters {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.accounts-filters button {
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink-2);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.accounts-filters button.active {
+  border-color: var(--navy-600);
+  background: var(--navy-600);
+  color: #fff;
+}
+
+.accounts-table tbody tr { cursor: pointer; }
+.accounts-table tbody tr.selected td { background: var(--blue-soft); }
+.accounts-table td:first-child { min-width: 190px; }
+.accounts-table td:first-child b,
+.accounts-table td:first-child small { display: block; }
+.accounts-table td:first-child small {
+  max-width: 230px;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accounts-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.accounts-summary > div {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--bg);
+}
+
+.accounts-summary span,
+.accounts-form label > span {
+  color: var(--ink-3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.accounts-summary b {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.accounts-form {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(212, 172, 13, .35);
+  border-radius: 10px;
+  background: var(--gold-soft);
+}
+
+.accounts-form label {
+  display: grid;
+  gap: 5px;
+}
+
+.accounts-form input,
+.accounts-form select {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  outline: none;
+}
+
+.accounts-form input:focus,
+.accounts-form select:focus { border-color: var(--navy-500); }
+
+.accounts-paid {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 9px;
+  background: var(--green-soft);
+  color: var(--green);
+  font-weight: 700;
+}
+
+.accounts-paid svg { width: 18px; height: 18px; }
+
+.accounts-history {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.accounts-history h4 {
+  color: var(--ink-2);
+  font-size: 11px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.accounts-history > div:not(.accounts-empty) {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  padding: 9px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.accounts-history p { display: grid; min-width: 0; }
+.accounts-history p b {
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.accounts-history p small { color: var(--ink-3); font-size: 10px; }
+.accounts-history strong { color: var(--ink); font-size: 12px; }
+.accounts-empty { padding: 22px 12px !important; color: var(--ink-3); font-size: 12px; }
+
+@media (max-width: 1180px) {
+  .accounts-layout { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  .accounts-layout .card-head { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .accounts-filters { justify-content: flex-start; }
+}

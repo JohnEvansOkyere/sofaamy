@@ -96,7 +96,7 @@ Grid elevation with bay dims → mullion/transom cutting list (mullions full hei
 
 ---
 
-## 5. What Sofaamy's own SmartGlazier print tells us (`sofaamy-bms/images/sofaamy.pdf`)
+## 5. What Sofaamy's own SmartGlazier print tells us (`images/sofaamy.pdf`)
 
 The 12-page pack is one real job — *"SWING DOOR 10MM CL"*, customer Benjamin, site MAXI ALUMINIUM ENT / THEOPHILUS, ref SGP/4462-26A — and it is a perfect specimen of §3.4:
 
@@ -132,7 +132,7 @@ The 12-page pack is one real job — *"SWING DOOR 10MM CL"*, customer Benjamin, 
 
 ## Sources
 
-- Sofaamy SmartGlazier job pack, `sofaamy-bms/images/sofaamy.pdf` (primary evidence)
+- Sofaamy SmartGlazier job pack, `images/sofaamy.pdf` (primary evidence)
 - [Smart Glazier — Glass Entrance & Partition Designer](https://smartglazier.com/en/shopfront/) · [Smart Glazier — Quoting](https://smartglazier.com/en/business/quoting/) · [Smart Glazier — Glass Shop Software](https://smartglazier.com/en/for-installers/business/glass-shop-software/)
 - [Forge Hardware — Patch fittings](https://forgehardware.com.au/entry-door/patch-fittings.html) · [FHC — Patch hardware](https://fhc-usa.com/arch-hardware/patch-fittings.html) · [Quality Glass Fittings — Patch fittings buyer's guide](https://qualityglassfittings.co.uk/blogs/blog/patch-fittings-glass-doors-buyers-guide) · [CR Laurence — Patch fitting glass door systems](https://www.crlaurence.com/productsubcategory/A10_AH)
 - [NPSA — Introduction to glass curtain wall systems](https://www.npsa.gov.uk/building-protection/windows-glazed-facades/introduction-glass-curtain-wall-systems) · [Glass Magazine — Curtain wall fundamentals](https://www.glassmagazine.com/article/curtain-wall-fundamentals) · [APRO — Stick vs unitized](https://aprowin.com/stick-vs-unitized-curtain-wall/) · [AC Glass — Curtain wall systems explained](https://acglass.com/blog/curtainwall-systems-explained-commercial-construction.html)
