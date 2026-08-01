@@ -72,13 +72,33 @@ function messageFrom(error) {
   }
 }
 
-function quoteDraft(workflow, project, commercial = null) {
-  const extraction = workflow?.extractions?.find(row => row.status === 'approved')
+// Every item in a project that currently has an approved extraction —
+// what the quotation workbench can offer to combine into one client quote.
+function biddableItems(workflow) {
+  return (workflow?.items || []).map(item => {
+    const key = item.design_id === null ? 'null' : String(item.design_id)
+    const summary = workflow.item_summary?.[key]
+    return {
+      design_id: item.design_id,
+      label: item.design_id === null ? 'Ungrouped (legacy)' : (item.ref || item.name),
+      extraction_id: summary?.approved_extraction_id ?? null,
+      extraction_revision: summary?.approved_extraction_revision ?? null,
+    }
+  }).filter(item => item.extraction_id != null)
+}
+
+function resolveExtractions(workflow, extractionIds) {
+  return extractionIds
+    .map(id => workflow?.extractions?.find(row => row.id === id))
+    .filter(Boolean)
+}
+
+function quoteDraft(extractions, workflow, project, commercial = null) {
   const existing = commercial?.lines || []
   const existingByItem = new Map(existing
     .filter(line => line.extraction_item_id != null)
     .map(line => [String(line.extraction_item_id), line]))
-  const technicalLines = (extraction?.items || []).map(item => {
+  const technicalLines = extractions.flatMap(extraction => (extraction.items || []).map(item => {
     const saved = existingByItem.get(String(item.id))
     return {
       extraction_item_id: item.id,
@@ -88,7 +108,7 @@ function quoteDraft(workflow, project, commercial = null) {
       unit: item.unit || 'item',
       unit_price: saved?.unit_price ?? item.unit_price ?? 0,
     }
-  })
+  }))
   const additions = existing
     .filter(line => line.extraction_item_id == null)
     .map(line => ({ ...EMPTY_ADDITION, ...line }))
@@ -122,6 +142,9 @@ export default function Quotations() {
   const [activePage, setActivePage] = useState('workbench')
   const [projectId, setProjectId] = useState(searchParams.get('project') || '')
   const [draft, setDraft] = useState(null)
+  // Which items' approved extractions are currently bundled into the draft
+  // quote — one project can hold several (e.g. a window and a door).
+  const [selectedExtractionIds, setSelectedExtractionIds] = useState([])
   const [revisionSeed, setRevisionSeed] = useState(null)
   const [editing, setEditing] = useState(null)
   const [live, setLive] = useState(false)
@@ -208,7 +231,13 @@ export default function Quotations() {
         const seed = revisionSeed?.project_id
           && String(revisionSeed.project_id) === String(projectId)
           ? revisionSeed.commercial : null
-        setDraft(quoteDraft(data, projects.find(p => String(p.id) === String(projectId)), seed))
+        const extractionIds = seed
+          ? (seed.extraction_ids?.length ? seed.extraction_ids : [seed.extraction_id].filter(Boolean))
+          : biddableItems(data).map(item => item.extraction_id)
+        setSelectedExtractionIds(extractionIds)
+        setDraft(quoteDraft(
+          resolveExtractions(data, extractionIds), data,
+          projects.find(p => String(p.id) === String(projectId)), seed))
         if (seed) setRevisionSeed(null)
         // Editing follows its own quote; switching project abandons the edit.
         setEditing(current =>
@@ -218,7 +247,19 @@ export default function Quotations() {
       .finally(() => setBusy(false))
   }, [projectId, projects.length])
 
-  const extraction = workflow?.extractions?.find(row => row.status === 'approved')
+  const availableItems = biddableItems(workflow)
+  const selectedExtractions = resolveExtractions(workflow, selectedExtractionIds)
+  const primaryExtraction = selectedExtractions[0]
+  const extractionsFloor = selectedExtractions.reduce((sum, row) => sum + row.subtotal, 0)
+
+  const toggleExtractionItem = extractionId => setSelectedExtractionIds(current => {
+    const next = current.includes(extractionId)
+      ? current.filter(id => id !== extractionId)
+      : [...current, extractionId]
+    setDraft(prev => quoteDraft(
+      resolveExtractions(workflow, next), workflow, activeProject, prev))
+    return next
+  })
   const totals = useMemo(() => {
     const pricedLines = (draft?.lines || []).reduce(
       (sum, line) => sum + Number(line.quantity || 0) * Number(line.unit_price || 0), 0)
@@ -253,11 +294,12 @@ export default function Quotations() {
   }))
 
   const generateQuote = async () => {
-    if (!extraction || !draft) return
+    if (!primaryExtraction || !draft) return
     setBusy(true)
     try {
       const payload = {
-        extraction_id: extraction.id,
+        extraction_id: primaryExtraction.id,
+        extra_extraction_ids: selectedExtractions.slice(1).map(row => row.id),
         product: draft.product,
         lines: draft.lines.map(line => ({
           ...line,
@@ -285,7 +327,8 @@ export default function Quotations() {
         setEditing(null)
       } else {
         const latest = data.quotations?.[0]
-        fire(`✅ ${latest?.quote_number || 'Draft quotation'} generated from extraction E${extraction.revision}`)
+        const basis = selectedExtractions.map(row => `E${row.revision}`).join(' + ')
+        fire(`✅ ${latest?.quote_number || 'Draft quotation'} generated from extraction ${basis}`)
       }
       setActivePage('client')
     } catch (error) {
@@ -330,6 +373,10 @@ export default function Quotations() {
     }
   }
 
+  const extractionIdsFromCommercial = commercial =>
+    commercial?.extraction_ids?.length ? commercial.extraction_ids
+      : [commercial?.extraction_id].filter(Boolean)
+
   const edit = quote => {
     if (!quote.commercial) return
     setEditing(quote)
@@ -337,7 +384,9 @@ export default function Quotations() {
     setActivePage('workbench')
     setProjectId(String(quote.project_id))
     if (String(quote.project_id) === String(projectId) && workflow) {
-      setDraft(quoteDraft(workflow, activeProject, quote.commercial))
+      const extractionIds = extractionIdsFromCommercial(quote.commercial)
+      setSelectedExtractionIds(extractionIds)
+      setDraft(quoteDraft(resolveExtractions(workflow, extractionIds), workflow, activeProject, quote.commercial))
       setRevisionSeed(null)
     }
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -347,7 +396,11 @@ export default function Quotations() {
   const cancelEdit = () => {
     const quote = editing
     setEditing(null)
-    if (workflow) setDraft(quoteDraft(workflow, activeProject))
+    if (workflow) {
+      const extractionIds = biddableItems(workflow).map(item => item.extraction_id)
+      setSelectedExtractionIds(extractionIds)
+      setDraft(quoteDraft(resolveExtractions(workflow, extractionIds), workflow, activeProject))
+    }
     if (quote) fire(`Left ${quote.quote_number} unchanged`)
   }
 
@@ -358,7 +411,9 @@ export default function Quotations() {
     setActivePage('workbench')
     setProjectId(String(quote.project_id))
     if (String(quote.project_id) === String(projectId) && workflow) {
-      setDraft(quoteDraft(workflow, activeProject, quote.commercial))
+      const extractionIds = extractionIdsFromCommercial(quote.commercial)
+      setSelectedExtractionIds(extractionIds)
+      setDraft(quoteDraft(resolveExtractions(workflow, extractionIds), workflow, activeProject, quote.commercial))
       setRevisionSeed(null)
     }
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -384,8 +439,10 @@ export default function Quotations() {
     quote => String(quote.project_id) === String(projectId))
   const pipelineSteps = workflow ? [
     {
-      label: 'Technical scope', page: 'workbench', complete: Boolean(extraction),
-      detail: extraction ? `Extraction E${extraction.revision}` : 'Approval pending',
+      label: 'Technical scope', page: 'workbench', complete: Boolean(primaryExtraction),
+      detail: primaryExtraction
+        ? selectedExtractions.map(row => `E${row.revision}`).join(' + ')
+        : 'Approval pending',
     },
     {
       label: 'Quote prepared', page: 'workbench', complete: Boolean(currentQuote),
@@ -529,16 +586,29 @@ export default function Quotations() {
           <button className="btn btn-ghost btn-sm" disabled={busy} onClick={cancelEdit}>Cancel</button>
         </div>}
         {!projectId && <div className="quote-empty">Choose a project to prepare its quotation.</div>}
-        {projectId && workflow && !extraction && <div className="quote-empty">
+        {projectId && workflow && !primaryExtraction && <div className="quote-empty">
           <p>The technical team must approve a material extraction before pricing can begin.</p>
           <Link className="btn btn-ghost btn-sm" to={`/technical-workflow?project=${projectId}`}>Open technical workflow</Link>
         </div>}
 
-        {extraction && draft && <>
+        {primaryExtraction && draft && <>
+          {availableItems.length > 1 && <div className="quote-basis" style={{ marginBottom: 12 }}>
+            <p style={{ marginTop: 0 }}><b>This project has {availableItems.length} items with an approved extraction.</b> Choose which ones to combine into this client quote.</p>
+            <div className="flex gap-sm wrap">
+              {availableItems.map(item => (
+                <label key={item.extraction_id} className="chip" style={{ cursor: 'pointer' }}>
+                  <input type="checkbox" style={{ marginRight: 6 }}
+                    checked={selectedExtractionIds.includes(item.extraction_id)}
+                    onChange={() => toggleExtractionItem(item.extraction_id)} />
+                  {item.label} · E{item.extraction_revision}
+                </label>
+              ))}
+            </div>
+          </div>}
           <div className="quote-basis">
-            <div><span>Approved technical basis</span><b>Extraction E{extraction.revision}</b></div>
-            <div><span>Material rows</span><b>{extraction.items.length}</b></div>
-            <div><span>Internal extracted floor</span><b>{GHS0(extraction.subtotal)}</b></div>
+            <div><span>Approved technical basis</span><b>{selectedExtractions.map(row => `E${row.revision}`).join(' + ')}</b></div>
+            <div><span>Material rows</span><b>{selectedExtractions.reduce((sum, row) => sum + row.items.length, 0)}</b></div>
+            <div><span>Internal extracted floor</span><b>{GHS0(extractionsFloor)}</b></div>
             <p>Descriptions, quantities and units come from technical approval. Set each selling rate, then set the company service charge applied to those priced technical materials. Discount is the amount the company removes afterward for the client.</p>
           </div>
 
@@ -595,10 +665,10 @@ export default function Quotations() {
               <div><span>GETF + NHIS</span><b>{GHS0(totals.getf)}</b></div>
               <div><span>VAT</span><b>{GHS0(totals.vat)}</b></div>
               <div className="grand"><span>Grand total</span><b>{GHS0(totals.grandTotal)}</b></div>
-              <div className={totals.net + .01 >= extraction.subtotal ? 'floor-ok' : 'floor-bad'}>
-                {totals.net + .01 >= extraction.subtotal
-                  ? `${GHS0(totals.net - extraction.subtotal)} above extracted floor before tax`
-                  : `${GHS0(extraction.subtotal - totals.net)} below extracted floor`}
+              <div className={totals.net + .01 >= extractionsFloor ? 'floor-ok' : 'floor-bad'}>
+                {totals.net + .01 >= extractionsFloor
+                  ? `${GHS0(totals.net - extractionsFloor)} above extracted floor before tax`
+                  : `${GHS0(extractionsFloor - totals.net)} below extracted floor`}
               </div>
             </div>
           </div>

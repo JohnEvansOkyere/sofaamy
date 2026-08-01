@@ -87,6 +87,46 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked/needs dec
 
 ---
 
+## E. Per-item technical pipeline (multi-item projects)
+*(Grejoy project: window + door under one client project. See MEMORY.md 2026-08-01 "Technical pipeline made per-item for multi-item projects" for the full root-cause writeup.)*
+
+### Backend — schema
+- [x] Add nullable `design_id` FK (→ `designs.id`) to `technical_extractions`
+- [x] Add nullable `design_id` FK to `drawing_tasks`
+- [x] Add nullable `design_id` FK to `production_releases`
+- [x] Add `extra_extraction_ids` (JSON text, matches this codebase's existing `file_manifest`-style convention) to `quotes` so one quote can bundle several items' extractions — chosen over a join table as the more surgical, lower-churn option
+- [x] Register new additive columns in `_auto_migrate()` for SQLite, and a new `_auto_migrate_postgres()` branch for Supabase (the live app runs on Postgres, not local SQLite — `create_all` only creates missing tables, never missing columns on tables that already exist, so Postgres needed its own additive path)
+- [x] User confirmed approach 2026-08-01: extend auto-migrate for Postgres too, applies automatically next backend start against Supabase — no manual step needed
+
+### Backend — logic
+- [x] Extraction revision numbering + "one approved at a time" superseding scoped to `(project_id, design_id)`, not `project_id` alone
+- [x] `generate_extraction_from_design` / `create_extraction` now require an explicit `design_id` once a project has >1 item (409 instead of silently picking the latest item)
+- [x] Drawing task creation/revision/approval/release threaded through `design_id`
+- [x] `create_quote_from_extraction` / `update_quote_from_extraction` accept `extraction_id` + `extra_extraction_ids` (one per item) and combine their material rows into one commercial snapshot / one quote number / one PDF
+- [x] `_technical_workflow_payload` rebuilt: added `items[]` (project's items) and `item_summary{}` (per-item approved extraction/quote/procurement); existing flat `extractions`/`drawing_tasks`/`production_releases`/`quotations` lists now carry `design_id` on every row so the frontend can group them
+- [x] New `POST /api/projects/{id}/extractions/assign-to-item` endpoint: one-time explicit handoff of a project's pre-existing ungrouped (design_id=None) chain to a real item, for projects that started before this fix — never auto-guessed
+- [x] Removed a dead validation branch found via test-writing: "bundled extraction is for the same item as the primary" can never actually trigger, since approving an item's new extraction always supersedes that same item's previous approved one (invariant enforced by `approve_extraction`)
+
+### Frontend
+- [x] Technical Workflow → Extraction tab shows an item picker (real items + an "Ungrouped (legacy)" tab when a pre-existing chain exists) and scopes extraction history/generation to the selected item; single-item projects show no picker at all — zero UI change for the common case
+- [x] Technical Workflow → Drawing tab scoped per item the same way; new-drawing-task creation disabled while viewing the ungrouped bucket (existing historical tasks still visible read-only)
+- [x] Technical Workflow → Extraction tab has an "Assign this pre-existing chain to one item" action (dropdown of the project's real items + Assign button) wired to the new backend endpoint
+- [x] Quotations → commercial workbench shows a checklist of every item with an approved extraction (only when a project has more than one) and combines the checked ones into one client quote, one commercial snapshot, one quote number
+- [x] Quotations → edit/revise of an existing combined quote correctly restores which items were bundled (reads the snapshot's `extraction_ids`)
+
+### Verification
+- [x] Backend tests: 15/15 passing (7 pre-existing regression + 8 new, incl. one for the drawing-task basis_status fix below). Tests live in `tests/test_revision_integrity.py` (kept in one file — a second file with its own `tearDownModule` reproduces the shared-engine-disposal bug already documented and fixed in the 2026-08-01 "Draft quotations" entry)
+- [x] Found and fixed while writing tests: quotation `basis_status`/`requires_review` and drawing-task `basis_status` were still computed against the single project-wide "approved extraction" — for a multi-item project every real item's drawing task would have shown as permanently "stale". Fixed to compare each quote/task against its own item's current chain (`_chain_ids_for` cache in `_technical_workflow_payload`); covered by `test_drawing_task_basis_status_is_scoped_to_its_own_item`
+- [x] Removed a dead validation branch surfaced by test-writing (see Backend — logic above)
+- [x] Manual browser walkthrough (Playwright, local dev servers, throwaway SQLite db — the real Supabase data was not touched) on a project reproducing the exact Grejoy shape (2 items: window + door): saved an extraction for the window, confirmed the door's own extraction tab was empty and independent, saved the door's own extraction, confirmed the window's E1 was untouched, approved both, then combined both into one client quote (`E1 + E1`, ₵4,800, correct GETF+NHIS/VAT math) on the Quotations page — zero console/page errors throughout
+- [ ] Confirm the fix against the real Grejoy project once this code is deployed and the Postgres auto-migrate has run (not done in this session — the live app was not touched, per the Hard Stops rule and Evans's "extend auto-migrate" choice, which applies on the next backend start)
+
+### Known gap not fixed in this pass
+- [!] `POST /api/reports/{kind}` (Reports page downloads) still resolves "the project's approved extraction" at project level (`design_id=None`). For a multi-item project this simply won't find a per-item match (degrades safely to the live calculated design, never the wrong item's data) rather than correctly picking that item's own approved extraction. Needs `design_id` threaded from the Reports page through `DesignQuoteIn` if/when that page needs to stay accurate for multi-item projects.
+- [!] `ChainIntegrity` banner and top-level `procurement`/`integrity` block on Technical Workflow still summarize only the legacy/ungrouped (`design_id=None`) chain — for a project with only real per-item chains (no ungrouped one) it will just show "no approved extraction" rather than a true multi-item rollup. Cosmetic only; each item's own status is correct and visible via the item picker and `item_summary`.
+
+---
+
 ## D. Housekeeping / Decisions Needed
 - [!] `archive/` holds 2 older Project-Proposal PDF versions + 2 configurator zips — **confirm safe to delete** (kept, not deleted).
 - [!] Duplicate `Sofaamy Business Management System — Project Proposal.docx` still inside `prototypes/configurator/` — leave or remove?

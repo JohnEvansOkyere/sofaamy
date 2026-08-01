@@ -177,6 +177,10 @@ class Quote(Base):
     design_id: Mapped[int | None] = mapped_column(ForeignKey("designs.id"), nullable=True)
     extraction_id: Mapped[int | None] = mapped_column(
         ForeignKey("technical_extractions.id"), nullable=True)
+    # Extra approved extractions bundled into this quote beyond extraction_id
+    # (JSON list of ids), for a project with several items whose materials are
+    # combined into one client quote. Empty for a single-item quote.
+    extra_extraction_ids: Mapped[str] = mapped_column(Text, default="[]")
     client_name: Mapped[str] = mapped_column(String(160))
     product: Mapped[str] = mapped_column(String(160))
     # design config (from the configurator)
@@ -204,6 +208,12 @@ class TechnicalExtraction(Base):
     __tablename__ = "technical_extractions"
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    # Which project item (configurator design) this take-off is for. Null on
+    # older records made before per-item scoping — those keep behaving as one
+    # project-wide chain. A project with several items needs one independent
+    # extraction chain per item, since each item is its own product/profile.
+    design_id: Mapped[int | None] = mapped_column(
+        ForeignKey("designs.id"), nullable=True)
     revision: Mapped[int] = mapped_column(Integer, default=1)
     method: Mapped[str] = mapped_column(String(20), default="manual")
     recipe_status: Mapped[str] = mapped_column(String(20), default="manual")
@@ -214,6 +224,7 @@ class TechnicalExtraction(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     project = relationship("Project", back_populates="extractions")
+    design = relationship("DesignRecord")
     items = relationship(
         "ExtractionItem", back_populates="extraction",
         cascade="all, delete-orphan")
@@ -242,6 +253,8 @@ class DrawingTask(Base):
     __tablename__ = "drawing_tasks"
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    design_id: Mapped[int | None] = mapped_column(
+        ForeignKey("designs.id"), nullable=True)
     extraction_id: Mapped[int | None] = mapped_column(
         ForeignKey("technical_extractions.id"), nullable=True)
     quote_id: Mapped[int | None] = mapped_column(
@@ -253,6 +266,7 @@ class DrawingTask(Base):
     created_by: Mapped[str] = mapped_column(String(80), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     project = relationship("Project", back_populates="drawing_tasks")
+    design = relationship("DesignRecord")
     extraction = relationship("TechnicalExtraction", back_populates="drawing_tasks")
     revisions = relationship(
         "DrawingRevision", back_populates="task",
@@ -299,6 +313,8 @@ class ProductionRelease(Base):
     __tablename__ = "production_releases"
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    design_id: Mapped[int | None] = mapped_column(
+        ForeignKey("designs.id"), nullable=True)
     release_number: Mapped[str] = mapped_column(String(60), default="")
     status: Mapped[str] = mapped_column(String(20), default="current")
     extraction_id: Mapped[int | None] = mapped_column(
@@ -317,6 +333,7 @@ class ProductionRelease(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     project = relationship("Project", back_populates="production_releases")
+    design = relationship("DesignRecord")
     drawing_revision = relationship(
         "DrawingRevision", back_populates="production_releases")
 

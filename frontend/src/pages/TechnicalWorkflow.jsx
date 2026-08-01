@@ -4,7 +4,7 @@ import { PageHead, Card, Badge } from '../components/ui.jsx'
 import {
   listProjects, getProjectWorkflow, updateProjectWorkflow,
   createExtraction, generateExtractionFromDesign, approveExtraction,
-  downloadQuotationPdf,
+  downloadQuotationPdf, assignExtractionsToItem,
   createDrawingTask, approveExistingConfiguratorDesign,
   createDrawingRevision, uploadDrawingFile,
   approveDrawingRevision, releaseProjectToFactory, drawingFileUrl,
@@ -155,7 +155,7 @@ function ChainIntegrity({ workflow }) {
   )
 }
 
-function ExtractionEditor({ project, seed, onSeedUsed, onSaved, busy, act }) {
+function ExtractionEditor({ project, designId, isUngrouped, seed, onSeedUsed, onSaved, busy, act }) {
   const [method, setMethod] = useState(project.extraction_method || 'manual')
   const [recipeStatus, setRecipeStatus] = useState(method === 'manual' ? 'manual' : 'provisional')
   const [notes, setNotes] = useState('')
@@ -188,6 +188,7 @@ function ExtractionEditor({ project, seed, onSeedUsed, onSaved, busy, act }) {
   const save = () => act(async () => {
     const clean = items.filter(item => item.material.trim())
     const data = await createExtraction(project.id, {
+      design_id: designId,
       method,
       recipe_status: method === 'manual' ? 'manual' : recipeStatus,
       notes,
@@ -252,11 +253,13 @@ function ExtractionEditor({ project, seed, onSeedUsed, onSaved, busy, act }) {
         <button className="btn btn-primary" disabled={busy || !items.some(item => item.material.trim())} onClick={save}>
           Save extraction revision
         </button>
-        {project.item_count > 0 && <button className="btn btn-ghost" disabled={busy}
+        {project.item_count > 0 && !isUngrouped && <button className="btn btn-ghost" disabled={busy}
           onClick={() => act(async () => {
-            const data = await generateExtractionFromDesign(project.id, { created_by: 'Technical Team' })
+            const data = await generateExtractionFromDesign(project.id, {
+              design_id: designId, created_by: 'Technical Team',
+            })
             onSaved(data)
-          }, 'Provisional extraction generated from the latest configurator item')}>
+          }, 'Provisional extraction generated from the configurator item')}>
           Generate from configurator
         </button>}
       </div>
@@ -264,13 +267,13 @@ function ExtractionEditor({ project, seed, onSeedUsed, onSaved, busy, act }) {
   )
 }
 
-function ExtractionHistory({ workflow, onEdit, onSaved, busy, act }) {
-  if (!workflow.extractions.length) {
+function ExtractionHistory({ extractions, procurement, onEdit, onSaved, busy, act }) {
+  if (!extractions.length) {
     return <div className="tw-empty">No extraction revision yet. Create one manually or generate it from a saved configurator item.</div>
   }
   return (
     <div className="tw-history">
-      {workflow.extractions.some(row => row.status === 'approved') && (
+      {extractions.some(row => row.status === 'approved') && (
         <>
           <div className="tw-approved-source">
             <div><b>Technical source</b><span>All new material quantities and downstream reports read the latest approved extraction. Pricing is handled on the Quotations page.</span></div>
@@ -278,19 +281,19 @@ function ExtractionHistory({ workflow, onEdit, onSaved, busy, act }) {
           <div className="tw-procurement">
             <div className="tw-revision-head">
               <div>
-                <b>Stock and procurement requirement · E{workflow.procurement.extraction_revision}</b>
+                <b>Stock and procurement requirement · E{procurement.extraction_revision}</b>
                 <span>Required, available and shortfall quantities use the same approved extraction.</span>
               </div>
-              <Badge tone={workflow.procurement.ready ? 'green' : 'orange'}>
-                {workflow.procurement.ready
+              <Badge tone={procurement.ready ? 'green' : 'orange'}>
+                {procurement.ready
                   ? 'All tracked stock available'
-                  : `${workflow.procurement.shortage_count} item${workflow.procurement.shortage_count === 1 ? '' : 's'} need attention`}
+                  : `${procurement.shortage_count} item${procurement.shortage_count === 1 ? '' : 's'} need attention`}
               </Badge>
             </div>
             <div className="tbl-wrap">
               <table className="tbl tw-mini-table">
                 <thead><tr><th>Code</th><th>Material</th><th>Required</th><th>Available</th><th>Shortfall</th><th>Status</th></tr></thead>
-                <tbody>{workflow.procurement.rows.map(item => (
+                <tbody>{procurement.rows.map(item => (
                   <tr key={item.item_id}>
                     <td className="t-mono">{item.code || '—'}</td>
                     <td>{item.material}</td>
@@ -307,7 +310,7 @@ function ExtractionHistory({ workflow, onEdit, onSaved, busy, act }) {
           </div>
         </>
       )}
-      {workflow.extractions.map(extraction => (
+      {extractions.map(extraction => (
         <div className="tw-revision" key={extraction.id}>
           <div className="tw-revision-head">
             <div>
@@ -353,15 +356,39 @@ function ExtractionHistory({ workflow, onEdit, onSaved, busy, act }) {
 }
 
 function QuotationHandoff({ workflow, busy, act }) {
-  const extraction = workflow.extractions.find(row => row.status === 'approved')
+  const items = workflow.items || []
+  const multiItem = items.length > 1
+  const itemLabel = designId => {
+    const item = items.find(row => row.design_id === designId)
+    if (!item) return designId === null ? 'Ungrouped' : `Item ${designId}`
+    return item.design_id === null ? 'Ungrouped (legacy)' : (item.ref || item.name)
+  }
+  const anyApproved = items.some(item =>
+    workflow.item_summary[item.design_id === null ? 'null' : String(item.design_id)]
+      ?.approved_extraction_revision != null)
 
   return (
     <div>
-      {extraction ? <div className="tw-editor tw-handoff-only">
+      {multiItem && <div className="tw-item-status-list">
+        {items.map(item => {
+          const summary = workflow.item_summary[
+            item.design_id === null ? 'null' : String(item.design_id)] || {}
+          return (
+            <div key={item.design_id ?? 'ungrouped'} className="flex gap-sm wrap" style={{ marginBottom: 6 }}>
+              <b>{itemLabel(item.design_id)}</b>
+              {summary.approved_extraction_revision
+                ? <Badge tone="green">E{summary.approved_extraction_revision} approved</Badge>
+                : <Badge tone="orange">No approved extraction</Badge>}
+            </div>
+          )
+        })}
+      </div>}
+      {anyApproved ? <div className="tw-editor tw-handoff-only">
         <div>
-          <b>Extraction E{extraction.revision} is approved for quotation</b>
-          <span>{extraction.items.length} material rows are locked as the technical basis.</span>
-          <p>Rates, taxes, payment terms, client acceptance and production authorization are managed separately by the quotation team.</p>
+          <b>{multiItem ? 'Ready to combine into one client quote' : 'Approved for quotation'}</b>
+          <span>{multiItem
+            ? "Open the quotation workbench to combine each approved item's materials into one client quote."
+            : 'Rates, taxes, payment terms, client acceptance and production authorization are managed separately by the quotation team.'}</span>
         </div>
         <Link className="btn btn-primary" to={`/quotations?project=${workflow.project.id}`}>
           Open quotation workbench →
@@ -373,7 +400,14 @@ function QuotationHandoff({ workflow, busy, act }) {
         <div className="tw-quote-list">
           {workflow.quotations.map(quote => (
             <div key={quote.id}>
-              <div><b>{quote.quote_number}</b><span>{quote.product} · from {quote.extraction_id ? `extraction E${workflow.extractions.find(row => row.id === quote.extraction_id)?.revision || '?'}` : 'configurator'}</span></div>
+              <div><b>{quote.quote_number}</b><span>{quote.product} · from {
+                quote.extraction_ids.length
+                  ? quote.extraction_ids.map(id => {
+                      const row = workflow.extractions.find(e => e.id === id)
+                      return row ? `${multiItem ? `${itemLabel(row.design_id)} ` : ''}E${row.revision}` : null
+                    }).filter(Boolean).join(' + ')
+                  : 'configurator'
+              }</span></div>
               <div className="flex gap-sm wrap">
                 <Badge tone={['Accepted', 'Approved'].includes(quote.status) ? 'green' : quote.status === 'Sent' ? 'blue' : 'orange'}>{quote.status}</Badge>
                 {quote.requires_review && <Badge tone="red">Stale basis</Badge>}
@@ -392,16 +426,16 @@ function QuotationHandoff({ workflow, busy, act }) {
   )
 }
 
-function DrawingArea({ workflow, onSaved, busy, act }) {
+function DrawingArea({ workflow, designId, isUngrouped, extractions, drawingTasks, productionReleases, onSaved, busy, act }) {
   const project = workflow.project
   const [method, setMethod] = useState(project.drawing_method || 'configurator')
   const [assignedTo, setAssignedTo] = useState('Technical Team')
   const [brief, setBrief] = useState('')
   const [revisionNotes, setRevisionNotes] = useState('')
-  const approvedExtraction = workflow.extractions.find(row => row.status === 'approved')
-  const latestTask = workflow.drawing_tasks.find(task => task.basis_status === 'current')
+  const approvedExtraction = extractions.find(row => row.status === 'approved')
+  const latestTask = drawingTasks.find(task => task.basis_status === 'current')
   const releasedRevisionIds = new Set(
-    workflow.production_releases
+    productionReleases
       .filter(release => release.status === 'current')
       .map(release => release.drawing_revision_id))
 
@@ -409,6 +443,7 @@ function DrawingArea({ workflow, onSaved, busy, act }) {
 
   const makeTask = () => act(async () => {
     const data = await createDrawingTask(project.id, {
+      design_id: designId,
       method,
       extraction_id: approvedExtraction?.id || null,
       assigned_to: assignedTo,
@@ -423,6 +458,7 @@ function DrawingArea({ workflow, onSaved, busy, act }) {
       'Confirm that the existing saved configurator design is final and no drawing changes are required?')) return
     act(async () => {
       const data = await approveExistingConfiguratorDesign(project.id, {
+        design_id: designId,
         approved_by: 'Technical Supervisor',
         notes: 'Existing saved configurator design accepted without changes.',
       })
@@ -452,7 +488,12 @@ function DrawingArea({ workflow, onSaved, busy, act }) {
         </Badge>
       </div>
 
-      {!latestTask && (
+      {isUngrouped && <div className="tw-help">
+        This is the pre-existing ungrouped chain from before per-item items were tracked separately.
+        Assign it to one item on the Extraction tab before preparing new drawing work here.
+      </div>}
+
+      {!latestTask && !isUngrouped && (
         <div className="tw-editor">
           <div className="tw-existing-design">
             <div>
@@ -496,7 +537,7 @@ function DrawingArea({ workflow, onSaved, busy, act }) {
         </div>
       )}
 
-      {workflow.drawing_tasks.map(task => (
+      {drawingTasks.map(task => (
         <div className="tw-drawing-task" key={task.id}>
           <div className="tw-revision-head">
             <div>
@@ -512,7 +553,7 @@ function DrawingArea({ workflow, onSaved, busy, act }) {
           </div>
           <p className="tw-chain-ref">
             Extraction {task.extraction_id
-              ? `E${workflow.extractions.find(row => row.id === task.extraction_id)?.revision || '?'}`
+              ? `E${extractions.find(row => row.id === task.extraction_id)?.revision || '?'}`
               : 'unlinked'} · Quotation {task.quote_number || 'unlinked'}
           </p>
           {task.brief && <p className="tw-revision-note">{task.brief}</p>}
@@ -559,9 +600,9 @@ function DrawingArea({ workflow, onSaved, busy, act }) {
         </div>
       ))}
 
-      {!!workflow.production_releases.length && <div className="tw-release-history">
+      {!!productionReleases.length && <div className="tw-release-history">
         <b>Factory release history</b>
-        {workflow.production_releases.map(release => (
+        {productionReleases.map(release => (
           <div key={release.id}>
             <span>
               {release.release_number || `Factory pack ${release.id}`} ·
@@ -633,6 +674,26 @@ function DrawingRevision({ revision, projectId, released, basisCurrent, onSaved,
   )
 }
 
+function ItemPicker({ items, itemSummary, selectedKey, onSelect }) {
+  return (
+    <nav className="tw-item-tabs" aria-label="Project items">
+      {items.map(item => {
+        const key = item.design_id === null ? 'ungrouped' : item.design_id
+        const summary = itemSummary[item.design_id === null ? 'null' : String(item.design_id)] || {}
+        return (
+          <button type="button" key={key} className={selectedKey === key ? 'active' : ''}
+            onClick={() => onSelect(key)}>
+            <b>{item.design_id === null ? 'Ungrouped (legacy)' : (item.ref || item.name)}</b>
+            <span>{summary.approved_extraction_revision
+              ? `E${summary.approved_extraction_revision} approved`
+              : 'No approved extraction'}</span>
+          </button>
+        )
+      })}
+    </nav>
+  )
+}
+
 export default function TechnicalWorkflow() {
   const [searchParams] = useSearchParams()
   const [projects, setProjects] = useState([])
@@ -645,6 +706,39 @@ export default function TechnicalWorkflow() {
   const [toast, setToast] = useState(null)
   const [error, setError] = useState('')
   const [settings, setSettings] = useState({ product_family: 'frame', product_system: '' })
+  // Which item's own extraction/drawing chain is in view. A number selects a
+  // real item; 'ungrouped' selects a pre-existing chain from before per-item
+  // scoping; null means "no picker needed" (0 or 1 item) — every existing
+  // single-item project keeps working with no change in behaviour.
+  const [selectedItemKey, setSelectedItemKey] = useState(null)
+  const [assignTarget, setAssignTarget] = useState('')
+
+  const items = workflow?.items || []
+  const showItemPicker = items.length > 1
+  const isUngrouped = showItemPicker && selectedItemKey === 'ungrouped'
+  const designIdForApi = showItemPicker ? (isUngrouped ? null : selectedItemKey) : null
+  const summaryKey = designIdForApi === null ? 'null' : String(designIdForApi)
+  const itemSummary = workflow?.item_summary?.[summaryKey]
+  const itemProcurement = itemSummary?.procurement
+    || { rows: [], shortage_count: 0, ready: false, extraction_revision: null }
+  const filteredExtractions = (workflow?.extractions || [])
+    .filter(row => row.design_id === designIdForApi)
+  const filteredDrawingTasks = (workflow?.drawing_tasks || [])
+    .filter(row => row.design_id === designIdForApi)
+  const filteredReleases = (workflow?.production_releases || [])
+    .filter(row => row.design_id === designIdForApi)
+  const realItems = items.filter(item => item.design_id !== null)
+
+  useEffect(() => {
+    if (!workflow) return
+    if ((workflow.items || []).length <= 1) { setSelectedItemKey(null); return }
+    setSelectedItemKey(current => {
+      const keys = workflow.items.map(item => item.design_id === null ? 'ungrouped' : item.design_id)
+      if (keys.includes(current)) return current
+      const firstReal = workflow.items.find(item => item.design_id !== null)
+      return firstReal ? firstReal.design_id : 'ungrouped'
+    })
+  }, [workflow])
 
   const fire = message => {
     setToast(message)
@@ -737,7 +831,37 @@ export default function TechnicalWorkflow() {
               ))}
             </nav>
 
+            {showItemPicker && (activePage === 'extraction' || activePage === 'drawings') && (
+              <ItemPicker items={items} itemSummary={workflow.item_summary}
+                selectedKey={selectedItemKey} onSelect={setSelectedItemKey} />
+            )}
+
             {activePage === 'extraction' && <Card title="Technical extraction" sub="Prepare and approve the material quantities required before commercial pricing begins.">
+              {isUngrouped && <div className="tw-existing-design" style={{ marginBottom: 12 }}>
+                <div>
+                  <b>Assign this pre-existing chain to one item</b>
+                  <span>Made before items were tracked separately — a technical person confirms which item it was really for.</span>
+                </div>
+                <div className="flex gap-sm">
+                  <select value={assignTarget} onChange={e => setAssignTarget(e.target.value)}>
+                    <option value="">Choose item…</option>
+                    {realItems.map(item => (
+                      <option value={item.design_id} key={item.design_id}>{item.ref || item.name}</option>
+                    ))}
+                  </select>
+                  <button className="btn btn-gold btn-sm" disabled={busy || !assignTarget}
+                    onClick={() => act(async () => {
+                      const data = await assignExtractionsToItem(workflow.project.id, {
+                        design_id: Number(assignTarget), who: 'Technical Team',
+                      })
+                      setAssignTarget('')
+                      setSelectedItemKey(Number(assignTarget))
+                      setWorkflow(data)
+                    }, 'Chain assigned to item')}>
+                    Assign
+                  </button>
+                </div>
+              </div>}
               <div className="tw-form-grid">
                 <Field label="Product family">
                   <select value={settings.product_family} onChange={e => setSettings(s => ({ ...s, product_family: e.target.value }))}>
@@ -754,13 +878,15 @@ export default function TechnicalWorkflow() {
               )}
               <div className="divider" />
               <ExtractionEditor project={{ ...workflow.project, item_count: activeProject?.item_count || 0 }}
+                designId={designIdForApi} isUngrouped={isUngrouped}
                 seed={extractionSeed} onSeedUsed={() => setExtractionSeed(null)}
                 onSaved={setWorkflow} busy={busy} act={act} />
               <div className="divider" />
-              <ExtractionHistory workflow={workflow} onEdit={extraction => {
-                setExtractionSeed(extraction)
-                window.scrollTo({ top: 0, behavior: 'smooth' })
-              }} onSaved={setWorkflow} busy={busy} act={act} />
+              <ExtractionHistory extractions={filteredExtractions} procurement={itemProcurement}
+                onEdit={extraction => {
+                  setExtractionSeed(extraction)
+                  window.scrollTo({ top: 0, behavior: 'smooth' })
+                }} onSaved={setWorkflow} busy={busy} act={act} />
             </Card>}
 
             {activePage === 'commercial' && <Card title="Commercial gate" sub="Track the handoff only. Pricing, quote approval and payment work stay on the Quotations page.">
@@ -768,7 +894,9 @@ export default function TechnicalWorkflow() {
             </Card>}
 
             {activePage === 'drawings' && <Card title="Drawing handoff and revisions" sub="Use the configurator where supported or AutoCAD where complexity requires it. Both return to the same approval path.">
-              <DrawingArea workflow={workflow} onSaved={setWorkflow} busy={busy} act={act} />
+              <DrawingArea workflow={workflow} designId={designIdForApi} isUngrouped={isUngrouped}
+                extractions={filteredExtractions} drawingTasks={filteredDrawingTasks}
+                productionReleases={filteredReleases} onSaved={setWorkflow} busy={busy} act={act} />
             </Card>}
 
             {activePage === 'activity' && <Card title="Project activity" sub="A traceable record of extraction, payment, drawings, approvals and factory release.">

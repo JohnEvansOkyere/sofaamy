@@ -143,9 +143,13 @@ export const createDrawingTask = (projectId, data) =>
 
 export const approveExistingConfiguratorDesign = (projectId, data = {}) =>
   post(`/api/projects/${projectId}/drawing-tasks/use-existing-design`, {
+    design_id: data.design_id ?? null,
     approved_by: data.approved_by || 'Technical Supervisor',
     notes: data.notes || 'Existing saved configurator design accepted without changes.',
   }).then(r => r.json())
+
+export const assignExtractionsToItem = (projectId, data) =>
+  post(`/api/projects/${projectId}/extractions/assign-to-item`, data).then(r => r.json())
 
 export const createDrawingRevision = (taskId, data) =>
   post(`/api/drawing-tasks/${taskId}/revisions`, data).then(r => r.json())

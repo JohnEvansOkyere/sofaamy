@@ -32,11 +32,36 @@ from .reports import (boq_pdf, cutting_list_pdf, work_order_pdf,
 Base.metadata.create_all(bind=engine)
 
 
+def _auto_migrate_postgres():
+    """Additive Postgres migration for columns added after their table already
+    existed live (e.g. Supabase). create_all only creates missing tables, not
+    missing columns on tables that already exist, so a column added to a model
+    after that table was first deployed needs this — same idea as the SQLite
+    path below, using Postgres's native IF NOT EXISTS instead of a PRAGMA
+    existence check. Kept separate from the SQLite `wanted` dict below because
+    some of its DDL (e.g. DATETIME) is SQLite-specific and was never meant to
+    run against Postgres."""
+    from sqlalchemy import text
+    wanted = {
+        "technical_extractions": [("design_id", "INTEGER")],
+        "drawing_tasks": [("design_id", "INTEGER")],
+        "production_releases": [("design_id", "INTEGER")],
+        "quotes": [("extra_extraction_ids", "TEXT DEFAULT '[]'")],
+    }
+    with engine.begin() as conn:
+        for table, cols in wanted.items():
+            for name, ddl in cols:
+                conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {ddl}"))
+
+
 def _auto_migrate():
     """Additive SQLite migration: create_all makes new TABLES but not new
     COLUMNS — add any the models gained, so existing databases keep working."""
     if engine.dialect.name != "sqlite":
-        return  # PRAGMA is SQLite-only; Postgres gets the full schema from create_all
+        if engine.dialect.name == "postgresql":
+            _auto_migrate_postgres()
+        return  # PRAGMA is SQLite-only; Postgres handled above
     from sqlalchemy import text
     wanted = {
         "jobs": [("value", "FLOAT DEFAULT 0"), ("driver", "TEXT DEFAULT ''"),
@@ -44,16 +69,20 @@ def _auto_migrate():
                  ("delivered_at", "DATETIME"), ("deposit_percent", "FLOAT DEFAULT 80"),
                  ("project_id", "INTEGER")],
         "quotes": [("deposit_percent", "FLOAT DEFAULT 80"), ("project_id", "INTEGER"),
-                    ("design_id", "INTEGER"), ("extraction_id", "INTEGER")],
+                    ("design_id", "INTEGER"), ("extraction_id", "INTEGER"),
+                    ("extra_extraction_ids", "TEXT DEFAULT '[]'")],
         "designs": [("project_id", "INTEGER")],
         "stock_moves": [
             ("extraction_id", "INTEGER"),
             ("extraction_revision", "INTEGER"),
         ],
         "drawing_files": [("checksum_sha256", "TEXT DEFAULT ''")],
+        "technical_extractions": [("design_id", "INTEGER")],
+        "drawing_tasks": [("design_id", "INTEGER")],
         "production_releases": [
             ("release_number", "TEXT DEFAULT ''"),
             ("status", "TEXT DEFAULT 'current'"),
+            ("design_id", "INTEGER"),
             ("extraction_id", "INTEGER"),
             ("extraction_revision", "INTEGER"),
             ("quote_id", "INTEGER"),
@@ -221,10 +250,18 @@ def _file_payload(file: models.DrawingFile) -> dict:
     }
 
 
+def _design_category(record: models.DesignRecord) -> str:
+    try:
+        return json.loads(record.design_json).get("category", "frame")
+    except (TypeError, ValueError, AttributeError):
+        return "frame"
+
+
 def _extraction_payload(extraction: models.TechnicalExtraction) -> dict:
     items = sorted(extraction.items or [], key=lambda row: row.id)
     return {
         "id": extraction.id,
+        "design_id": extraction.design_id,
         "revision": extraction.revision,
         "method": extraction.method,
         "recipe_status": extraction.recipe_status,
@@ -276,10 +313,19 @@ def _quote_snapshot(quote: models.Quote) -> dict | None:
 
 
 def _build_commercial_snapshot(
-        extraction: models.TechnicalExtraction,
+        extractions: list[models.TechnicalExtraction],
         req: schemas.ExtractionQuoteIn,
 ) -> dict:
-    source_items = {row.id: row for row in extraction.items or []}
+    """Build one commercial snapshot from one or several approved extractions.
+
+    Several extractions arrive when a project has multiple items (e.g. a
+    window and a door) and their approved material take-offs are combined
+    into a single client quote. `ExtractionItem.id` is unique across every
+    extraction, so merging their items into one lookup is collision-free.
+    """
+    primary = extractions[0]
+    source_items = {
+        row.id: row for extraction in extractions for row in extraction.items or []}
     lines = []
     for requested in req.lines:
         if requested.unit_price < 0:
@@ -367,7 +413,8 @@ def _build_commercial_snapshot(
     vat = round(client_net * vat_percent / 100, 2)
     grand_total = round(client_net + getf_nhis + vat, 2)
     internal_floor = round(sum(
-        item.quantity * item.unit_price for item in extraction.items or []), 2)
+        item.quantity * item.unit_price
+        for extraction in extractions for item in extraction.items or []), 2)
     if internal_floor > 0 and client_net + 0.01 < internal_floor:
         raise HTTPException(
             422,
@@ -375,8 +422,10 @@ def _build_commercial_snapshot(
             "Review the selling rates or discount.")
     return {
         "version": 1,
-        "extraction_id": extraction.id,
-        "extraction_revision": extraction.revision,
+        "extraction_id": primary.id,
+        "extraction_revision": primary.revision,
+        "extraction_ids": [row.id for row in extractions],
+        "extraction_revisions": [row.revision for row in extractions],
         "product": req.product.strip(),
         "client_phone": req.client_phone.strip(),
         "client_email": req.client_email.strip(),
@@ -403,14 +452,36 @@ def _build_commercial_snapshot(
 
 
 def _latest_approved_extraction(
-        project: models.Project | None) -> models.TechnicalExtraction | None:
+        project: models.Project | None,
+        design_id: int | None = None) -> models.TechnicalExtraction | None:
+    """The current approved material take-off for one item's chain.
+
+    `design_id=None` selects the legacy/whole-project chain (extractions made
+    before per-item scoping, or a single-item project that never set one) —
+    this keeps every existing single-item project working unchanged. Passing
+    a specific item's `design_id` isolates that item's own chain so approving
+    it never touches a sibling item's extraction in the same project.
+    """
     if project is None:
         return None
     return next((
         row for row in sorted(
             project.extractions or [],
             key=lambda value: value.revision, reverse=True)
-        if row.status == "approved"), None)
+        if row.status == "approved" and row.design_id == design_id), None)
+
+
+def _quote_extraction_ids(quote: models.Quote) -> list[int]:
+    """All extraction ids bundled into a quote (primary + combined items)."""
+    ids = []
+    if quote.extraction_id is not None:
+        ids.append(quote.extraction_id)
+    try:
+        extra = json.loads(quote.extra_extraction_ids or "[]")
+    except (TypeError, ValueError):
+        extra = []
+    ids.extend(int(value) for value in extra if int(value) not in ids)
+    return ids
 
 
 def _current_commercial_quote(
@@ -423,7 +494,7 @@ def _current_commercial_quote(
         quote for quote in sorted(
             project.quotes or [],
             key=lambda row: row.created_at, reverse=True)
-        if quote.extraction_id == extraction.id
+        if extraction.id in _quote_extraction_ids(quote)
         and quote.status in ("Accepted", "Approved")
     ), None)
 
@@ -571,6 +642,7 @@ def _drawing_task_payload(
     )
     return {
         "id": task.id,
+        "design_id": task.design_id,
         "method": task.method,
         "status": task.status,
         "extraction_id": task.extraction_id,
@@ -606,8 +678,69 @@ def _technical_workflow_payload(db: Session, project: models.Project) -> dict:
     payment = _payment_authorization(db, project)
     approved_extraction = _latest_approved_extraction(project)
     current_quote = _current_commercial_quote(project, approved_extraction)
+    item_records = sorted(project.items or [], key=lambda row: row.created_at)
+    has_ungrouped_chain = any(
+        row.design_id is None for row in (
+            list(project.extractions or [])
+            + list(project.drawing_tasks or [])
+            + list(project.production_releases or [])))
+
+    # One extraction/quote lookup per distinct item, shared between the
+    # per-item summary below and each drawing task's own basis-current check
+    # — a task's "is this still the current chain" comparison must use its
+    # own item's approved extraction, not the single project-wide one.
+    chain_cache: dict = {}
+
+    def _chain_for(design_id):
+        if design_id not in chain_cache:
+            item_approved = _latest_approved_extraction(project, design_id)
+            item_quote = _current_commercial_quote(project, item_approved)
+            chain_cache[design_id] = (item_approved, item_quote)
+        return chain_cache[design_id]
+
+    def _chain_ids_for(design_id):
+        item_approved, item_quote = _chain_for(design_id)
+        return (
+            item_approved.id if item_approved else None,
+            item_quote.id if item_quote else None)
+
+    def _item_summary_for(design_id):
+        item_approved, item_quote = _chain_for(design_id)
+        return {
+            "approved_extraction_id": item_approved.id if item_approved else None,
+            "approved_extraction_revision": (
+                item_approved.revision if item_approved else None),
+            "current_quote_number": item_quote.quote_number if item_quote else None,
+            "procurement": _procurement_payload(db, item_approved),
+        }
+
+    item_list = [{
+        "design_id": record.id,
+        "ref": record.ref,
+        "name": record.name,
+        "category": _design_category(record),
+        "qty": record.qty,
+        "location": record.location,
+        "created_at": (
+            record.created_at.isoformat() if record.created_at else None),
+    } for record in item_records]
+    item_summary = {
+        str(record.id): _item_summary_for(record.id) for record in item_records
+    }
+    if has_ungrouped_chain:
+        item_list.append({
+            "design_id": None,
+            "ref": "",
+            "name": "Ungrouped (pre-existing project chain)",
+            "category": "",
+            "qty": None,
+            "location": "",
+            "created_at": None,
+        })
+        item_summary["null"] = _item_summary_for(None)
     extractions = sorted(
         project.extractions or [], key=lambda row: row.revision, reverse=True)
+    extractions_by_id = {row.id: row for row in extractions}
     drawing_tasks = sorted(
         project.drawing_tasks or [], key=lambda row: row.created_at, reverse=True)
     releases = sorted(
@@ -689,26 +822,31 @@ def _technical_workflow_payload(db: Session, project: models.Project) -> dict:
         },
         "extractions": [_extraction_payload(row) for row in extractions],
         "drawing_tasks": [_drawing_task_payload(
-            row,
-            approved_extraction.id if approved_extraction else None,
-            current_quote.id if current_quote else None,
-        ) for row in drawing_tasks],
+            row, *_chain_ids_for(row.design_id))
+            for row in drawing_tasks],
         "quotations": [{
             "id": quote.id,
             "quote_number": quote.quote_number,
             "extraction_id": quote.extraction_id,
+            "extraction_ids": _quote_extraction_ids(quote),
             "product": quote.product,
             "total": quote.total,
             "deposit_percent": quote.deposit_percent,
             "status": quote.status,
+            # Current only if every bundled item's extraction is still that
+            # item's own currently-approved revision — not just a match
+            # against the (single, legacy) project-wide "approved extraction",
+            # which no longer means anything once items have their own chains.
             "basis_status": (
-                "current"
-                if approved_extraction
-                and quote.extraction_id == approved_extraction.id
+                "current" if quote.extraction_id and all(
+                    (row := extractions_by_id.get(extraction_id)) is not None
+                    and row.status == "approved"
+                    for extraction_id in _quote_extraction_ids(quote))
                 else "stale" if quote.extraction_id else "unlinked"),
-            "requires_review": bool(
-                approved_extraction
-                and quote.extraction_id != approved_extraction.id),
+            "requires_review": bool(quote.extraction_id) and not all(
+                (row := extractions_by_id.get(extraction_id)) is not None
+                and row.status == "approved"
+                for extraction_id in _quote_extraction_ids(quote)),
             "job_number": quote.job.job_number if quote.job else None,
             "job_stage": quote.job.stage if quote.job else None,
             "job_stage_label": (
@@ -724,6 +862,7 @@ def _technical_workflow_payload(db: Session, project: models.Project) -> dict:
             key=lambda row: row.created_at, reverse=True)],
         "production_releases": [{
             "id": row.id,
+            "design_id": row.design_id,
             "release_number": row.release_number,
             "status": row.status,
             "extraction_id": row.extraction_id,
@@ -748,6 +887,8 @@ def _technical_workflow_payload(db: Session, project: models.Project) -> dict:
             "note": row.note,
             "at": row.created_at.isoformat() if row.created_at else None,
         } for row in events[:50]],
+        "items": item_list,
+        "item_summary": item_summary,
     }
 
 
@@ -1034,10 +1175,21 @@ def create_extraction(project_id: int, req: schemas.ExtractionIn,
         raise HTTPException(400, "Add at least one extraction material")
     if any(not item.material.strip() or item.quantity <= 0 for item in req.items):
         raise HTTPException(400, "Every material needs a name and positive quantity")
+    if req.design_id is not None:
+        record = db.get(models.DesignRecord, req.design_id)
+        if record is None or record.project_id != project.id:
+            raise HTTPException(400, "Design does not belong to this project")
+    elif len(project.items or []) > 1:
+        raise HTTPException(
+            409,
+            "This project has more than one item — select which item this "
+            "extraction is for")
     revision = max(
-        [row.revision for row in (project.extractions or [])] or [0]) + 1
+        [row.revision for row in (project.extractions or [])
+         if row.design_id == req.design_id] or [0]) + 1
     extraction = models.TechnicalExtraction(
         project_id=project.id,
+        design_id=req.design_id,
         revision=revision,
         method=req.method,
         recipe_status=req.recipe_status,
@@ -1078,8 +1230,10 @@ def approve_extraction(extraction_id: int, req: schemas.ExtractionApprovalIn,
         raise HTTPException(404, "Extraction not found")
     if not extraction.items:
         raise HTTPException(409, "Cannot approve an empty extraction")
-    latest_revision = max(
-        row.revision for row in extraction.project.extractions or [extraction])
+    siblings = [
+        row for row in extraction.project.extractions or [extraction]
+        if row.design_id == extraction.design_id]
+    latest_revision = max(row.revision for row in siblings)
     if extraction.revision != latest_revision:
         raise HTTPException(
             409,
@@ -1090,16 +1244,26 @@ def approve_extraction(extraction_id: int, req: schemas.ExtractionApprovalIn,
     if extraction.status == "superseded":
         raise HTTPException(409, "A superseded extraction cannot be approved again")
     project = extraction.project
+    # Scoped to this item's own chain only — approving item A's extraction
+    # must never supersede a sibling item's extraction/drawing/release in the
+    # same multi-item project.
+    sibling_extraction_ids = {row.id for row in siblings}
     downstream_exists = bool(
-        project.quotes or project.drawing_tasks or project.production_releases)
+        any(task.design_id == extraction.design_id
+            for task in project.drawing_tasks or [])
+        or any(release.design_id == extraction.design_id
+               for release in project.production_releases or [])
+        or any(sibling_extraction_ids.intersection(_quote_extraction_ids(quote))
+               for quote in project.quotes or []))
     for other in extraction.project.extractions or []:
-        if other.id != extraction.id and other.status == "approved":
+        if (other.id != extraction.id and other.design_id == extraction.design_id
+                and other.status == "approved"):
             other.status = "superseded"
     for task in project.drawing_tasks or []:
-        if task.extraction_id != extraction.id:
+        if task.design_id == extraction.design_id and task.extraction_id != extraction.id:
             task.status = "stale_extraction"
     for release in project.production_releases or []:
-        if release.status == "current":
+        if release.design_id == extraction.design_id and release.status == "current":
             release.status = "superseded"
     extraction.status = "approved"
     extraction.approved_by = req.approved_by.strip()
@@ -1122,13 +1286,19 @@ def generate_extraction_from_design(
         project_id: int, req: schemas.GeneratedExtractionIn,
         db: Session = Depends(get_db)):
     project = _get_project(db, project_id)
+    items = project.items or []
     if req.design_id is not None:
         record = db.get(models.DesignRecord, req.design_id)
         if record is None or record.project_id != project.id:
             raise HTTPException(400, "Design does not belong to this project")
+    elif len(items) > 1:
+        raise HTTPException(
+            409,
+            "This project has more than one item — select which item to "
+            "generate materials for")
     else:
         record = next(iter(sorted(
-            project.items or [], key=lambda row: row.created_at, reverse=True)), None)
+            items, key=lambda row: row.created_at, reverse=True)), None)
     if record is None:
         raise HTTPException(409, "Save a configurator item in this project first")
     design_schema = schemas.DesignIn(**json.loads(record.design_json))
@@ -1199,9 +1369,11 @@ def generate_extraction_from_design(
     if not rows:
         raise HTTPException(409, "This configurator item produced no extraction rows")
     revision_number = max(
-        [row.revision for row in (project.extractions or [])] or [0]) + 1
+        [row.revision for row in (project.extractions or [])
+         if row.design_id == req.design_id] or [0]) + 1
     extraction = models.TechnicalExtraction(
         project_id=project.id,
+        design_id=req.design_id,
         revision=revision_number,
         method="generated",
         recipe_status="provisional",
@@ -1225,6 +1397,47 @@ def generate_extraction_from_design(
     return _technical_workflow_payload(db, project)
 
 
+@app.post("/api/projects/{project_id}/extractions/assign-to-item")
+def assign_ungrouped_extractions_to_item(
+        project_id: int, req: schemas.AssignExtractionsToItemIn,
+        db: Session = Depends(get_db)):
+    """Hand a project's pre-per-item-scoping extraction chain to one item.
+
+    Projects created before per-item scoping have their whole extraction
+    chain tagged design_id=None. Once a project has more than one item that
+    chain is ambiguous — this makes the (previously implicit) assumption
+    explicit by having a technical person confirm which item it was really
+    for, instead of the system guessing.
+    """
+    project = _get_project(db, project_id)
+    record = db.get(models.DesignRecord, req.design_id)
+    if record is None or record.project_id != project.id:
+        raise HTTPException(400, "Design does not belong to this project")
+    ungrouped = [row for row in project.extractions or [] if row.design_id is None]
+    if not ungrouped:
+        raise HTTPException(409, "This project has no ungrouped extraction chain")
+    if any(row.design_id == req.design_id for row in project.extractions or []):
+        raise HTTPException(
+            409,
+            "This item already has its own extraction chain — the ungrouped "
+            "chain must belong to a different item")
+    for row in ungrouped:
+        row.design_id = req.design_id
+    for task in project.drawing_tasks or []:
+        if task.design_id is None:
+            task.design_id = req.design_id
+    for release in project.production_releases or []:
+        if release.design_id is None:
+            release.design_id = req.design_id
+    _workflow_log(
+        db, project, "extraction",
+        f"assigned the existing extraction/drawing chain to item "
+        f"{record.ref or record.name}",
+        who=req.who)
+    db.commit()
+    return _technical_workflow_payload(db, project)
+
+
 @app.post("/api/projects/{project_id}/quotes/from-extraction")
 def create_quote_from_extraction(
         project_id: int, req: schemas.ExtractionQuoteIn,
@@ -1235,9 +1448,20 @@ def create_quote_from_extraction(
         raise HTTPException(400, "Extraction does not belong to this project")
     if extraction.status != "approved":
         raise HTTPException(409, "Approve the extraction before quotation")
+    extra_extractions = []
+    for extra_id in req.extra_extraction_ids:
+        extra = db.get(models.TechnicalExtraction, extra_id)
+        if extra is None or extra.project_id != project.id:
+            raise HTTPException(
+                400, "A bundled extraction does not belong to this project")
+        if extra.status != "approved":
+            raise HTTPException(
+                409, "Every bundled item's extraction must be approved before quotation")
+        extra_extractions.append(extra)
+    extractions = [extraction] + extra_extractions
     if not req.product.strip():
         raise HTTPException(400, "Product description is required")
-    snapshot = _build_commercial_snapshot(extraction, req)
+    snapshot = _build_commercial_snapshot(extractions, req)
     n = db.scalar(select(func.count(models.Quote.id))) or 0
     quote_number = f"SOF-Q-{datetime.now():%Y}-{n + 143:04d}"
     client_name = (
@@ -1264,6 +1488,7 @@ def create_quote_from_extraction(
         project_id=project.id,
         design_id=snapshot_record.id,
         extraction_id=extraction.id,
+        extra_extraction_ids=json.dumps([row.id for row in extra_extractions]),
         client_name=client_name,
         product=req.product.strip(),
         total=snapshot["grand_total"],
@@ -1272,9 +1497,10 @@ def create_quote_from_extraction(
     )
     db.add(quote)
     project.workflow_status = "quote_in_preparation"
+    revision_label = "+".join(f"E{row.revision}" for row in extractions)
     _workflow_log(
         db, project, "quote",
-        f"prepared itemised draft quotation {quote.quote_number} from extraction E{extraction.revision}",
+        f"prepared itemised draft quotation {quote.quote_number} from extraction {revision_label}",
         who=req.created_by)
     db.commit(); db.refresh(quote)
     return _technical_workflow_payload(db, project)
@@ -1309,9 +1535,20 @@ def update_quote_from_extraction(
         raise HTTPException(400, "Extraction does not belong to this project")
     if extraction.status != "approved":
         raise HTTPException(409, "Approve the extraction before quotation")
+    extra_extractions = []
+    for extra_id in req.extra_extraction_ids:
+        extra = db.get(models.TechnicalExtraction, extra_id)
+        if extra is None or extra.project_id != quote.project_id:
+            raise HTTPException(
+                400, "A bundled extraction does not belong to this project")
+        if extra.status != "approved":
+            raise HTTPException(
+                409, "Every bundled item's extraction must be approved before quotation")
+        extra_extractions.append(extra)
+    extractions = [extraction] + extra_extractions
     if not req.product.strip():
         raise HTTPException(400, "Product description is required")
-    snapshot = _build_commercial_snapshot(extraction, req)
+    snapshot = _build_commercial_snapshot(extractions, req)
     quote.design.design_json = json.dumps({
         "record_kind": QUOTE_SNAPSHOT_KIND,
         "commercial": snapshot,
@@ -1321,6 +1558,7 @@ def update_quote_from_extraction(
     quote.total = snapshot["grand_total"]
     quote.deposit_percent = req.deposit_percent
     quote.extraction_id = extraction.id
+    quote.extra_extraction_ids = json.dumps([row.id for row in extra_extractions])
     _workflow_log(
         db, quote.project, "quote",
         f"updated draft quotation {quote.quote_number} before sending",
@@ -1338,7 +1576,6 @@ def create_drawing_task(project_id: int, req: schemas.DrawingTaskIn,
     payment = _payment_authorization(db, project)
     if not payment["authorized"]:
         raise HTTPException(409, payment["reason"])
-    current_extraction = _latest_approved_extraction(project)
     extraction = None
     if req.extraction_id is not None:
         extraction = db.get(models.TechnicalExtraction, req.extraction_id)
@@ -1346,7 +1583,9 @@ def create_drawing_task(project_id: int, req: schemas.DrawingTaskIn,
             raise HTTPException(400, "Extraction does not belong to this project")
         if extraction.status != "approved":
             raise HTTPException(409, "Approve the extraction before drawing handoff")
+        current_extraction = _latest_approved_extraction(project, extraction.design_id)
     else:
+        current_extraction = _latest_approved_extraction(project, req.design_id)
         extraction = current_extraction
     if extraction is None:
         raise HTTPException(409, "Approve an extraction before drawing handoff")
@@ -1365,12 +1604,13 @@ def create_drawing_task(project_id: int, req: schemas.DrawingTaskIn,
             409,
             f"Accept a quotation based on extraction E{extraction.revision} "
             "before opening the drawing task")
-    if (quote.extraction_id != extraction.id
+    if (extraction.id not in _quote_extraction_ids(quote)
             or quote.status not in ("Accepted", "Approved")):
         raise HTTPException(
             409, "Drawing must use the current accepted quotation and extraction")
     task = models.DrawingTask(
         project_id=project.id,
+        design_id=extraction.design_id,
         extraction_id=extraction.id if extraction else None,
         quote_id=quote.id if quote else None,
         method=req.method,
@@ -1397,7 +1637,7 @@ def create_drawing_revision(task_id: int, req: schemas.DrawingRevisionIn,
     task = db.get(models.DrawingTask, task_id)
     if task is None:
         raise HTTPException(404, "Drawing task not found")
-    current_extraction = _latest_approved_extraction(task.project)
+    current_extraction = _latest_approved_extraction(task.project, task.design_id)
     current_quote = _current_commercial_quote(task.project, current_extraction)
     if (current_extraction is None
             or task.extraction_id != current_extraction.id
@@ -1437,10 +1677,20 @@ def approve_existing_configurator_design(
     if not project.items:
         raise HTTPException(
             409, "Save at least one configurator design item before confirming it")
+    target_record = None
+    if req.design_id is not None:
+        target_record = db.get(models.DesignRecord, req.design_id)
+        if target_record is None or target_record.project_id != project.id:
+            raise HTTPException(400, "Design does not belong to this project")
+    elif len(project.items) > 1:
+        raise HTTPException(
+            409,
+            "This project has more than one item — select which item's "
+            "design is being confirmed")
     payment = _payment_authorization(db, project)
     if not payment["authorized"]:
         raise HTTPException(409, payment["reason"])
-    extraction = _latest_approved_extraction(project)
+    extraction = _latest_approved_extraction(project, req.design_id)
     if extraction is None:
         raise HTTPException(409, "Approve an extraction before confirming the drawing")
     quote = _current_commercial_quote(project, extraction)
@@ -1466,6 +1716,7 @@ def approve_existing_configurator_design(
     if task is None:
         task = models.DrawingTask(
             project_id=project.id,
+            design_id=req.design_id,
             extraction_id=extraction.id,
             quote_id=quote.id,
             method="configurator",
@@ -1489,6 +1740,9 @@ def approve_existing_configurator_design(
     db.add(revision)
     db.flush()
 
+    snapshot_items = (
+        [target_record] if target_record is not None
+        else sorted(project.items, key=lambda value: value.created_at))
     snapshot = {
         "project_id": project.id,
         "project_number": project.project_number,
@@ -1503,7 +1757,7 @@ def approve_existing_configurator_design(
             "quantity": item.qty,
             "location": item.location,
             "design": json.loads(item.design_json),
-        } for item in sorted(project.items, key=lambda value: value.created_at)],
+        } for item in snapshot_items],
     }
     body = json.dumps(snapshot, indent=2).encode("utf-8")
     filename = f"{project.project_number}-approved-configurator-design.json"
@@ -1520,11 +1774,13 @@ def approve_existing_configurator_design(
     ))
 
     for other_task in project.drawing_tasks or []:
+        if other_task.design_id != req.design_id:
+            continue
         for other in other_task.revisions or []:
             if other.id != revision.id and other.status == "approved":
                 other.status = "superseded"
     for release in project.production_releases or []:
-        if release.status == "current":
+        if release.design_id == req.design_id and release.status == "current":
             release.status = "superseded"
     task.status = "approved"
     project.drawing_method = "configurator"
@@ -1533,7 +1789,10 @@ def approve_existing_configurator_design(
     _workflow_log(
         db, project, "approval",
         f"confirmed the existing configurator design as drawing R1 "
-        f"({len(project.items)} saved item{'s' if len(project.items) != 1 else ''})",
+        + (f"for item {target_record.ref or target_record.name}"
+           if target_record is not None
+           else f"({len(project.items)} saved item"
+                f"{'s' if len(project.items) != 1 else ''})"),
         who=req.approved_by)
     db.commit()
     return _technical_workflow_payload(db, project)
@@ -1612,7 +1871,8 @@ def approve_drawing_revision(revision_id: int, req: schemas.DrawingApprovalIn,
         return _technical_workflow_payload(db, revision.task.project)
     if revision.status == "superseded":
         raise HTTPException(409, "A superseded drawing cannot be approved again")
-    current_extraction = _latest_approved_extraction(revision.task.project)
+    current_extraction = _latest_approved_extraction(
+        revision.task.project, revision.task.design_id)
     current_quote = _current_commercial_quote(
         revision.task.project, current_extraction)
     if (current_extraction is None
@@ -1632,7 +1892,8 @@ def approve_drawing_revision(revision_id: int, req: schemas.DrawingApprovalIn,
         if other.id != revision.id and other.status == "approved":
             other.status = "superseded"
     for release in revision.task.project.production_releases or []:
-        if (release.status == "current"
+        if (release.design_id == revision.task.design_id
+                and release.status == "current"
                 and release.drawing_revision_id != revision.id):
             release.status = "superseded"
     revision.status = "approved"
@@ -1659,7 +1920,7 @@ def release_project_to_factory(project_id: int,
         raise HTTPException(400, "Drawing revision does not belong to this project")
     if revision.status != "approved":
         raise HTTPException(409, "Only an approved drawing revision can be released")
-    current_extraction = _latest_approved_extraction(project)
+    current_extraction = _latest_approved_extraction(project, revision.task.design_id)
     current_quote = _current_commercial_quote(project, current_extraction)
     if current_extraction is None:
         raise HTTPException(409, "An approved extraction is required for release")
@@ -1682,10 +1943,13 @@ def release_project_to_factory(project_id: int,
     payment = _payment_authorization(db, project)
     if not payment["authorized"]:
         raise HTTPException(409, payment["reason"])
-    for prior in project.production_releases or []:
+    item_releases = [
+        row for row in project.production_releases or []
+        if row.design_id == revision.task.design_id]
+    for prior in item_releases:
         if prior.status == "current":
             prior.status = "superseded"
-    release_index = len(project.production_releases or []) + 1
+    release_index = len(item_releases) + 1
     manifest = [{
         "file_id": file.id,
         "kind": file.kind,
@@ -1695,6 +1959,7 @@ def release_project_to_factory(project_id: int,
     } for file in sorted(revision.files or [], key=lambda row: row.created_at)]
     release = models.ProductionRelease(
         project_id=project.id,
+        design_id=revision.task.design_id,
         release_number=(
             f"{project.project_number}-FP-{release_index:02d}"),
         status="current",

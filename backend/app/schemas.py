@@ -268,6 +268,10 @@ class ExtractionItemIn(BaseModel):
 
 
 class ExtractionIn(BaseModel):
+    # Which project item this take-off is for. Required once a project has
+    # more than one item — otherwise there is no way to tell whose materials
+    # a revision belongs to. Optional for single-item projects.
+    design_id: int | None = None
     method: str = "manual"
     recipe_status: str = "manual"
     notes: str = ""
@@ -283,6 +287,14 @@ class GeneratedExtractionIn(BaseModel):
     design_id: int | None = None
     created_by: str = "Technical Team"
     notes: str = ""
+
+
+class AssignExtractionsToItemIn(BaseModel):
+    """One-time, explicit handoff of a project's pre-existing ungrouped
+    extraction chain (made before per-item scoping existed) to one of its
+    items. Never inferred automatically — a technical person confirms it."""
+    design_id: int
+    who: str = "Technical Team"
 
 
 class CommercialQuoteLineIn(BaseModel):
@@ -303,6 +315,10 @@ class CommercialQuoteLineIn(BaseModel):
 
 class ExtractionQuoteIn(BaseModel):
     extraction_id: int
+    # Additional approved extractions from other items in the same project,
+    # bundled into this one client quote (e.g. a window's extraction plus a
+    # door's extraction under one Grejoy-style multi-item project).
+    extra_extraction_ids: list[int] = []
     product: str
     lines: list[CommercialQuoteLineIn] = []
     # Kept for older clients/tests while the quotation desk moves to
@@ -325,6 +341,7 @@ class ExtractionQuoteIn(BaseModel):
 
 class DrawingTaskIn(BaseModel):
     method: str = "configurator"
+    design_id: int | None = None
     extraction_id: int | None = None
     quote_id: int | None = None
     assigned_to: str = ""
@@ -342,6 +359,9 @@ class DrawingApprovalIn(BaseModel):
 
 
 class ExistingDesignApprovalIn(BaseModel):
+    # Which item this confirms. Omitted only on legacy single-item projects,
+    # where it snapshots every saved item as before.
+    design_id: int | None = None
     approved_by: str = "Technical Supervisor"
     notes: str = "Existing saved configurator design accepted without changes."
 
