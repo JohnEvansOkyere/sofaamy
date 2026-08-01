@@ -7,6 +7,7 @@ import {
   createQuoteFromExtraction, updateQuoteFromExtraction,
   setQuoteStatus, downloadQuotationPdf,
   releaseProjectToFactory,
+  listDesigns, saveDesign, downloadReport, previewDesignPrice,
 } from '../lib/api.js'
 import { GHS0, dateShort, quoteMessage } from '../lib/whatsapp.js'
 import {
@@ -17,9 +18,17 @@ import '../styles/ops.css'
 const FILTERS = ['All', 'Draft', 'Sent', 'Accepted', 'Declined']
 const QUOTE_PAGES = [
   ['workbench', 'Quote Preparation'],
+  ['configurator', 'Configurator Quotes'],
   ['client', 'Client Approval'],
   ['approval', 'Production Approval'],
   ['register', 'Quote Register'],
+]
+// Matches FRAME_COLOUR_LABELS in backend/app/pdf.py — the PDF's "Profile /
+// colour" line reads design.frame ahead of any free-text colour field, so
+// this must stay a fixed choice, not a text input.
+const FRAME_COLOURS = [
+  ['mill', 'Mill Finish'], ['white', 'White'], ['bronze', 'Bronze'],
+  ['black', 'Matte Black'], ['charcoal', 'Charcoal Grey'], ['wood', 'Wood Grain'],
 ]
 const EMPTY_ADDITION = {
   extraction_item_id: null, code: '', description: '',
@@ -120,16 +129,22 @@ export default function Quotations() {
   const [filter, setFilter] = useState('All')
   const [wa, setWa] = useState(null)
   const [toast, setToast] = useState(null)
+  const [designs, setDesigns] = useState([])
+  const [selectedDesignId, setSelectedDesignId] = useState('')
+  const [designDraft, setDesignDraft] = useState(null)
+  const [designPreview, setDesignPreview] = useState(null)
+  const [previewBusy, setPreviewBusy] = useState(false)
   const fire = message => {
     setToast(message)
     setTimeout(() => setToast(null), 3600)
   }
 
-  const refreshLists = () => Promise.all([listQuotes(), listClients(), listProjects()])
-    .then(([quoteRows, clientRows, projectRows]) => {
+  const refreshLists = () => Promise.all([listQuotes(), listClients(), listProjects(), listDesigns()])
+    .then(([quoteRows, clientRows, projectRows, designRows]) => {
       setQuotes(quoteRows)
       setClients(clientRows)
       setProjects(projectRows)
+      setDesigns(designRows)
       setLive(true)
       if (!projectId) {
         const preferred = projectRows.find(project => project.approved_extraction_revision)
@@ -137,6 +152,46 @@ export default function Quotations() {
       }
     })
   useEffect(() => { refreshLists().catch(() => {}) }, [])
+
+  const selectedDesign = designs.find(row => String(row.id) === String(selectedDesignId))
+  useEffect(() => {
+    setDesignDraft(selectedDesign ? { ...selectedDesign.design } : null)
+    setDesignPreview(null)
+  }, [selectedDesignId])
+
+  useEffect(() => {
+    if (!selectedDesign || !designDraft) return
+    setPreviewBusy(true)
+    previewDesignPrice(selectedDesign.client_name || '', {
+      ...designDraft, projectId: selectedDesign.project_id || null,
+    }).then(setDesignPreview).catch(() => {}).finally(() => setPreviewBusy(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [designDraft])
+
+  const changeDesignField = (key, value) =>
+    setDesignDraft(current => ({ ...current, [key]: value }))
+
+  const saveDesignCommercial = () => {
+    if (!selectedDesign || !designDraft) return
+    setBusy(true)
+    saveDesign(selectedDesign.client_name || '', {
+      ...designDraft, projectId: selectedDesign.project_id || null,
+    }).then(() => {
+      fire(`✅ ${selectedDesign.ref || selectedDesign.name} — quote terms saved`)
+      return refreshLists()
+    }).catch(error => fire(`⚠️ ${messageFrom(error)}`))
+      .finally(() => setBusy(false))
+  }
+
+  const downloadDesignQuote = () => {
+    if (!selectedDesign || !designDraft) return
+    setBusy(true)
+    downloadReport('quotation', selectedDesign.client_name || '', {
+      ...designDraft, projectId: selectedDesign.project_id || null,
+    }).then(() => fire(`📄 Client quotation — ${selectedDesign.ref || selectedDesign.name} downloaded`))
+      .catch(error => fire(`⚠️ ${messageFrom(error)}`))
+      .finally(() => setBusy(false))
+  }
 
   const activeProject = projects.find(project => String(project.id) === String(projectId))
   useEffect(() => {
@@ -554,6 +609,63 @@ export default function Quotations() {
             </button>
             {editing && <button className="btn btn-ghost" disabled={busy} onClick={cancelEdit}>Cancel edit</button>}
             <Link className="btn btn-ghost" to={`/technical-workflow?project=${projectId}`}><IconCube/> View technical chain</Link>
+          </div>
+        </>}
+      </Card>}
+
+      {activePage === 'configurator' && <Card title="Configurator quotes" sub="Quotes priced directly from a saved configurator design (rate per m² or Trialco costing) — edit the client-facing terms here, then download.">
+        <div className="quote-project-select">
+          <label>
+            <span>Saved design</span>
+            <select value={selectedDesignId} onChange={event => setSelectedDesignId(event.target.value)}>
+              <option value="">Choose a saved design…</option>
+              {designs.map(row => (
+                <option key={row.id} value={row.id}>
+                  {(row.ref || row.name)} — {row.name}{row.client_name ? ` · ${row.client_name}` : ''}
+                  {row.project_number ? ` · ${row.project_number}` : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedDesign && <div className="quote-project-context">
+            <b>{selectedDesign.client_name || 'Walk-in Client'}</b>
+            <span>{selectedDesign.project_number || 'No project'} · {selectedDesign.ref || selectedDesign.name}</span>
+          </div>}
+        </div>
+        {!selectedDesign && <div className="quote-empty">Choose a saved design to edit its client-facing quote terms.</div>}
+        {selectedDesign && designDraft && <>
+          <div className="quote-terms-grid">
+            <label><span>Job description</span><input value={designDraft.jobDescription || ''} placeholder={`Fabrication and installation of ${selectedDesign.name}`} onChange={event => changeDesignField('jobDescription', event.target.value)} /></label>
+            <label><span>Profile / colour</span>
+              <select value={designDraft.frame || 'mill'} onChange={event => changeDesignField('frame', event.target.value)}>
+                {FRAME_COLOURS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+              </select>
+            </label>
+            <label><span>Client phone</span><input value={designDraft.clientPhone || ''} onChange={event => changeDesignField('clientPhone', event.target.value)} /></label>
+            <label><span>Client email</span><input value={designDraft.clientEmail || ''} onChange={event => changeDesignField('clientEmail', event.target.value)} /></label>
+            <label><span>Discount %</span><input type="number" min="0" max="100" value={designDraft.discountPercent ?? 0} onFocus={event => event.target.select()} onChange={event => changeDesignField('discountPercent', Number(event.target.value))} /></label>
+            <label><span>GETF + NHIS %</span><input type="number" min="0" max="100" value={designDraft.getfNhisPercent ?? 5} onChange={event => changeDesignField('getfNhisPercent', Number(event.target.value))} /></label>
+            <label><span>VAT %</span><input type="number" min="0" max="100" value={designDraft.vatPercent ?? 15} onChange={event => changeDesignField('vatPercent', Number(event.target.value))} /></label>
+            <label><span>Required payment %</span><input type="number" min="0" max="100" value={designDraft.depositPercent ?? 80} onChange={event => changeDesignField('depositPercent', Number(event.target.value))} /></label>
+            <label><span>Valid for (days)</span><input type="number" min="1" max="90" value={designDraft.quoteValidDays ?? 3} onChange={event => changeDesignField('quoteValidDays', Number(event.target.value))} /></label>
+          </div>
+          <div className="quote-total-card">
+            {previewBusy && !designPreview && <div>Calculating…</div>}
+            {designPreview && <>
+              <div><span>Per-unit total</span><b>{GHS0(designPreview.total)}</b></div>
+              <div><span>Quantity</span><b>× {designPreview.qty}</b></div>
+              <div className="grand"><span>Grand total</span><b>{GHS0(designPreview.grand_total)}</b></div>
+              <div><span>{percent(designDraft.depositPercent ?? 80)}% required payment</span><b>{GHS0(designPreview.grand_total * percent(designDraft.depositPercent ?? 80) / 100)}</b></div>
+            </>}
+          </div>
+          <p className="quote-help">This edits the saved design's own commercial terms — dimensions, openings and glass stay untouched and are only changed in the Configurator. Saving updates every future download of this design's Client quotation PDF, including from Reports.</p>
+          <div className="flex gap wrap">
+            <button className="btn btn-primary" disabled={busy} onClick={saveDesignCommercial}>
+              <IconCheck/> Save quote terms
+            </button>
+            <button className="btn btn-ghost" disabled={busy} onClick={downloadDesignQuote}>
+              <IconFile/> Download client quotation PDF
+            </button>
           </div>
         </>}
       </Card>}

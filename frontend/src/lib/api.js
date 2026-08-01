@@ -27,6 +27,13 @@ async function put(path, body) {
   return res
 }
 
+// Live pricing preview for a saved design's current commercial terms —
+// no persistence, used to show totals while editing before saving.
+export async function previewDesignPrice(clientName, design) {
+  const res = await post('/api/quotes/design', { client_name: clientName, project_id: design.projectId || null, design })
+  return res.json()
+}
+
 // POST design → persisted quote + branded PDF; triggers browser download.
 // Returns the issued quote number.
 export async function downloadQuotePdf(clientName, design) {
