@@ -20,12 +20,14 @@ os.environ["SOFAAMY_DATABASE_URL"] = (
 from app import lifecycle, main, models, schemas
 
 
-class RevisionIntegrityTest(unittest.TestCase):
-    @classmethod
-    def tearDownClass(cls):
-        main.engine.dispose()
-        TEST_DATABASE_DIR.cleanup()
+def tearDownModule():
+    # The engine is module-level, so every test class in this file shares one
+    # database. It is disposed once, after the last class has finished.
+    main.engine.dispose()
+    TEST_DATABASE_DIR.cleanup()
 
+
+class RevisionIntegrityTest(unittest.TestCase):
     def setUp(self):
         self.db = main.SessionLocal()
         client = models.Client(name="Revision Test Client")
@@ -466,6 +468,102 @@ class RevisionIntegrityTest(unittest.TestCase):
             row["job_number"] == legacy_job.job_number
             and row["legacy_active"]
             for row in production))
+
+
+class DraftQuoteEditTest(unittest.TestCase):
+    """A draft quotation stays editable until it reaches the client."""
+
+    def setUp(self):
+        self.db = main.SessionLocal()
+        client = models.Client(name="Draft Edit Client")
+        self.db.add(client)
+        self.db.flush()
+        self.project = models.Project(
+            project_number=f"SOF-P-EDIT-{self._testMethodName[-8:]}",
+            name="Draft quote edit test",
+            client_id=client.id,
+        )
+        self.db.add(self.project)
+        self.db.commit()
+        self.extraction_id = self._approved_extraction()
+        self.quote = self._draft_quote(unit_price=100)
+
+    def tearDown(self):
+        self.db.close()
+
+    def _approved_extraction(self):
+        result = main.create_extraction(
+            self.project.id,
+            schemas.ExtractionIn(
+                method="manual",
+                created_by="Technical Test",
+                items=[schemas.ExtractionItemIn(
+                    code="MAT-1", material="Test profile",
+                    quantity=4, unit="m", unit_price=0,
+                )],
+            ),
+            self.db,
+        )
+        extraction_id = result["extractions"][0]["id"]
+        main.approve_extraction(
+            extraction_id, schemas.ExtractionApprovalIn(), self.db)
+        return extraction_id
+
+    def _payload(self, unit_price):
+        item_id = self.db.query(models.ExtractionItem).filter_by(
+            extraction_id=self.extraction_id).one().id
+        return schemas.ExtractionQuoteIn(
+            extraction_id=self.extraction_id,
+            product="Test sliding window",
+            lines=[schemas.CommercialQuoteLineIn(
+                extraction_item_id=item_id,
+                description="Test profile",
+                quantity=4, unit="m", unit_price=unit_price,
+            )],
+            service_charge_percent=0,
+            discount_percent=0,
+            getf_nhis_percent=0,
+            vat_percent=0,
+            deposit_percent=80,
+        )
+
+    def _draft_quote(self, unit_price):
+        main.create_quote_from_extraction(
+            self.project.id, self._payload(unit_price), self.db)
+        return self.db.query(models.Quote).filter_by(
+            project_id=self.project.id).one()
+
+    def test_draft_edit_keeps_quote_number_and_updates_total(self):
+        self.assertEqual(self.quote.status, "Draft")
+        self.assertEqual(self.quote.total, 400)
+        original_number = self.quote.quote_number
+
+        main.update_quote_from_extraction(
+            original_number, self._payload(250), self.db)
+
+        quotes = self.db.query(models.Quote).filter_by(
+            project_id=self.project.id).all()
+        self.assertEqual(len(quotes), 1, "editing must not mint a new quote")
+        self.db.refresh(self.quote)
+        self.assertEqual(self.quote.quote_number, original_number)
+        self.assertEqual(self.quote.total, 1000)
+        snapshot = main._quote_snapshot(self.quote)
+        self.assertEqual(snapshot["grand_total"], 1000)
+        self.assertEqual(snapshot["lines"][0]["unit_price"], 250)
+
+    def test_sent_quote_cannot_be_edited_in_place(self):
+        main.quote_status(
+            self.quote.quote_number,
+            schemas.QuoteStatusIn(status="Sent"), self.db)
+
+        with self.assertRaises(HTTPException) as raised:
+            main.update_quote_from_extraction(
+                self.quote.quote_number, self._payload(250), self.db)
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("Revise", raised.exception.detail)
+
+        self.db.refresh(self.quote)
+        self.assertEqual(self.quote.total, 400, "a sent quote must not change")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@ import { PageHead, Card, Stat, Badge } from '../components/ui.jsx'
 import WhatsAppModal from '../components/WhatsAppModal.jsx'
 import {
   listQuotes, listClients, listProjects, getProjectWorkflow,
-  createQuoteFromExtraction, setQuoteStatus, downloadQuotationPdf,
+  createQuoteFromExtraction, updateQuoteFromExtraction,
+  setQuoteStatus, downloadQuotationPdf,
   releaseProjectToFactory,
 } from '../lib/api.js'
 import { GHS0, dateShort, quoteMessage } from '../lib/whatsapp.js'
@@ -113,6 +114,7 @@ export default function Quotations() {
   const [projectId, setProjectId] = useState(searchParams.get('project') || '')
   const [draft, setDraft] = useState(null)
   const [revisionSeed, setRevisionSeed] = useState(null)
+  const [editing, setEditing] = useState(null)
   const [live, setLive] = useState(false)
   const [busy, setBusy] = useState(false)
   const [filter, setFilter] = useState('All')
@@ -153,6 +155,9 @@ export default function Quotations() {
           ? revisionSeed.commercial : null
         setDraft(quoteDraft(data, projects.find(p => String(p.id) === String(projectId)), seed))
         if (seed) setRevisionSeed(null)
+        // Editing follows its own quote; switching project abandons the edit.
+        setEditing(current =>
+          current && String(current.project_id) === String(projectId) ? current : null)
       })
       .catch(error => fire(`⚠️ ${messageFrom(error)}`))
       .finally(() => setBusy(false))
@@ -196,7 +201,7 @@ export default function Quotations() {
     if (!extraction || !draft) return
     setBusy(true)
     try {
-      const data = await createQuoteFromExtraction(projectId, {
+      const payload = {
         extraction_id: extraction.id,
         product: draft.product,
         lines: draft.lines.map(line => ({
@@ -214,11 +219,19 @@ export default function Quotations() {
         client_email: draft.client_email,
         notes: draft.notes,
         created_by: 'Quotation Team',
-      })
+      }
+      const data = editing
+        ? await updateQuoteFromExtraction(editing.quote_number, payload)
+        : await createQuoteFromExtraction(projectId, payload)
       setWorkflow(data)
       await refreshLists()
-      const latest = data.quotations?.[0]
-      fire(`✅ ${latest?.quote_number || 'Draft quotation'} generated from extraction E${extraction.revision}`)
+      if (editing) {
+        fire(`✅ ${editing.quote_number} updated — same quote number kept`)
+        setEditing(null)
+      } else {
+        const latest = data.quotations?.[0]
+        fire(`✅ ${latest?.quote_number || 'Draft quotation'} generated from extraction E${extraction.revision}`)
+      }
       setActivePage('client')
     } catch (error) {
       fire(`⚠️ ${messageFrom(error)}`)
@@ -262,8 +275,30 @@ export default function Quotations() {
     }
   }
 
+  const edit = quote => {
+    if (!quote.commercial) return
+    setEditing(quote)
+    setRevisionSeed(quote)
+    setActivePage('workbench')
+    setProjectId(String(quote.project_id))
+    if (String(quote.project_id) === String(projectId) && workflow) {
+      setDraft(quoteDraft(workflow, activeProject, quote.commercial))
+      setRevisionSeed(null)
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    fire(`Editing ${quote.quote_number} — it keeps the same quote number`)
+  }
+
+  const cancelEdit = () => {
+    const quote = editing
+    setEditing(null)
+    if (workflow) setDraft(quoteDraft(workflow, activeProject))
+    if (quote) fire(`Left ${quote.quote_number} unchanged`)
+  }
+
   const revise = quote => {
     if (!quote.commercial) return
+    setEditing(null)
     setRevisionSeed(quote)
     setActivePage('workbench')
     setProjectId(String(quote.project_id))
@@ -362,6 +397,7 @@ export default function Quotations() {
               <td className="t-muted">{dateShort(quote.created_at)}</td>
               <td className="right">
                 <div className="flex gap-sm wrap" style={{ justifyContent:'flex-end' }}>
+                  {quote.commercial && quote.status === 'Draft' && <button className="btn btn-ghost btn-sm" onClick={() => edit(quote)}>Edit</button>}
                   {quote.commercial && <button className="btn btn-ghost btn-sm" onClick={() => revise(quote)}>Revise</button>}
                   <button className="btn btn-ghost btn-sm" title="Download customer quotation"
                     onClick={() => downloadQuotationPdf(quote.quote_number)
@@ -430,6 +466,13 @@ export default function Quotations() {
       </nav>
 
       {activePage === 'workbench' && <Card title="Quote preparation" sub="Technical quantities stay locked; selling rates and commercial additions are managed here.">
+        {editing && <div className="quote-editing-banner">
+          <div>
+            <b>Editing draft {editing.quote_number}</b>
+            <span>Saving replaces this draft and keeps the same quote number. It has not been sent to the client.</span>
+          </div>
+          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={cancelEdit}>Cancel</button>
+        </div>}
         {!projectId && <div className="quote-empty">Choose a project to prepare its quotation.</div>}
         {projectId && workflow && !extraction && <div className="quote-empty">
           <p>The technical team must approve a material extraction before pricing can begin.</p>
@@ -507,8 +550,9 @@ export default function Quotations() {
           <textarea className="quote-notes" placeholder="Commercial notes or customer terms" value={draft.notes} onChange={event => setDraft(current => ({ ...current, notes:event.target.value }))} />
           <div className="flex gap wrap">
             <button className="btn btn-primary" disabled={busy || !draft.product.trim() || !draft.lines.length || totals.grandTotal <= 0} onClick={generateQuote}>
-              <IconFile/> Generate draft quotation
+              <IconFile/> {editing ? `Save changes to ${editing.quote_number}` : 'Generate draft quotation'}
             </button>
+            {editing && <button className="btn btn-ghost" disabled={busy} onClick={cancelEdit}>Cancel edit</button>}
             <Link className="btn btn-ghost" to={`/technical-workflow?project=${projectId}`}><IconCube/> View technical chain</Link>
           </div>
         </>}

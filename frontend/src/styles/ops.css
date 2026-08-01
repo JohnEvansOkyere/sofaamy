@@ -204,6 +204,12 @@
   text-align:center; color:var(--ink-3); background:var(--bg); }
 .quote-empty p { margin:0 0 10px; }
 .quote-page-empty { margin:20px; }
+.quote-editing-banner { display:flex; align-items:center; justify-content:space-between;
+  gap:12px; margin:0 0 14px; padding:10px 12px; border:1px solid #d8c573;
+  border-radius:9px; background:var(--gold-soft); }
+.quote-editing-banner > div { display:grid; gap:2px; }
+.quote-editing-banner b { color:var(--navy-700); font-size:12.5px; }
+.quote-editing-banner span { color:var(--ink-2); font-size:11px; }
 .quote-basis { display:grid; grid-template-columns:auto auto auto 1fr; gap:18px;
   align-items:center; padding:12px 14px; margin:0 0 14px; border:1px solid #d9e6ee;
   border-radius:10px; background:#f4f9fc; }

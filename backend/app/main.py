@@ -1280,6 +1280,55 @@ def create_quote_from_extraction(
     return _technical_workflow_payload(db, project)
 
 
+@app.put("/api/quotes/{quote_number}/commercial")
+def update_quote_from_extraction(
+        quote_number: str, req: schemas.ExtractionQuoteIn,
+        db: Session = Depends(get_db)):
+    """Edit an itemised draft quotation in place before it is sent.
+
+    The quote number is kept so a draft can be corrected without leaving
+    abandoned revisions behind. Once a quotation has been sent or accepted the
+    client holds that number, so it is revised as a new quotation instead.
+    """
+    quote = db.scalar(
+        select(models.Quote).where(models.Quote.quote_number == quote_number))
+    if quote is None:
+        raise HTTPException(404, "Quote not found")
+    if _quote_snapshot(quote) is None:
+        raise HTTPException(
+            409,
+            "Only an itemised quotation prepared from an extraction can be "
+            "edited here")
+    if quote.status != "Draft":
+        raise HTTPException(
+            409,
+            f"{quote.quote_number} is already {quote.status.lower()}. "
+            "Revise it as a new quotation instead.")
+    extraction = db.get(models.TechnicalExtraction, req.extraction_id)
+    if extraction is None or extraction.project_id != quote.project_id:
+        raise HTTPException(400, "Extraction does not belong to this project")
+    if extraction.status != "approved":
+        raise HTTPException(409, "Approve the extraction before quotation")
+    if not req.product.strip():
+        raise HTTPException(400, "Product description is required")
+    snapshot = _build_commercial_snapshot(extraction, req)
+    quote.design.design_json = json.dumps({
+        "record_kind": QUOTE_SNAPSHOT_KIND,
+        "commercial": snapshot,
+    })
+    quote.design.total = snapshot["grand_total"]
+    quote.product = req.product.strip()
+    quote.total = snapshot["grand_total"]
+    quote.deposit_percent = req.deposit_percent
+    quote.extraction_id = extraction.id
+    _workflow_log(
+        db, quote.project, "quote",
+        f"updated draft quotation {quote.quote_number} before sending",
+        who=req.created_by)
+    db.commit()
+    return _technical_workflow_payload(db, quote.project)
+
+
 @app.post("/api/projects/{project_id}/drawing-tasks")
 def create_drawing_task(project_id: int, req: schemas.DrawingTaskIn,
                         db: Session = Depends(get_db)):

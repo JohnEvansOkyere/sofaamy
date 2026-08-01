@@ -17,6 +17,16 @@ async function post(path, body) {
   return res
 }
 
+async function put(path, body) {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res
+}
+
 // POST design → persisted quote + branded PDF; triggers browser download.
 // Returns the issued quote number.
 export async function downloadQuotePdf(clientName, design) {
@@ -117,6 +127,9 @@ export const approveExtraction = (extractionId, approvedBy = 'Technical Supervis
 
 export const createQuoteFromExtraction = (projectId, data) =>
   post(`/api/projects/${projectId}/quotes/from-extraction`, data).then(r => r.json())
+
+export const updateQuoteFromExtraction = (quoteNumber, data) =>
+  put(`/api/quotes/${quoteNumber}/commercial`, data).then(r => r.json())
 
 export const createDrawingTask = (projectId, data) =>
   post(`/api/projects/${projectId}/drawing-tasks`, data).then(r => r.json())
