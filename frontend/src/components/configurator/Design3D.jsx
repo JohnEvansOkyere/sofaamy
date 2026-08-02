@@ -507,6 +507,8 @@ export default function Design3D({ design, wall = false, onDesignPatch, fabricat
 
   return (
     <div ref={shellRef} className={`viz-shell${maximized ? ' viz-maximized' : ''}`}>
+      <VisualizerControls wall={wall} settings={settings} setSetting={setSetting} hasOpening={hasOpening} hasSliding={hasSliding} maximized={maximized} onMaximize={toggleMaximize} />
+      <div className="viz-canvas">
       <Canvas camera={{ position:[s * 1.5, s * 0.55, s * 1.9], fov:45 }}>
         <color attach="background" args={['#dfe8ee']} />
         <fog attach="fog" args={['#dfe8ee', 6, 18]} />
@@ -530,8 +532,8 @@ export default function Design3D({ design, wall = false, onDesignPatch, fabricat
         </group>
         <CameraRig mode={settings.view} design={design} wall={wall} />
       </Canvas>
-      <VisualizerControls wall={wall} settings={settings} setSetting={setSetting} hasOpening={hasOpening} hasSliding={hasSliding} maximized={maximized} onMaximize={toggleMaximize} />
       <div className="viz-badge">{wall ? 'Client wall preview' : 'Interactive 3D model'} · {settings.view === 'inside' ? 'Inside view' : settings.view[0].toUpperCase() + settings.view.slice(1)}</div>
+      </div>
     </div>
   )
 }
