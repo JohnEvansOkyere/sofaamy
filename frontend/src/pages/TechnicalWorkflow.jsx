@@ -10,8 +10,11 @@ import {
   approveDrawingRevision, releaseProjectToFactory, drawingFileUrl,
 } from '../lib/api.js'
 import { timeAgo } from '../lib/whatsapp.js'
+import { FRAME_SYSTEMS } from '../lib/frameCatalog.js'
 import { IconCheck, IconDownload, IconFile, IconLayers, IconPlus } from '../components/icons.jsx'
 import '../styles/technical-workflow.css'
+
+const systemLabel = system => FRAME_SYSTEMS[system]?.label || ''
 
 const EMPTY_ITEM = {
   code: '', material: '', category: 'Material', quantity: 1,
@@ -385,9 +388,9 @@ function QuotationHandoff({ workflow, busy, act }) {
       </div>}
       {anyApproved ? <div className="tw-editor tw-handoff-only">
         <div>
-          <b>{multiItem ? 'Ready to combine into one client quote' : 'Approved for quotation'}</b>
+          <b>Approved for quotation</b>
           <span>{multiItem
-            ? "Open the quotation workbench to combine each approved item's materials into one client quote."
+            ? 'Open the quotation workbench to price each approved item — every item gets its own client quote.'
             : 'Rates, taxes, payment terms, client acceptance and production authorization are managed separately by the quotation team.'}</span>
         </div>
         <Link className="btn btn-primary" to={`/quotations?project=${workflow.project.id}`}>
@@ -684,6 +687,7 @@ function ItemPicker({ items, itemSummary, selectedKey, onSelect }) {
           <button type="button" key={key} className={selectedKey === key ? 'active' : ''}
             onClick={() => onSelect(key)}>
             <b>{item.design_id === null ? 'Ungrouped (legacy)' : (item.ref || item.name)}</b>
+            {item.design_id !== null && item.name && <small>{item.name}</small>}
             <span>{summary.approved_extraction_revision
               ? `E${summary.approved_extraction_revision} approved`
               : 'No approved extraction'}</span>
@@ -739,6 +743,18 @@ export default function TechnicalWorkflow() {
       return firstReal ? firstReal.design_id : 'ungrouped'
     })
   }, [workflow])
+
+  // The item being viewed (picker selection, or the project's only item when
+  // there's no picker) already carries its own profile/system — no need to
+  // make the technical team retype it.
+  const viewedItem = showItemPicker
+    ? items.find(item => (item.design_id === null ? 'ungrouped' : item.design_id) === selectedItemKey)
+    : items.find(item => item.design_id !== null)
+  useEffect(() => {
+    const label = viewedItem ? systemLabel(viewedItem.system) : ''
+    if (label) setSettings(s => ({ ...s, product_system: label }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewedItem?.design_id, workflow?.project?.id])
 
   const fire = message => {
     setToast(message)

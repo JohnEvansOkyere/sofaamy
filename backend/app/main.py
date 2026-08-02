@@ -257,6 +257,13 @@ def _design_category(record: models.DesignRecord) -> str:
         return "frame"
 
 
+def _design_system(record: models.DesignRecord) -> str:
+    try:
+        return json.loads(record.design_json).get("system", "")
+    except (TypeError, ValueError, AttributeError):
+        return ""
+
+
 def _extraction_payload(extraction: models.TechnicalExtraction) -> dict:
     items = sorted(extraction.items or [], key=lambda row: row.id)
     return {
@@ -719,6 +726,7 @@ def _technical_workflow_payload(db: Session, project: models.Project) -> dict:
         "ref": record.ref,
         "name": record.name,
         "category": _design_category(record),
+        "system": _design_system(record),
         "qty": record.qty,
         "location": record.location,
         "created_at": (
@@ -733,6 +741,7 @@ def _technical_workflow_payload(db: Session, project: models.Project) -> dict:
             "ref": "",
             "name": "Ungrouped (pre-existing project chain)",
             "category": "",
+            "system": "",
             "qty": None,
             "location": "",
             "created_at": None,
