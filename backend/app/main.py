@@ -197,42 +197,55 @@ def _workflow_log(db: Session, project: models.Project, kind: str, note: str,
         project_id=project.id, kind=kind, note=note, who=who))
 
 
-def _payment_authorization(db: Session, project: models.Project) -> dict:
-    """Return the project's drawing-payment gate without inventing one rule.
+def _project_contract_value(project: models.Project) -> float:
+    """The one contract figure Accounts bills against for this project.
 
-    Every accepted project job must meet its own configured deposit threshold.
-    The project-level percentage is used only when a legacy job has no value.
+    Same number as the combined client PROJECT QUOTATION total. Falls back to
+    the sum of job values only for a project with no saved design items at
+    all (an extraction-only project the Configurator quote never covers) so
+    that case doesn't silently report a zero contract.
+    """
+    if project.items:
+        return _project_client_quote_totals(project)["client_grand_total"]
+    return sum(float(job.value or 0) for job in (project.jobs or []))
+
+
+def _project_deposit_percent(project: models.Project) -> float:
+    return max(0, min(100, float(
+        project.drawing_release_percent
+        if project.drawing_release_percent is not None else 80)))
+
+
+def _payment_authorization(db: Session, project: models.Project) -> dict:
+    """Return the project's drawing-payment gate against ONE combined contract.
+
+    What unlocks drawing work — and what a payment's outstanding balance is
+    capped at — is the same combined total shown on the client's project
+    quotation, not each job's own individually-priced value. Production
+    stages still track each item's own job separately; only billing and this
+    gate are project-wide.
     """
     jobs = list(project.jobs or [])
     accepted_quotes = [q for q in (project.quotes or [])
                        if q.status in ("Accepted", "Approved")]
-    required = 0.0
-    paid = 0.0
-    blocked_jobs = []
-    for job in jobs:
-        job_paid = lc.paid_amount(db, job)
-        threshold = max(0, min(100, float(
-            job.deposit_percent if job.deposit_percent is not None
-            else project.drawing_release_percent or 80)))
-        job_required = float(job.value or 0) * threshold / 100
-        paid += job_paid
-        required += job_required
-        if job_paid + 0.5 < job_required:
-            blocked_jobs.append(job.job_number)
-    authorized = bool(jobs) and not blocked_jobs
+    contract = _project_contract_value(project)
+    paid = sum(lc.paid_amount(db, job) for job in jobs)
+    threshold = _project_deposit_percent(project)
+    required = contract * threshold / 100
+    authorized = bool(jobs) and paid + 0.5 >= required
     return {
         "authorized": authorized,
         "accepted_quote_count": len(accepted_quotes),
         "job_count": len(jobs),
+        "contract_value": round(contract, 2),
         "required_amount": round(required, 2),
         "paid_amount": round(paid, 2),
         "outstanding": round(max(required - paid, 0), 2),
-        "blocked_jobs": blocked_jobs,
         "reason": (
             "" if authorized
             else "An accepted quotation must open a project job before drawing can begin."
             if not jobs
-            else f"Payment threshold not met for {', '.join(blocked_jobs)}."
+            else f"GHS {round(required - paid, 2):,.2f} still required against the project's combined contract."
         ),
     }
 
@@ -957,6 +970,51 @@ def _project_payload(project: models.Project) -> dict:
     }
 
 
+def _project_client_quote_totals(project: models.Project) -> dict:
+    """The one combined total the client actually sees for a project.
+
+    Recalculated fresh from every saved design item — the same numbers the
+    PROJECT QUOTATION PDF shows. This is also what Accounts bills against
+    (_payment_authorization) and what a payment's outstanding balance is
+    capped at, so the amount sent to Accounts can never drift from the
+    amount quoted to the client again.
+    """
+    totals = {key: 0.0 for key in (
+        "client_subtotal", "discount_amount", "client_net", "getf_nhis",
+        "vat", "client_grand_total", "internal_floor",
+    )}
+    first_design = None
+    for item in sorted(project.items or [], key=lambda row: row.created_at):
+        try:
+            raw_design = json.loads(item.design_json)
+            design = schemas.DesignIn(**raw_design).engine_dict()
+            result = calc_any_quote(design)
+        except Exception:
+            design, result = None, None
+        if first_design is None and design is not None:
+            first_design = design
+        if result:
+            # Frame prices in client_grand_total (post discount/VAT/GETF);
+            # Frameless and Curtain Wall have no tax split and only ever
+            # return grand_total — same figure, different key per engine.
+            totals["client_grand_total"] += float(
+                result.get("client_grand_total", result.get("grand_total", 0)) or 0)
+            for key in totals:
+                if key != "client_grand_total":
+                    totals[key] += float(result.get(key, 0) or 0)
+        else:
+            # Preserve an older saved item's last known total even when its
+            # payload predates the current schema and can't be recalculated.
+            totals["client_grand_total"] += float(item.total or 0)
+    return {
+        **{key: round(value, 2) for key, value in totals.items()},
+        "deposit_percent": max(0, min(
+            100, float((first_design or {}).get("deposit_percent") or 80))),
+        "quote_valid_days": max(1, int(
+            (first_design or {}).get("quote_valid_days") or 3)),
+    }
+
+
 def _project_quote_payload(project: models.Project) -> dict:
     """Build the current consolidated client quote for every saved item.
 
@@ -966,11 +1024,6 @@ def _project_quote_payload(project: models.Project) -> dict:
     """
     payload = _project_payload(project)
     records = {item.id: item for item in (project.items or [])}
-    totals = {key: 0.0 for key in (
-        "client_subtotal", "discount_amount", "client_net", "getf_nhis",
-        "vat", "client_grand_total", "internal_floor",
-    )}
-    first_design = None
     enriched_items = []
     for item in payload["items"]:
         record = records.get(item["id"])
@@ -979,30 +1032,17 @@ def _project_quote_payload(project: models.Project) -> dict:
             design = schemas.DesignIn(**raw_design).engine_dict()
             result = calc_any_quote(design)
         except Exception:
-            # Preserve older saved records in the project list even if they
-            # predate the current schema; they remain visible with their last
-            # saved amount but do not block the rest of the quote.
             design = raw_design
             result = None
-        if first_design is None:
-            first_design = design
         row = {**item, "design": design, "result": result}
         if result:
-            row["total"] = result["client_grand_total"]
-            for key in totals:
-                totals[key] += float(result.get(key, 0) or 0)
-        else:
-            # Keep a legacy item's saved commercial total in the roll-up even
-            # when its old payload cannot be recalculated by the current engine.
-            totals["client_grand_total"] += float(item.get("total", 0) or 0)
+            row["total"] = result.get("client_grand_total", result.get("grand_total", 0))
         enriched_items.append(row)
 
     payload["items"] = enriched_items
-    payload.update({key: round(value, 2) for key, value in totals.items()})
+    payload.update(_project_client_quote_totals(project))
     payload["total"] = payload["client_grand_total"]
     payload["project_quote_number"] = payload["project_number"]
-    payload["quote_valid_days"] = max(1, int((first_design or {}).get("quote_valid_days") or 3))
-    payload["deposit_percent"] = max(0, min(100, float((first_design or {}).get("deposit_percent") or 80)))
     payload["effective_discount_percent"] = round(
         (payload["discount_amount"] / payload["client_subtotal"] * 100)
         if payload["client_subtotal"] else 0, 2)
@@ -2066,6 +2106,69 @@ def list_jobs(db: Session = Depends(get_db)):
     return [lc.job_summary(db, j) for j in jobs]
 
 
+def _job_summary_with_project_totals(db: Session, j: models.Job) -> dict:
+    """job_summary(), but value/paid/balance/deposit reflect the whole
+    project's combined contract when this job belongs to one."""
+    summary = lc.job_summary(db, j)
+    if not j.project:
+        return summary
+    project_jobs = list(j.project.jobs or [])
+    contract = _project_contract_value(j.project)
+    paid = sum(lc.paid_amount(db, job) for job in project_jobs)
+    return {
+        **summary,
+        "value": round(contract, 2),
+        "paid_amount": round(paid, 2),
+        "balance": round(max(contract - paid, 0), 2),
+        "paid": f"{min(100, round(paid / contract * 100)) if contract else 0}%",
+        "deposit_percent": round(_project_deposit_percent(j.project), 2),
+        "project_number": j.project.project_number,
+        "project_name": j.project.name,
+        "job_count": len(project_jobs),
+    }
+
+
+def _account_row(db: Session, jobs: list[models.Job],
+                 project: models.Project | None) -> dict:
+    contract = _project_contract_value(project) if project else sum(
+        float(job.value or 0) for job in jobs)
+    paid = sum(lc.paid_amount(db, job) for job in jobs)
+    threshold = (_project_deposit_percent(project) if project
+                else max(0, min(100, float(jobs[0].deposit_percent or 80))))
+    primary = min(jobs, key=lambda job: job.created_at)
+    return {
+        "job_number": primary.job_number,  # target for recording a new payment
+        "project_id": project.id if project else None,
+        "project_number": project.project_number if project else None,
+        "client": primary.client.name if primary.client else "—",
+        "product": project.name if project else primary.product,
+        "job_count": len(jobs),
+        "value": round(contract, 2),
+        "paid_amount": round(paid, 2),
+        "balance": round(max(contract - paid, 0), 2),
+        "deposit_percent": round(threshold, 2),
+        "created_at": min(job.created_at for job in jobs).isoformat(),
+    }
+
+
+@app.get("/api/accounts")
+def list_accounts(db: Session = Depends(get_db)):
+    """One billing row per project (combined contract across its items),
+    plus one row per legacy job that was never attached to a project."""
+    jobs = db.scalars(select(models.Job)).all()
+    by_project: dict[int, list[models.Job]] = {}
+    standalone: list[models.Job] = []
+    for job in jobs:
+        if job.project_id:
+            by_project.setdefault(job.project_id, []).append(job)
+        else:
+            standalone.append(job)
+    rows = [_account_row(db, group, group[0].project) for group in by_project.values()]
+    rows += [_account_row(db, [job], None) for job in standalone]
+    rows.sort(key=lambda row: row["created_at"], reverse=True)
+    return rows
+
+
 @app.get("/api/production/jobs")
 def list_production_jobs(db: Session = Depends(get_db)):
     jobs = db.scalars(select(models.Job).order_by(models.Job.created_at.desc())).all()
@@ -2090,8 +2193,15 @@ def _get_job(db: Session, job_number: str) -> models.Job:
 @app.get("/api/jobs/{job_number}")
 def job_detail(job_number: str, db: Session = Depends(get_db)):
     j = _get_job(db, job_number)
-    payments = db.scalars(select(models.Payment).where(models.Payment.job_id == j.id)
-                          .order_by(models.Payment.created_at.desc())).all()
+    project_jobs = list(j.project.jobs or []) if j.project else [j]
+    # Accounts bills against the whole project's one combined contract, so
+    # the payment ledger shown here spans every job under the project, each
+    # line labelled with which item it was actually recorded against.
+    payments = db.scalars(
+        select(models.Payment)
+        .where(models.Payment.job_id.in_([job.id for job in project_jobs]))
+        .order_by(models.Payment.created_at.desc())).all()
+    payments_by_job = {job.id: job for job in project_jobs}
     events = db.scalars(select(models.Event).where(models.Event.job_id == j.id)
                         .order_by(models.Event.created_at.desc()).limit(30)).all()
     qcs = db.scalars(select(models.QcCheck).where(models.QcCheck.job_id == j.id)
@@ -2103,10 +2213,13 @@ def job_detail(job_number: str, db: Session = Depends(get_db)):
     if design_payload is not None and j.project_id:
         design_payload["projectId"] = j.project_id
     return {
-        **lc.job_summary(db, j),
+        **_job_summary_with_project_totals(db, j),
         "stages": [{"key": k, "label": l} for k, l, _ in lc.STAGES],
         "payments": [{"kind": p.kind, "method": p.method, "amount": p.amount,
-                      "ref": p.ref, "at": p.created_at.isoformat()} for p in payments],
+                      "ref": p.ref, "at": p.created_at.isoformat(),
+                      "job_number": payments_by_job[p.job_id].job_number,
+                      "product": payments_by_job[p.job_id].product}
+                     for p in payments],
         "events": [lc.event_dict(e) for e in events],
         "qc_checks": [{"result": q.result, "score": q.score, "notes": q.notes,
                        "inspector": q.inspector, "at": q.created_at.isoformat(),
@@ -2146,7 +2259,13 @@ def add_payment(job_number: str, p: schemas.PaymentIn, db: Session = Depends(get
     j = _get_job(db, job_number)
     if p.amount <= 0:
         raise HTTPException(400, "Amount must be positive")
-    remaining = max(float(j.value or 0) - lc.paid_amount(db, j), 0)
+    if j.project:
+        # Billed against the project's one combined contract, not this job's
+        # own individually-priced value — see _payment_authorization.
+        project_paid = sum(lc.paid_amount(db, job) for job in (j.project.jobs or []))
+        remaining = max(_project_contract_value(j.project) - project_paid, 0)
+    else:
+        remaining = max(float(j.value or 0) - lc.paid_amount(db, j), 0)
     if p.amount > remaining + 0.01:
         raise HTTPException(
             400,
@@ -2169,7 +2288,7 @@ def add_payment(job_number: str, p: schemas.PaymentIn, db: Session = Depends(get
                 "required payment confirmed — detailed drawing authorized",
                 who=p.who)
     db.commit()
-    return lc.job_summary(db, j)
+    return _job_summary_with_project_totals(db, j)
 
 
 @app.post("/api/jobs/{job_number}/qc")

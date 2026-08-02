@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { PageHead, Card, Stat, Badge } from '../components/ui.jsx'
-import { addPayment, getJob, listJobs } from '../lib/api.js'
+import { addPayment, getJob, listAccounts } from '../lib/api.js'
 import { GHS0, timeAgo } from '../lib/whatsapp.js'
 import { IconCheck, IconFile, IconWallet } from '../components/icons.jsx'
 import '../styles/accounts.css'
@@ -54,7 +54,7 @@ export default function Accounts() {
   }
 
   const refreshJobs = async (preferred = selected) => {
-    const rows = await listJobs()
+    const rows = await listAccounts()
     setJobs(rows)
     setLive(true)
     const next = rows.find(row => row.job_number === preferred)
@@ -144,14 +144,14 @@ export default function Accounts() {
       {error && <div className="accounts-alert">⚠ {error}</div>}
 
       <div className="grid g-4 mb">
-        <Stat label="Contract value" value={GHS0(totals.contract)} trend={`${jobs.length} customer jobs`} dir="flat" tone="blue" icon={<IconFile />} />
+        <Stat label="Contract value" value={GHS0(totals.contract)} trend={`${jobs.length} customer accounts`} dir="flat" tone="blue" icon={<IconFile />} />
         <Stat label="Payments received" value={GHS0(totals.received)} trend="Deposits and balances" dir="up" tone="green" icon={<IconCheck />} />
         <Stat label="Required now" value={GHS0(totals.required)} trend="To clear drawing gates" dir="flat" tone="orange" icon={<IconWallet />} />
         <Stat label="Total receivables" value={GHS0(totals.balance)} trend="Remaining contract balances" dir="flat" tone="purple" icon={<IconWallet />} />
       </div>
 
       <div className="accounts-layout">
-        <Card title="Customer accounts" sub="Select a job to record or review its payments." pad={false}
+        <Card title="Customer accounts" sub="Select an account to record or review its payments." pad={false}
           action={<div className="accounts-filters">
             {FILTERS.map(([key, label]) => (
               <button type="button" className={filter === key ? 'active' : ''}
@@ -169,7 +169,8 @@ export default function Accounts() {
                   return (
                     <tr className={selected === row.job_number ? 'selected' : ''}
                       onClick={() => setSelected(row.job_number)} key={row.job_number}>
-                      <td><b>{row.job_number}</b><small>{row.client} · {row.product}</small></td>
+                      <td><b>{row.project_number || row.job_number}</b>
+                        <small>{row.client} · {row.product}{row.job_count > 1 ? ` · ${row.job_count} items` : ''}</small></td>
                       <td className="t-mono">{GHS0(row.value)}</td>
                       <td className="t-mono">{GHS0(row.paid_amount)}</td>
                       <td className="t-mono">{GHS0(requiredNow(row))}</td>
@@ -186,7 +187,7 @@ export default function Accounts() {
           </div>
         </Card>
 
-        <Card title="Payment desk" sub={job ? `${job.job_number} · ${job.client}` : 'Select a customer account'}>
+        <Card title="Payment desk" sub={job ? `${job.project_number || job.job_number} · ${job.client}${job.job_count > 1 ? ` · ${job.job_count} items` : ''}` : 'Select a customer account'}>
           {!job && <div className="accounts-empty">Select a job to manage its payments.</div>}
           {job && <>
             <div className="accounts-summary">
@@ -230,7 +231,8 @@ export default function Accounts() {
               {job.payments.map((row, index) => (
                 <div key={`${row.at}-${index}`}>
                   <Badge tone={row.kind === 'deposit' ? 'blue' : 'green'}>{row.kind}</Badge>
-                  <p><b>{row.method}{row.ref ? ` · ${row.ref}` : ''}</b><small>{timeAgo(row.at)}</small></p>
+                  <p><b>{row.method}{row.ref ? ` · ${row.ref}` : ''}</b>
+                    <small>{timeAgo(row.at)}{job.job_count > 1 ? ` · ${row.product} (${row.job_number})` : ''}</small></p>
                   <strong>{GHS0(row.amount)}</strong>
                 </div>
               ))}

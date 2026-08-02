@@ -201,6 +201,7 @@ async function getJSON(path) {
 }
 
 export const listJobs = () => getJSON('/api/jobs')
+export const listAccounts = () => getJSON('/api/accounts')
 export const listProductionJobs = () => getJSON('/api/production/jobs')
 export const listQuotes = () => getJSON('/api/quotes')
 export const getJob = (jobNumber) => getJSON(`/api/jobs/${jobNumber}`)
