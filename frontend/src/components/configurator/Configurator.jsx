@@ -17,7 +17,7 @@ import { FRAME_SYSTEMS, FRAME_SYSTEM_ORDER, FRAME_PRODUCT_GROUPS, FRAME_GLASS_CA
 import { calcQuote } from '../../lib/pricing.js'
 import { designBreakdown } from '../../lib/pieces.js'
 import { saveDesign, listDesigns, listProjects, createProject as createProjectApi } from '../../lib/api.js'
-import { IconCube, IconCheck, IconPlus, IconLayers } from '../icons.jsx'
+import { IconCube, IconCheck, IconPlus, IconLayers, IconCopy } from '../icons.jsx'
 import './configurator.css'
 
 // mini SVG preview of a framed template's grid
@@ -556,6 +556,18 @@ export default function Configurator() {
     .then(([designs, projectRows]) => { setSaved(designs); setProjects(projectRows) })
     .catch(() => {})
   useEffect(() => { refreshSaved() }, [])
+  const copyShareLink = async (s, e) => {
+    e?.stopPropagation()
+    if (!s.share_token) { fire('No shareable link for this item yet'); return }
+    const url = `${window.location.origin}/share/${s.share_token}`
+    try {
+      await navigator.clipboard.writeText(url)
+    } catch {
+      window.prompt('Copy this link:', url)
+      return
+    }
+    fire('Client share link copied')
+  }
   const openSaved = (s) => {
     const next = withAutoColour({ ...s.design, ref:s.ref, qty:s.qty, location:s.location, projectId:s.project_id || null, savedItemId:s.id })
     undoStack.current = []
@@ -700,8 +712,11 @@ export default function Configurator() {
                       <small>Qty {item.qty}{item.location ? ` · ${item.location}` : ''}</small>
                     </div>
                     {s && <div className="project-detail-item-actions">
-                      <button className="project-home-action" onClick={() => { setProjectHomeId(null); openSaved(s) }}>Open item</button>
-                      <button className="project-home-action" onClick={() => { setProjectHomeId(null); duplicateSaved(s) }}>Duplicate & Edit</button>
+                      <button className="project-copy-link" title="Copy client share link" onClick={e => copyShareLink(s, e)}><IconCopy/></button>
+                      <div className="flex gap-sm">
+                        <button className="project-home-action" onClick={() => { setProjectHomeId(null); openSaved(s) }}>Open item</button>
+                        <button className="project-home-action" onClick={() => { setProjectHomeId(null); duplicateSaved(s) }}>Duplicate & Edit</button>
+                      </div>
                     </div>}
                   </div>
                 })}</div>}
