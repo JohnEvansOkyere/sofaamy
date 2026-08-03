@@ -17,6 +17,12 @@ async function post(path, body) {
   return res
 }
 
+async function del(path) {
+  const res = await fetch(`${BASE}${path}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
 async function put(path, body) {
   const res = await fetch(`${BASE}${path}`, {
     method: 'PUT',
@@ -110,6 +116,10 @@ export async function createProject(data) {
   const res = await post('/api/projects', data)
   return res.json()
 }
+
+export const deleteProject = (projectId) => del(`/api/projects/${projectId}`)
+
+export const deleteDesign = (designId) => del(`/api/designs/${designId}`)
 
 export async function getProject(projectId) {
   const res = await fetch(`${BASE}/api/projects/${projectId}`)

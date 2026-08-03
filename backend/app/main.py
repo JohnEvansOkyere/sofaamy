@@ -1144,6 +1144,47 @@ def _get_project(db: Session, project_id: int) -> models.Project:
     return project
 
 
+@app.delete("/api/projects/{project_id}")
+def delete_project(project_id: int, db: Session = Depends(get_db)):
+    """Delete a project with everything drafted under it.
+
+    Blocked once a factory job exists — that job carries production and
+    payment records, so it must be cancelled from the job, not by removing
+    the project underneath it.
+    """
+    project = _get_project(db, project_id)
+    if project.jobs:
+        raise HTTPException(
+            409,
+            "This project already has a factory job — cancel the job before "
+            "deleting the project.")
+    items = list(project.items)
+    quotes = {quote.id: quote for quote in project.quotes}
+    for item in items:
+        for quote in item.quotes:
+            quotes[quote.id] = quote
+    # Delete children before their parents so the FK graph stays valid on
+    # Postgres: releases → drawing tasks → quotes → extractions → items.
+    for release in list(project.production_releases):
+        db.delete(release)
+    for task in list(project.drawing_tasks):
+        db.delete(task)
+    db.flush()
+    for quote in quotes.values():
+        db.delete(quote)
+    for extraction in list(project.extractions):
+        db.delete(extraction)
+    db.flush()
+    for item in items:
+        db.delete(item)
+    db.flush()
+    project_number = project.project_number
+    db.delete(project)
+    db.commit()
+    return {"deleted": True, "project_number": project_number,
+            "items_deleted": len(items), "quotes_deleted": len(quotes)}
+
+
 @app.get("/api/projects/{project_id}/workflow")
 def get_project_workflow(project_id: int, db: Session = Depends(get_db)):
     return _technical_workflow_payload(db, _get_project(db, project_id))
@@ -2852,6 +2893,36 @@ def list_designs(db: Session = Depends(get_db)):
              "created_at": r.created_at.isoformat(),
              "share_token": share_token(r.id),
              "design": raw} for r, raw in visible]
+
+
+@app.delete("/api/designs/{design_id}")
+def delete_design(design_id: int, db: Session = Depends(get_db)):
+    """Remove a saved project item that has not entered the workflow yet
+    (e.g. a duplicate created by mistake)."""
+    rec = db.get(models.DesignRecord, design_id)
+    if rec is None:
+        raise HTTPException(404, "Item not found")
+    blockers = []
+    if rec.quotes:
+        blockers.append("quoted")
+    if db.scalar(select(func.count(models.TechnicalExtraction.id)).where(
+            models.TechnicalExtraction.design_id == rec.id)):
+        blockers.append("has a material extraction")
+    if db.scalar(select(func.count(models.DrawingTask.id)).where(
+            models.DrawingTask.design_id == rec.id)):
+        blockers.append("has a drawing task")
+    if db.scalar(select(func.count(models.ProductionRelease.id)).where(
+            models.ProductionRelease.design_id == rec.id)):
+        blockers.append("released to the factory")
+    if blockers:
+        raise HTTPException(
+            409,
+            f"This item is already in the technical workflow "
+            f"({', '.join(blockers)}) — it cannot be deleted.")
+    ref = rec.ref or rec.name
+    db.delete(rec)
+    db.commit()
+    return {"deleted": True, "ref": ref}
 
 
 @app.post("/api/optimize")

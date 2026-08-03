@@ -16,8 +16,8 @@ import { CATEGORIES, OPENINGS, OPENING_DESIGNS, openingDesignById, GLASS, FRAMES
 import { FRAME_SYSTEMS, FRAME_SYSTEM_ORDER, FRAME_PRODUCT_GROUPS, FRAME_GLASS_CATALOG, frameSystemSummary, frameAccessoryRows, frameRateForRateKey, frameRateKeyForOpening } from '../../lib/frameCatalog.js'
 import { calcQuote } from '../../lib/pricing.js'
 import { designBreakdown } from '../../lib/pieces.js'
-import { saveDesign, listDesigns, listProjects, createProject as createProjectApi } from '../../lib/api.js'
-import { IconCube, IconCheck, IconPlus, IconLayers, IconCopy } from '../icons.jsx'
+import { saveDesign, listDesigns, listProjects, createProject as createProjectApi, deleteProject, deleteDesign } from '../../lib/api.js'
+import { IconCube, IconCheck, IconPlus, IconLayers, IconCopy, IconTrash } from '../icons.jsx'
 import './configurator.css'
 
 // mini SVG preview of a framed template's grid
@@ -578,18 +578,49 @@ export default function Configurator() {
     setSelected(0); setView('2d'); setPan({ x:0, y:0 })
     fire(`Opened saved design "${s.ref || s.name}"`)
   }
-  const duplicateSaved = (s, e) => {
+  // Duplicate = one more item in the SAME project, carrying the original's
+  // configuration. It is saved straight away so it exists as its own project
+  // item (a second sliding window, different sizes), then opened for editing.
+  const duplicateSaved = async (s, e) => {
     e?.stopPropagation()
-    const baseRef = s.ref || s.name || 'DESIGN'
-    const copyRef = `${baseRef}-COPY`
-    const next = withAutoColour({ ...s.design, ref:copyRef, name:`${s.design.name} (Copy)`, qty:s.qty, location:s.location, projectId:s.project_id || null, savedItemId:null })
-    undoStack.current = []
-    designRef.current = next
-    setDesign(next)
-    setClient(s.client_name || '')
-    setCat(s.design.category || 'frame')
-    setSelected(0); setView('2d'); setTool('shapes'); setPan({ x:0, y:0 })
-    fire(`Duplicated "${s.ref || s.name}" — edit the copy, then save it`)
+    const baseRef = (s.ref || s.name || 'DESIGN').replace(/-[A-Z0-9]{5}$/i, '').replace(/-COPY$/i, '')
+    const copyRef = `${baseRef}-${Date.now().toString(36).slice(-5).toUpperCase()}`
+    const copy = withAutoColour({ ...s.design, ref:copyRef, qty:s.qty, location:s.location, projectId:s.project_id || null, savedItemId:null })
+    try {
+      const r = await saveDesign(s.client_name || client, copy)
+      const next = { ...copy, savedItemId:r.id, projectId:r.project_id || copy.projectId }
+      undoStack.current = []
+      designRef.current = next
+      setDesign(next)
+      setClient(s.client_name || '')
+      setCat(s.design.category || 'frame')
+      setSelected(0); setView('2d'); setTool('shapes'); setPan({ x:0, y:0 })
+      refreshSaved()
+      fire(`Copied "${s.ref || s.name}" into this project as "${copyRef}" — edit its measurements and save`)
+    } catch (err) { apiFail(err) }
+  }
+
+  const removeSaved = async (s, e) => {
+    e?.stopPropagation()
+    if (!window.confirm(`Delete item "${s.ref || s.name}" from this project? This cannot be undone.`)) return
+    try {
+      await deleteDesign(s.id)
+      await refreshSaved()
+      fire(`Item "${s.ref || s.name}" deleted`)
+    } catch (err) { apiFail(err) }
+  }
+
+  const removeProject = async (p) => {
+    const itemCount = Number(p.item_count || 0)
+    if (!window.confirm(
+      `Delete project "${p.name}" (${p.project_number})?\n\n` +
+      `${itemCount} technical item${itemCount === 1 ? '' : 's'} and every quotation, extraction and drawing under it will be deleted. This cannot be undone.`)) return
+    try {
+      await deleteProject(p.id)
+      setProjectHomeId(null)
+      await refreshSaved()
+      fire(`Project "${p.name}" deleted`)
+    } catch (err) { apiFail(err) }
   }
 
   const toolTabs = activeCat === 'frameless'
@@ -694,6 +725,7 @@ export default function Configurator() {
                   <button className="btn btn-ghost btn-sm" onClick={() => { setNewForm(f => ({ ...f, projectId:String(project.id), projectName:'', clientName:project.client_name || '', location:project.location || '' })); setShowNew(true) }}><IconPlus/> Add item</button>
                   <Link className="btn btn-ghost btn-sm" to={`/technical-workflow?project=${project.id}`}>Technical workflow</Link>
                   <Link className="btn btn-primary btn-sm" to={`/quotations?project=${project.id}`}>Open quotation desk</Link>
+                  <button className="btn btn-ghost btn-sm project-danger" onClick={() => removeProject(project)}><IconTrash/> Delete project</button>
                 </div>
               </div>
               <div className="project-detail-total"><span>{projectItems.length} technical item{projectItems.length === 1 ? '' : 's'} in this project</span></div>
@@ -712,10 +744,13 @@ export default function Configurator() {
                       <small>Qty {item.qty}{item.location ? ` · ${item.location}` : ''}</small>
                     </div>
                     {s && <div className="project-detail-item-actions">
-                      <button className="project-copy-link" title="Copy client share link" onClick={e => copyShareLink(s, e)}><IconCopy/></button>
+                      <div className="flex gap-sm">
+                        <button className="project-copy-link" title="Copy client share link" onClick={e => copyShareLink(s, e)}><IconCopy/></button>
+                        <button className="project-copy-link project-item-delete" title="Delete this item" onClick={e => removeSaved(s, e)}><IconTrash/></button>
+                      </div>
                       <div className="flex gap-sm">
                         <button className="project-home-action" onClick={() => { setProjectHomeId(null); openSaved(s) }}>Open item</button>
-                        <button className="project-home-action" onClick={() => { setProjectHomeId(null); duplicateSaved(s) }}>Duplicate & Edit</button>
+                        <button className="project-home-action" title="Add another item to this project with the same configuration" onClick={() => { setProjectHomeId(null); duplicateSaved(s) }}>Duplicate & Edit</button>
                       </div>
                     </div>}
                   </div>

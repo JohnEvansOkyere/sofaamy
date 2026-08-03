@@ -383,6 +383,11 @@
 .project-detail-item-actions{grid-column:1 / -1;display:flex;align-items:center;gap:5px;flex-wrap:wrap;justify-content:space-between;padding-top:8px;border-top:1px solid var(--line-soft);}
 .project-copy-link{display:grid;place-items:center;width:26px;height:26px;border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--navy-600);cursor:pointer;flex:none;}
 .project-copy-link:hover{border-color:var(--navy-600);background:var(--blue-soft);}
+.project-copy-link svg{width:14px;height:14px;}
+.project-item-delete{color:#b4231f;}
+.project-item-delete:hover{border-color:#b4231f;background:#fdeceb;}
+.project-danger{color:#b4231f;}
+.project-danger:hover{border-color:#b4231f;background:#fdeceb;}
 .project-copy-link svg{width:13px;height:13px;}
 .project-detail-empty{padding:25px 12px;text-align:center;border:2px dashed #c4d2df;border-radius:9px;color:var(--ink-3);font-size:12px;}
 .project-detail-note{margin-top:10px;color:var(--ink-3);font-size:10.5px;line-height:1.35;}
