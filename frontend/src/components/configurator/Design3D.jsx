@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { Line, OrbitControls, Text } from '@react-three/drei'
-import { DoubleSide } from 'three'
+import { ContactShadows, Line, OrbitControls, Text } from '@react-three/drei'
+import { DoubleSide, Path, Shape } from 'three'
 import { FRAMES, GLASS } from '../../lib/products.js'
 import { frameGlassByCode } from '../../lib/frameCatalog.js'
+import { PlasterBox, SUN_DIR, TexturedPlane, useSceneEnvironment, useTiled } from '../../lib/viz3d.jsx'
 import './configurator.css'
 
 // Client visualizer — the same Frame design record drives the geometry,
@@ -16,6 +17,19 @@ const SASH_FACE = 40
 const SASH_DEPTH = 34
 const FLOOR_APERTURE = 900
 const HARDWARE = '#b9c3ca'
+// Building shell (mm). The frame sits *inside* the wall opening — outer face
+// set back WALL_REVEAL from the render — so reveals, cill, and window board
+// read the way an installed window does instead of a panel floating in front.
+const WALL_T = 230
+const WALL_REVEAL = 40
+const WALL_FRONT = DEPTH / 2 + WALL_REVEAL
+const WALL_Z = WALL_FRONT - WALL_T / 2
+const WALL_BACK = WALL_FRONT - WALL_T
+const FACADE_SIDE = 9000
+const FACADE_TOP = 2600
+const ROOM_DEPTH = 6000
+const ROOM_SIDE = 3000
+const CEILING = 2900
 
 const WALL_PRESETS = [
   { label:'Warm plaster', value:'#ded8cc' },
@@ -25,21 +39,37 @@ const WALL_PRESETS = [
   { label:'Terracotta', value:'#c98567' },
 ]
 
-function Member({ b, color, metalness = 0.55, roughness = 0.35 }) {
+// Powder-coated / anodised aluminium: low metalness with a clearcoat reads far
+// closer to a real extrusion than a plain metallic standard material, and the
+// sky environment map gives the faces something to reflect.
+function Member({ b, color }) {
   return (
-    <mesh position={[M(b.x), M(b.y), M(b.z || 0)]}>
+    <mesh position={[M(b.x), M(b.y), M(b.z || 0)]} castShadow receiveShadow>
       <boxGeometry args={[M(b.w), M(b.h), M(b.d)]} />
-      <meshStandardMaterial color={color} metalness={metalness} roughness={roughness} />
+      <meshPhysicalMaterial color={color} metalness={0.35} roughness={0.42}
+        clearcoat={0.5} clearcoatRoughness={0.28} envMapIntensity={1.1} />
     </mesh>
   )
 }
 
-function Glass({ b, tint }) {
+// Real glass: refractive transmission plus environment reflections. Panes
+// deliberately don't cast shadows — a transmissive pane casting a solid
+// rectangle is the single most obvious "this is CAD" giveaway.
+function Glass({ b, tint, reflective = false }) {
+  const t = b.d || 6
   return (
-    <mesh position={[M(b.x), M(b.y), M(b.z || 0)]}>
-      <boxGeometry args={[M(b.w), M(b.h), M(6)]} />
-      <meshPhysicalMaterial color={tint} transparent opacity={0.38}
-        metalness={0.2} roughness={0.08} transmission={0.05} />
+    <mesh position={[M(b.x), M(b.y), M(b.z || 0)]} receiveShadow>
+      <boxGeometry args={[M(b.w), M(b.h), M(t)]} />
+      <meshPhysicalMaterial
+        color={tint}
+        transmission={reflective ? 0.55 : 0.94}
+        thickness={M(t) * 4}
+        attenuationColor={tint}
+        attenuationDistance={reflective ? 0.35 : 1.4}
+        ior={1.52} roughness={0.03}
+        metalness={reflective ? 0.4 : 0}
+        envMapIntensity={reflective ? 1.6 : 0.85}
+        specularIntensity={1} />
     </mesh>
   )
 }
@@ -184,7 +214,7 @@ function Hardware({ panel }) {
   const w = panel.width
   const h = panel.height
   const z = SASH_DEPTH / 2 + 7
-  const metal = <meshStandardMaterial color={HARDWARE} metalness={0.9} roughness={0.2} />
+  const metal = <meshStandardMaterial color={HARDWARE} metalness={1} roughness={0.16} envMapIntensity={1.4} />
 
   if (opening === 'sliding') return (
     <>
@@ -231,6 +261,10 @@ function Hardware({ panel }) {
   )
 }
 
+function isReflective(code) {
+  return frameGlassByCode(code)?.family === 'Reflective'
+}
+
 function glassTint(code) {
   const g = frameGlassByCode(code)
   if (g?.family === 'Reflective') return '#6f9eae'
@@ -266,8 +300,9 @@ function buildGeometry(d) {
     const secW = cw[c], secH = rh[r]
     const cx = cumX[c] + secW / 2, cy = cumY[r] + secH / 2
     const tint = glassTint(cell.glass)
+    const reflective = isReflective(cell.glass)
     if (cell.opening === 'fixed') {
-      fixedGlass.push({ x:X(cx), y:Y(cy), w:secW - FACE, h:secH - FACE, tint })
+      fixedGlass.push({ x:X(cx), y:Y(cy), w:secW - FACE, h:secH - FACE, tint, reflective })
       return
     }
 
@@ -288,7 +323,7 @@ function buildGeometry(d) {
         slideIndex:c * n + k, slideCount:d.cols * n,
         section:`F${i + 1}${n > 1 ? `-${k + 1}` : ''}`,
         cx:X(px), cy:Y(cy), z, width:sashW, height:sashH,
-        tint, members:localMembers,
+        tint, reflective, members:localMembers,
         glass:{ x:0, y:0, w:sashW - 2 * SASH_FACE, h:sashH - 2 * SASH_FACE, d:6 },
       })
     }
@@ -350,29 +385,74 @@ function AnimatedPanel({ panel, frameColor, openAmount, fabrication, slideMoving
   return (
     <group ref={ref} position={[base.x, base.y, base.z]}>
       {panel.members.map((b, i) => <Member key={i} b={b} color={frameColor} />)}
-      <Glass b={panel.glass} tint={panel.tint} />
+      <Glass b={panel.glass} tint={panel.tint} reflective={panel.reflective} />
       <Hardware panel={panel} />
       {fabrication && accessoryMarkers(panel).map((marker, i) => <FabricationMarker key={`marker-${i}`} marker={marker} />)}
     </group>
   )
 }
 
+// One continuous extrusion with the opening cut out of it, rather than four
+// panels butted around a hole — butted panels leave a texture seam running
+// straight off the corner of every window, which reads instantly as fake.
+// The extrusion's side walls become the reveals the frame beds into.
+function Facade({ d, color }) {
+  const shape = useMemo(() => {
+    const x = M(d.width / 2 + FACADE_SIDE), y1 = M(d.height / 2 + FACADE_TOP)
+    const y0 = M(-d.height / 2 - FLOOR_APERTURE)
+    const ox = M(d.width / 2), oy = M(d.height / 2)
+    const s = new Shape()
+    s.moveTo(-x, y0); s.lineTo(x, y0); s.lineTo(x, y1); s.lineTo(-x, y1); s.closePath()
+    const hole = new Path()
+    hole.moveTo(-ox, -oy); hole.lineTo(-ox, oy); hole.lineTo(ox, oy); hole.lineTo(ox, -oy); hole.closePath()
+    s.holes.push(hole)
+    return s
+  }, [d.width, d.height])
+
+  // ExtrudeGeometry's world UV generator emits UVs in metres, so a fixed
+  // repeat gives constant texel density across the whole facade.
+  const maps = useTiled('plaster', 1 / 0.65, 1 / 0.65)
+
+  return (
+    <mesh position={[0, 0, M(WALL_FRONT) - M(WALL_T)]} castShadow receiveShadow>
+      <extrudeGeometry args={[shape, { depth:M(WALL_T), bevelEnabled:false, curveSegments:1 }]} />
+      <meshStandardMaterial {...maps} color={color} roughness={1} metalness={0} normalScale={[0.3, 0.3]} />
+    </mesh>
+  )
+}
+
+// The building the window is fixed into: facade with the opening cut through
+// it, cill and window board for exterior/interior depth, and a room behind so
+// the inside view is a room rather than a hole.
 function Wall({ d, wallColor, floorColor }) {
-  const t = 150, margin = 900
-  const top = d.height / 2 + 500, bot = -d.height / 2 - FLOOR_APERTURE
-  const reveal = '#9b978f'
+  const halfW = d.width / 2, halfH = d.height / 2
+  const ground = -halfH - FLOOR_APERTURE
+  const trim = '#cdc7bb'
+
   return (
     <group>
-      <Member b={{ x:-d.width / 2 - margin / 2, y:(top + bot) / 2, w:margin, h:top - bot, d:t, z:-110 }} color={wallColor} metalness={0.05} roughness={0.8}/>
-      <Member b={{ x:d.width / 2 + margin / 2, y:(top + bot) / 2, w:margin, h:top - bot, d:t, z:-110 }} color={wallColor} metalness={0.05} roughness={0.8}/>
-      <Member b={{ x:0, y:d.height / 2 + 250, w:d.width, h:500, d:t, z:-110 }} color={wallColor} metalness={0.05} roughness={0.8}/>
-      <Member b={{ x:0, y:-d.height / 2 - FLOOR_APERTURE / 2, w:d.width, h:FLOOR_APERTURE, d:t, z:-110 }} color={wallColor} metalness={0.05} roughness={0.8}/>
-      <Member b={{ x:0, y:d.height / 2 - 30, w:70, h:60, d:220, z:-75 }} color={reveal} metalness={0.05} roughness={0.7}/>
-      <Member b={{ x:0, y:-d.height / 2 + 30, w:70, h:60, d:220, z:-75 }} color={reveal} metalness={0.05} roughness={0.7}/>
-      <mesh position={[0, M(bot), 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[M(d.width) + 4, 4]} />
-        <meshStandardMaterial color={floorColor} roughness={0.82} />
-      </mesh>
+      <Facade d={d} color={wallColor} />
+
+      {/* Projecting lintel hood and weathered cill. These two are what throw
+          the cast shadows onto the render that make a facade read as built
+          rather than drawn, so they project properly rather than token-deep. */}
+      <PlasterBox b={{ x:0, y:halfH + 95, w:d.width + 360, h:150, d:WALL_T + 90, z:WALL_Z + 45 }} color={trim} tile={900} />
+      <PlasterBox b={{ x:0, y:-halfH - 40, w:d.width + 360, h:80, d:270, z:WALL_FRONT + 110 - 135 }}
+        color={trim} tile={700} rotation={[-0.06, 0, 0]} />
+
+      {/* interior window board */}
+      <PlasterBox b={{ x:0, y:-halfH - 25, w:d.width + 180, h:40, d:200, z:WALL_BACK - 40 }} color={trim} tile={700} />
+
+      {/* room: floor, ceiling and returns so the inside view is a room, not a
+          hole. No back wall — the inside/back cameras sit behind it. */}
+      <PlasterBox b={{ x:-halfW - ROOM_SIDE - 60, y:ground + CEILING / 2, w:120, h:CEILING, d:ROOM_DEPTH, z:WALL_BACK - ROOM_DEPTH / 2 }} color={wallColor} />
+      <PlasterBox b={{ x:halfW + ROOM_SIDE + 60, y:ground + CEILING / 2, w:120, h:CEILING, d:ROOM_DEPTH, z:WALL_BACK - ROOM_DEPTH / 2 }} color={wallColor} />
+      <PlasterBox b={{ x:0, y:ground + CEILING, w:d.width + 2 * (ROOM_SIDE + 120), h:110, d:ROOM_DEPTH, z:WALL_BACK - ROOM_DEPTH / 2 }} color="#f2f0ec" />
+
+      <TexturedPlane position={[0, M(ground), M(WALL_BACK - ROOM_DEPTH / 2)]} rotation={[-Math.PI / 2, 0, 0]}
+        size={[M(d.width) + 2 * M(ROOM_SIDE + 120), M(ROOM_DEPTH)]} color={floorColor} kind="tile" tile={600} />
+      <TexturedPlane position={[0, M(ground) - 0.002, M(WALL_FRONT) + 9]} rotation={[-Math.PI / 2, 0, 0]}
+        size={[40, 18]} color="#a49a8c" kind="paving" tile={1100} />
     </group>
   )
 }
@@ -383,9 +463,12 @@ function CameraRig({ mode, design, wall }) {
   const size = Math.max(design.width, design.height) / 1000
 
   useEffect(() => {
-    const distance = Math.max(size * 2.4, 3.6)
+    // Wall mode pulls back so the opening reads in the context of the facade,
+    // rather than filling the frame the way the product-only view should.
+    const ctx = wall ? 1.55 : 1
+    const distance = Math.max(size * 2.4, 3.6) * ctx
     const positions = {
-      orbit: [size * 1.5, size * 0.55, size * 1.9],
+      orbit: [size * 1.5 * ctx, size * 0.55 * ctx, size * 1.9 * ctx],
       front: [0, 0, distance],
       inside: [0, 0, -distance],
       back: [-distance * 0.75, size * 0.15, -distance],
@@ -400,7 +483,32 @@ function CameraRig({ mode, design, wall }) {
     }
   }, [camera, design.height, mode, size, wall])
 
-  return <OrbitControls ref={controls} enableDamping dampingFactor={0.12} enabled={mode === 'orbit'} />
+  return <OrbitControls ref={controls} enableDamping dampingFactor={0.12} enabled={mode === 'orbit'}
+    maxPolarAngle={wall ? Math.PI / 2 - 0.03 : Math.PI} />
+}
+
+// Sun + sky rig. The directional light shares SUN_DIR with the sky texture so
+// the highlight on the glass sits where the reflected sun is, and the shadow
+// frustum is kept tight around the window to keep the reveal shadows crisp.
+function Lighting({ size, wall }) {
+  useSceneEnvironment({ background: wall ? 'sky' : '#dfe8ee' })
+  const reach = Math.max(size * 3, 8)
+  const ext = Math.max(size * 1.7, 2.6)
+  return (
+    <>
+      <hemisphereLight intensity={0.15} color="#dceaf6" groundColor="#8d8478" />
+      <directionalLight
+        position={[SUN_DIR[0] * reach, SUN_DIR[1] * reach, SUN_DIR[2] * reach]}
+        intensity={2.4} color="#fff5e2" castShadow
+        shadow-mapSize={[2048, 2048]}
+        shadow-bias={-0.0006} shadow-normalBias={0.02}
+        shadow-camera-near={0.5} shadow-camera-far={reach * 2.5}
+        shadow-camera-left={-ext} shadow-camera-right={ext}
+        shadow-camera-top={ext} shadow-camera-bottom={-ext} />
+      {/* interior bounce so the inside view isn't a black room */}
+      {wall && <pointLight position={[0, -0.7, -2.8]} intensity={1.3} distance={8} decay={2} color="#fff1de" />}
+    </>
+  )
 }
 
 function VisualizerControls({ wall, settings, setSetting, hasOpening, hasSliding, maximized, onMaximize }) {
@@ -509,16 +617,17 @@ export default function Design3D({ design, wall = false, onDesignPatch, fabricat
     <div ref={shellRef} className={`viz-shell${maximized ? ' viz-maximized' : ''}`}>
       <VisualizerControls wall={wall} settings={settings} setSetting={setSetting} hasOpening={hasOpening} hasSliding={hasSliding} maximized={maximized} onMaximize={toggleMaximize} />
       <div className="viz-canvas">
-      <Canvas camera={{ position:[s * 1.5, s * 0.55, s * 1.9], fov:45 }}>
-        <color attach="background" args={['#dfe8ee']} />
-        <fog attach="fog" args={['#dfe8ee', 6, 18]} />
-        <hemisphereLight intensity={1.15} color="#ffffff" groundColor="#9aa7ad" />
-        <directionalLight position={[4, 6, 5]} intensity={1.35} castShadow />
-        <directionalLight position={[-4, 2, -5]} intensity={0.4} />
+      <Canvas shadows="soft" dpr={[1, 2]} camera={{ position:[s * 1.5, s * 0.55, s * 1.9], fov:42 }}
+        gl={{ antialias:true, powerPreference:'high-performance' }}
+        onCreated={({ gl }) => { gl.toneMappingExposure = 0.95 }}>
+        <fog attach="fog" args={wall ? ['#dfe4e6', 16, 70] : ['#dfe8ee', 6, 18]} />
+        <Lighting size={s} wall={wall} />
+        {!wall && <ContactShadows position={[0, -M(design.height) / 2 - 0.02, 0]} scale={s * 6}
+          resolution={1024} blur={2.8} opacity={0.55} far={1.6} />}
         <group>
           {wall && <Wall d={design} wallColor={settings.wallColor} floorColor={settings.floorColor} />}
           {geometry.members.map((b, i) => <Member key={i} b={b} color={settings.frameColor} />)}
-          {geometry.fixedGlass.map((g, i) => <Glass key={i} b={g} tint={g.tint} />)}
+          {geometry.fixedGlass.map((g, i) => <Glass key={i} b={g} tint={g.tint} reflective={g.reflective} />)}
           {stationarySlideIndex != null && <NetScreen panel={slidingPanels[movingSlideIndex]} frameColor={settings.frameColor} openAmount={settings.openAmount} />}
           {geometry.panels.map((p, i) => {
             const slideIndex = slidingPanels.indexOf(p)

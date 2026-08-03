@@ -1,6 +1,7 @@
+import { useState } from 'react'
 import { Stage, Layer, Rect, Line, Text, Group, Arrow } from 'react-konva'
 import { GLASS, FRAMES } from '../../lib/products.js'
-import { MIN_SECTION_MM, designLayout } from '../../lib/designs.js'
+import { MIN_SECTION_MM, designLayout, moveDivider } from '../../lib/designs.js'
 
 // Renders a framed design: outer frame + dividers + sections.
 // Sections can have unequal widths/heights (colWidths / rowHeights, mm)
@@ -8,8 +9,16 @@ import { MIN_SECTION_MM, designLayout } from '../../lib/designs.js'
 // Dividers are draggable (EvA-style): dragging moves the boundary between
 // the two neighbouring sections; the overall size never changes.
 export default function DesignCanvas({ design, stageW, stageH, pan = { x:0, y:0 }, onPanChange, selected, onSelect, onDividerMove }) {
-  const { width, height, cols, rows, frame, cells, group } = design
-  const { colW, rowH, scale, fw, fh, ox, oy, ft, cumX, cumY } = designLayout(design, stageW, stageH)
+  // Live-preview only (not pushed to undo history) so the sections and
+  // dimension labels track the pointer while a divider is being dragged,
+  // instead of jumping to the new layout only once the drag ends.
+  const [liveDrag, setLiveDrag] = useState(null) // { axis, boundary, deltaMm }
+  const previewDesign = liveDrag ? moveDivider(design, liveDrag.axis, liveDrag.boundary, liveDrag.deltaMm) : design
+  const { width, height, cols, rows, frame, cells, group } = previewDesign
+  const { colW, rowH, scale, fw, fh, ox, oy, ft, cumX, cumY } = designLayout(previewDesign, stageW, stageH)
+  // Divider hit-rects stay anchored to the committed (non-preview) layout
+  // while dragging, so re-renders don't reset the x/y prop Konva is animating.
+  const orig = designLayout(design, stageW, stageH)
   const frameColor = (FRAMES[frame] || FRAMES.mill).color
   const dim = '#CA6F1E'
   const isDoor = group === 'Doors'
@@ -109,31 +118,33 @@ export default function DesignCanvas({ design, stageW, stageH, pan = { x:0, y:0 
 
         {/* draggable vertical dividers (between columns) */}
         {Array.from({ length: cols-1 }).map((_, j) => {
-          const bx = ox + cumX[j+1]*scale - ft/2
-          const minX = ox + (cumX[j] + MIN_SECTION_MM)*scale - ft/2
-          const maxX = ox + (cumX[j+2] - MIN_SECTION_MM)*scale - ft/2
+          const bx = ox + orig.cumX[j+1]*scale - ft/2
+          const minX = ox + (orig.cumX[j] + MIN_SECTION_MM)*scale - ft/2
+          const maxX = ox + (orig.cumX[j+2] - MIN_SECTION_MM)*scale - ft/2
           return (
-            <Rect key={`v${j}-${cumX[j+1]}`} x={bx} y={oy} width={ft} height={fh}
+            <Rect key={`v${j}-${orig.cumX[j+1]}`} x={bx} y={oy} width={ft} height={fh}
               fill="rgba(0,0,0,0.001)" draggable
               dragBoundFunc={(pos) => ({ x: Math.max(minX, Math.min(maxX, pos.x)), y: oy })}
               onMouseEnter={(e) => setCursor(e, 'col-resize')}
               onMouseLeave={(e) => setCursor(e, 'default')}
-              onDragEnd={(e) => onDividerMove?.('col', j, (e.target.x() - bx) / scale)}
+              onDragMove={(e) => setLiveDrag({ axis:'col', boundary:j, deltaMm:(e.target.x() - bx) / scale })}
+              onDragEnd={(e) => { const deltaMm = (e.target.x() - bx) / scale; setLiveDrag(null); onDividerMove?.('col', j, deltaMm) }}
             />
           )
         })}
         {/* draggable horizontal dividers (between rows) */}
         {Array.from({ length: rows-1 }).map((_, j) => {
-          const by = oy + cumY[j+1]*scale - ft/2
-          const minY = oy + (cumY[j] + MIN_SECTION_MM)*scale - ft/2
-          const maxY = oy + (cumY[j+2] - MIN_SECTION_MM)*scale - ft/2
+          const by = oy + orig.cumY[j+1]*scale - ft/2
+          const minY = oy + (orig.cumY[j] + MIN_SECTION_MM)*scale - ft/2
+          const maxY = oy + (orig.cumY[j+2] - MIN_SECTION_MM)*scale - ft/2
           return (
-            <Rect key={`h${j}-${cumY[j+1]}`} x={ox} y={by} width={fw} height={ft}
+            <Rect key={`h${j}-${orig.cumY[j+1]}`} x={ox} y={by} width={fw} height={ft}
               fill="rgba(0,0,0,0.001)" draggable
               dragBoundFunc={(pos) => ({ x: ox, y: Math.max(minY, Math.min(maxY, pos.y)) })}
               onMouseEnter={(e) => setCursor(e, 'row-resize')}
               onMouseLeave={(e) => setCursor(e, 'default')}
-              onDragEnd={(e) => onDividerMove?.('row', j, (e.target.y() - by) / scale)}
+              onDragMove={(e) => setLiveDrag({ axis:'row', boundary:j, deltaMm:(e.target.y() - by) / scale })}
+              onDragEnd={(e) => { const deltaMm = (e.target.y() - by) / scale; setLiveDrag(null); onDividerMove?.('row', j, deltaMm) }}
             />
           )
         })}

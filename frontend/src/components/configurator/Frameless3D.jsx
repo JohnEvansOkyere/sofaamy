@@ -5,7 +5,15 @@ import * as THREE from 'three'
 import { FL_GLASS, FL_FAB } from '../../lib/products.js'
 import { framelessBreakdown } from '../../lib/frameless.js'
 import { pivotSide } from '../../lib/preps.js'
+import { useSceneEnvironment } from '../../lib/viz3d.jsx'
 import './configurator.css'
+
+// Leaves scene.background alone — this view sets its own via drei's Sky or a
+// <color> element depending on the scene kind.
+function SceneEnvironment() {
+  useSceneEnvironment()
+  return null
+}
 
 // Frameless 3D — derived from the SAME design record as the 2D canvas,
 // quote, glass order and hardware list. Two modes:
@@ -385,7 +393,10 @@ export default function Frameless3D({ design, scene = false }) {
       {scene && sceneKind === 'shopfront' && <Sky sunPosition={[6, 8, 4]} turbidity={5} />}
       {scene && sceneKind === 'bathroom' && <color attach="background" args={['#e8edf0']} />}
 
-      <ambientLight intensity={scene ? 0.5 : 0.85} />
+      {/* Sky IBL so glass and stainless fittings have something to reflect;
+          the flat ambient it replaces left both reading as grey plastic. */}
+      <SceneEnvironment />
+      <ambientLight intensity={scene ? 0.18 : 0.3} />
       <directionalLight position={[5, 7, 6]} intensity={scene ? 1.6 : 1.1} castShadow
         shadow-mapSize={[2048, 2048]}
         shadow-camera-left={-6} shadow-camera-right={6}
