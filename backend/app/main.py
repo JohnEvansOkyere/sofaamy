@@ -33,10 +33,7 @@ from .reports import (boq_pdf, cutting_list_pdf, work_order_pdf,
                       project_cutting_list_pdf,
                       elevation_pdf, price_breakdown_pdf)
 
-Base.metadata.create_all(bind=engine)
-
-
-def _auto_migrate_postgres():
+def _auto_migrate_postgres(conn):
     """Additive Postgres migration for columns added after their table already
     existed live (e.g. Supabase). create_all only creates missing tables, not
     missing columns on tables that already exist, so a column added to a model
@@ -44,7 +41,8 @@ def _auto_migrate_postgres():
     path below, using Postgres's native IF NOT EXISTS instead of a PRAGMA
     existence check. Kept separate from the SQLite `wanted` dict below because
     some of its DDL (e.g. DATETIME) is SQLite-specific and was never meant to
-    run against Postgres."""
+    run against Postgres. Runs on `conn` — the caller holds the advisory lock
+    that serializes this DDL across serverless cold starts."""
     from sqlalchemy import text
     wanted = {
         "technical_extractions": [("design_id", "INTEGER")],
@@ -61,20 +59,17 @@ def _auto_migrate_postgres():
             ("released_to_technical_by", "TEXT DEFAULT ''"),
         ],
     }
-    with engine.begin() as conn:
-        for table, cols in wanted.items():
-            for name, ddl in cols:
-                conn.execute(text(
-                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {ddl}"))
+    for table, cols in wanted.items():
+        for name, ddl in cols:
+            conn.execute(text(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {ddl}"))
 
 
 def _auto_migrate():
     """Additive SQLite migration: create_all makes new TABLES but not new
     COLUMNS — add any the models gained, so existing databases keep working."""
     if engine.dialect.name != "sqlite":
-        if engine.dialect.name == "postgresql":
-            _auto_migrate_postgres()
-        return  # PRAGMA is SQLite-only; Postgres handled above
+        return  # Postgres handled by `_startup_init` under an advisory lock
     from sqlalchemy import text
     wanted = {
         "jobs": [("value", "FLOAT DEFAULT 0"), ("driver", "TEXT DEFAULT ''"),
@@ -126,9 +121,35 @@ def _auto_migrate():
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
 
 
-_auto_migrate()
-with SessionLocal() as _db:
-    lc.ensure_engine_materials(_db)
+def _startup_init():
+    """Bootstrap schema + catalog once per process.
+
+    Serverless (Vercel) cold-starts several instances at once, all pointing at
+    the same Supabase Postgres. Unserialized DDL here deadlocks them — two
+    instances running `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` on the same
+    table (or create_all) block each other with AccessExclusiveLock vs
+    AccessShareLock and some requests end up 500ing while the instance fails
+    to import. A Postgres advisory *transaction* lock serializes the whole
+    bootstrap: the first instance does the work, the rest wait, then no-op
+    (IF NOT EXISTS / PRAGMA guards). The lock auto-releases when the
+    transaction commits or the connection dies.
+    """
+    if engine.dialect.name == "postgresql":
+        from sqlalchemy import text
+        from sqlalchemy.orm import Session
+        with engine.begin() as conn:
+            conn.execute(text("SELECT pg_advisory_xact_lock(72991)"))
+            Base.metadata.create_all(bind=conn)
+            _auto_migrate_postgres(conn)
+            lc.ensure_engine_materials(Session(bind=conn))
+    else:
+        Base.metadata.create_all(bind=engine)
+        _auto_migrate()
+        with SessionLocal() as _db:
+            lc.ensure_engine_materials(_db)
+
+
+_startup_init()
 
 app = FastAPI(title="Fabra API", version="0.1.0")
 app.add_middleware(

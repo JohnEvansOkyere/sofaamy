@@ -4,6 +4,12 @@
 }
 .command-loading svg { width:34px; color:var(--navy-500); }
 .command-loading span { color:var(--ink-3); font-size:12px; }
+.command-loading-spinner {
+  width:28px; height:28px; border:3px solid var(--line);
+  border-top-color:var(--navy-500); border-radius:50%;
+  animation:command-spin .8s linear infinite;
+}
+@keyframes command-spin { to { transform:rotate(360deg); } }
 
 .command-attention {
   display:flex; align-items:center; justify-content:space-between; gap:18px;

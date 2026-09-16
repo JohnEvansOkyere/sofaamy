@@ -251,8 +251,9 @@ export default function Dashboard() {
     <>
       <PageHead title="Business Command Centre" subtitle="Connecting every project, payment and factory action…"/>
       <div className="card card-pad command-loading">
-        <IconTrend /><b>Loading the live Fabra business position…</b>
-        <span>Start the backend if this message remains on screen.</span>
+        <span className="command-loading-spinner" aria-hidden="true" />
+        <IconTrend /><b>Loading…</b>
+        <span>Fetching the live business position.</span>
       </div>
     </>
   )
