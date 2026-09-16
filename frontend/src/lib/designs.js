@@ -4,7 +4,7 @@
 // sections (cells); each section carries its own glass + opening.
 // ============================================================
 
-import { frameSystemForTemplate, frameRateForRateKey, frameRateKeyForOpening } from './frameCatalog.js'
+import { frameSystemForTemplate, frameRateForRateKey, frameRateKeyForOpening, defaultFrameColour } from './frameCatalog.js'
 
 export const DESIGN_GROUPS = [
   { group:'Windows', items:[
@@ -73,9 +73,10 @@ export function buildDesign(t) {
     measurementStatus:'preliminary', measurementSource:'', measuredBy:'', measurementDate:'', siteNotes:'',
     accessoryOverrides:[], customCutPieces:[], siteImages:[],
     clientPhone:'', clientEmail:'', jobDescription:'', colourDescription:'', quoteValidDays:3, costFloorOverride:0,
-    depositPercent:80, discountPercent:0, getfNhisPercent:5, vatPercent:15,
+    depositPercent:80, discountPercent:0, getfNhisPercent:5, vatPercent:15, extraLines:[],
     wallColor:'#ded8cc', floorColor:'#cfd6dc', customFrameColor:'', visualView:'orbit', visualSlideDirection:'left-to-right',
-    width:t.w, height:t.h, cols:t.cols, rows:t.rows, frame:'mill',
+    width:t.w, height:t.h, cols:t.cols, rows:t.rows,
+    frame:defaultFrameColour(frameSystemForTemplate(t)),
     colWidths: equalSplit(t.w, t.cols), rowHeights: equalSplit(t.h, t.rows),
     cells: makeCells(t.cols, t.rows, t.opening, rateKey) }
 }

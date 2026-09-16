@@ -3,6 +3,7 @@ import { PageHead, Card, Stat, Badge } from '../components/ui.jsx'
 import JobDrawer from '../components/JobDrawer.jsx'
 import WhatsAppModal from '../components/WhatsAppModal.jsx'
 import { listJobs, advanceJob, downloadDeliveryNote } from '../lib/api.js'
+import { useLiveRefresh } from '../lib/live.js'
 import { GHS0, timeAgo, deliveryMessage } from '../lib/whatsapp.js'
 import { IconTruck, IconCheck, IconDownload, IconWhatsApp, IconWallet } from '../components/icons.jsx'
 import '../styles/ops.css'
@@ -17,6 +18,7 @@ export default function Dispatch() {
 
   const refresh = () => listJobs().then(js => { setJobs(js); setLive(true) }).catch(() => {})
   useEffect(() => { refresh() }, [])
+  useLiveRefresh(refresh)
 
   const ready = jobs.filter(j => j.stage === 'dispatch')
   const installing = jobs.filter(j => j.stage === 'install')

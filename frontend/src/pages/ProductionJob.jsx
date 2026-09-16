@@ -7,6 +7,7 @@ import {
   drawingFileUrl, getJob, getProjectWorkflow, listDesigns, previewReport,
 } from '../lib/api.js'
 import { timeAgo } from '../lib/whatsapp.js'
+import { useLiveRefresh } from '../lib/live.js'
 import { IconCheck, IconDownload, IconFactory, IconFile, IconLayers } from '../components/icons.jsx'
 import '../components/configurator/configurator.css'
 import '../styles/ops.css'
@@ -98,6 +99,7 @@ export default function ProductionJob() {
   useEffect(() => {
     refresh().catch(error => setError(messageFrom(error)))
   }, [jobNumber])
+  useLiveRefresh(refresh)
 
   useEffect(() => () => {
     if (preview?.url) URL.revokeObjectURL(preview.url)
@@ -148,7 +150,7 @@ export default function ProductionJob() {
       await downloadReport(kind, selectedItem.client_name || job.client, {
         ...selectedItem.design,
         projectId: selectedItem.project_id,
-      })
+      }, selectedItem.id)
       setMessage(`${label} downloaded for ${selectedItem.ref || selectedItem.name}`)
     } catch (error) {
       setError(messageFrom(error))
@@ -165,7 +167,7 @@ export default function ProductionJob() {
       const file = await previewReport(kind, selectedItem.client_name || job.client, {
         ...selectedItem.design,
         projectId: selectedItem.project_id,
-      })
+      }, selectedItem.id)
       setPreview({ ...file, label })
     } catch (error) {
       setError(messageFrom(error))
@@ -339,7 +341,12 @@ export default function ProductionJob() {
         )}
 
         {activePage === 'materials' && (
-          <Card title="Approved material list" sub={`Current production quantities from approved extraction E${approvedExtraction?.revision || release.extraction_revision}.`}
+          <Card title={<span className="flex gap-sm" style={{ alignItems:'center' }}>Approved material list
+              {approvedExtraction && <Badge tone={approvedExtraction.method === 'generated' ? 'blue' : 'purple'}>
+                {approvedExtraction.method === 'generated' ? 'Auto' : 'Manual'}
+              </Badge>}
+            </span>}
+            sub={`Current production quantities from approved extraction E${approvedExtraction?.revision || release.extraction_revision}.`}
             action={<button className="btn btn-ghost btn-sm" disabled={busy === 'materials'}
               onClick={downloadMaterials}>
               <IconDownload /> {busy === 'materials' ? 'Preparing…' : 'Material pack PDF'}

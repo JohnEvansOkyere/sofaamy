@@ -2,14 +2,30 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { PageHead, Card, Badge, Progress } from '../components/ui.jsx'
 import WhatsAppModal from '../components/WhatsAppModal.jsx'
-import { Donut } from '../components/charts.jsx'
-import { getDashboard, setQuoteStatus } from '../lib/api.js'
+import { BarList, Donut } from '../components/charts.jsx'
+import { getDashboard, listLeads, setQuoteStatus } from '../lib/api.js'
+import { useLiveRefresh } from '../lib/live.js'
 import { GHS0, timeAgo } from '../lib/whatsapp.js'
 import {
   IconBox, IconChart, IconClock, IconCube, IconFactory, IconFile,
   IconLayers, IconTrend, IconWallet, IconWhatsApp,
 } from '../components/icons.jsx'
 import '../styles/dashboard.css'
+
+const ROLE_OPTIONS = [
+  ['management', 'Management'], ['rep', 'Sales / Field Rep'],
+  ['supervisor', 'Technical Supervisor'], ['accounts', 'Accounts'],
+  ['procurement', 'Procurement'], ['factory', 'Factory'], ['qa', 'Quality Control'],
+]
+
+const ROLE_FOCUS = {
+  rep:{ title:'Sales work queue', sub:'Client measurements, quotations and follow-ups.', keys:['quotation'], route:'/quotations', action:'Open quotations' },
+  supervisor:{ title:'Technical work queue', sub:'Extractions, drawing approvals and factory releases.', keys:['technical'], route:'/technical-workflow', action:'Open technical workflow' },
+  accounts:{ title:'Accounts work queue', sub:'Customer payments, balances and financial holds.', keys:['accounts'], route:'/accounts', action:'Open accounts' },
+  procurement:{ title:'Procurement work queue', sub:'Paid/released projects and materials requiring action.', keys:['technical','production'], route:'/inventory', action:'Open inventory' },
+  factory:{ title:'Factory work queue', sub:'Released projects currently moving through production.', keys:['production'], route:'/production', action:'Open production' },
+  qa:{ title:'Quality work queue', sub:'Jobs awaiting inspection, rework or release.', keys:['production','handover'], route:'/quality', action:'Open quality control' },
+}
 
 const STAGE_COLORS = {
   pending:'#CA6F1E', cutting:'#2471A3', processing:'#2E86C1',
@@ -67,19 +83,175 @@ function PipelineCard({ item }) {
   )
 }
 
+function RoleFocusDashboard({ role, data }) {
+  const focus = ROLE_FOCUS[role]
+  const pipeline = data.pipeline.filter(item => focus.keys.includes(item.key))
+  const technicalStatuses = new Set([
+    'measurement_received', 'extraction_in_progress', 'extraction_ready',
+    'drawing_authorized', 'drawing_in_progress', 'drawing_under_review',
+    'client_overview_sent', 'drawing_approved', 'production_pack_ready',
+  ])
+  const projects = data.current_projects.filter(project => {
+    if (role === 'rep') return ['measurement_received','quote_in_preparation','quote_sent'].includes(project.workflow_status)
+    if (role === 'accounts') return project.balance > 0 || project.workflow_status === 'awaiting_payment'
+    if (role === 'supervisor') return technicalStatuses.has(project.workflow_status)
+    return true
+  })
+  const exceptions = role === 'rep' ? data.client_followups
+    : role === 'accounts' ? data.accounts_queue
+      : role === 'procurement' ? data.low_stock
+        : data.production_jobs.filter(job => role === 'qa' ? job.stage === 'qa' : true)
+
+  return <>
+    <section className={`role-focus-hero role-${role}`}>
+      <div><span>Role-focused dashboard</span><h2>{focus.title}</h2><p>{focus.sub}</p></div>
+      <Link className="btn btn-primary" to={focus.route}>{focus.action} →</Link>
+    </section>
+    <div className="command-pipeline role-focus-pipeline">
+      {pipeline.map(item => <PipelineCard item={item} key={item.key}/>)}
+      <Link to="/projects" className="command-pipeline-card blue">
+        <span className="command-pipeline-icon"><IconLayers/></span>
+        <div><small>Project control</small><strong>{projects.length}</strong><p>Ownership, deadlines and next actions</p></div><i>→</i>
+      </Link>
+    </div>
+    <div className="role-focus-grid">
+      <Card title="My active projects" sub={`${projects.length} projects currently relevant to this role`} pad={false}>
+        <div className="tbl-wrap"><table className="tbl command-project-table"><thead><tr>
+          <th>Project / client</th><th>Position</th><th>Money</th><th></th>
+        </tr></thead><tbody>{projects.map(project => <tr key={project.id}>
+          <td><b>{project.name}</b><small>{project.project_number} · {project.client}</small></td>
+          <td><Badge tone={STATUS_TONE[project.workflow_status] || 'blue'}>{project.workflow_status_label}</Badge></td>
+          <td><b className="t-mono">{GHS0(project.contract_value || 0)}</b><small>{GHS0(project.balance || 0)} balance</small></td>
+          <td className="right"><Link className="btn btn-ghost btn-sm" to={project.url}>Open →</Link></td>
+        </tr>)}{!projects.length && <tr><td colSpan={4} className="muted center" style={{padding:28}}>No projects need this role right now.</td></tr>}</tbody></table></div>
+      </Card>
+      <Card title="Immediate exceptions" sub="Only issues this role is expected to act on">
+        <div className="role-exception-list">
+          {exceptions.slice(0, 8).map((row, index) => <Link key={row.quote_number || row.job_number || row.code || index}
+            to={row.url || focus.route}>
+            <div><b>{row.client || row.name || row.product || 'Project action'}</b>
+              <small>{row.quote_number || row.job_number || row.code || row.stage_label || 'Needs attention'}</small></div>
+            <span>{row.days_waiting != null ? `${row.days_waiting}d` : row.stock != null ? `${row.stock} ${row.unit}` : '→'}</span>
+          </Link>)}
+          {!exceptions.length && <div className="command-empty">This role has no immediate exceptions.</div>}
+        </div>
+      </Card>
+    </div>
+  </>
+}
+
+// Management sales view. One story per screen: where enquiries come from,
+// what they are worth, where they are lost. Operational queues live on the
+// Operations tab so neither view has to compete for the first screenful.
+function SalesDashboard({ leads }) {
+  if (!leads?.summary) return <div className="command-empty">Loading sales position…</div>
+  const { summary, by_source:bySource, by_city:byCity,
+    by_product_type:byProduct, lost_reasons:lostReasons } = leads
+
+  const monthly = {}
+  ;(leads.leads || []).forEach(lead => {
+    if (!lead.created_at) return
+    const key = lead.created_at.slice(0, 7)
+    monthly[key] = (monthly[key] || 0) + (lead.estimated_value || 0)
+  })
+  const trend = Object.entries(monthly).sort().slice(-6)
+    .map(([month, value]) => ({ label:month, value:Math.round(value) }))
+
+  const conversion = [
+    ['Created', summary.created],
+    ['Quoted', summary.quoted],
+    ['Won', summary.won],
+  ]
+  const widest = Math.max(summary.created.count, 1)
+
+  return <>
+    <div className="sales-kpis">
+      {[['created', 'Created enquiry', summary.created],
+        ['quoted', 'Newly quoted', summary.quoted],
+        ['won', 'Won', summary.won],
+        ['lost', 'Lost', summary.lost]].map(([key, label, value]) =>
+        <div key={key} className={`sales-kpi ${key}`}>
+          <b>{value.count}</b><span>{label}</span><small>{GHS0(value.value)}</small>
+        </div>)}
+    </div>
+
+    <div className="sales-main">
+      <Card title="Sales analytics" sub="Enquiry value raised per month">
+        {trend.length
+          ? <BarList data={trend} valueFormatter={GHS0}/>
+          : <div className="command-empty">No leads recorded yet.</div>}
+      </Card>
+      <Card title="Sales location" sub="Enquiry value by city">
+        <div className="tbl-wrap"><table className="tbl"><thead><tr>
+          <th>City</th><th className="right">Qty</th><th className="right">Value</th>
+        </tr></thead><tbody>
+          {byCity.slice(0, 8).map(row => <tr key={row.label}>
+            <td>{row.label}</td><td className="right">{row.count}</td>
+            <td className="right t-mono">{GHS0(row.value)}</td>
+          </tr>)}
+          {!byCity.length && <tr><td colSpan={3} className="muted center" style={{padding:22}}>No cities recorded.</td></tr>}
+        </tbody></table></div>
+      </Card>
+    </div>
+
+    <div className="sales-breakdowns">
+      <Card title="Lost enquiry reasons" sub={`${GHS0(summary.lost.value)} of enquiry value lost`}>
+        {lostReasons.length
+          ? <Donut data={lostReasons.map(row => ({ label:row.label, value:row.count }))}/>
+          : <div className="command-empty">Nothing lost yet.</div>}
+      </Card>
+      <Card title="Enquiry source" sub="Where the work comes from">
+        {bySource.length
+          ? <Donut data={bySource.map(row => ({ label:row.label, value:row.count }))}/>
+          : <div className="command-empty">No sources recorded.</div>}
+      </Card>
+      <Card title="Conversion" sub="Enquiry through to won work">
+        <div className="sales-funnel">
+          {conversion.map(([label, value]) => {
+            const pct = Math.round(value.count / widest * 100)
+            return <div key={label} className="sales-funnel-row">
+              <div className="sales-funnel-bar" style={{ width:`${Math.max(4, pct)}%` }} />
+              <div className="sales-funnel-left">
+                <b>{label}</b>
+                <span>{value.count} · {pct}%</span>
+              </div>
+              <div className="sales-funnel-value">{GHS0(value.value)}</div>
+            </div>
+          })}
+        </div>
+      </Card>
+      <Card title="Product demand" sub="Enquiry value by product type">
+        {byProduct.length
+          ? <BarList data={byProduct.slice(0, 6).map(row => ({ label:row.label, value:Math.round(row.value) }))}
+              color="#6C3483" valueFormatter={GHS0}/>
+          : <div className="command-empty">No product types recorded.</div>}
+      </Card>
+    </div>
+  </>
+}
+
 export default function Dashboard() {
   const [data, setData] = useState(null)
+  const [role, setRole] = useState(() =>
+    new URLSearchParams(window.location.search).get('role')
+      || localStorage.getItem('sofaamy-dashboard-role') || 'management')
   const [followupTab, setFollowupTab] = useState('clients')
   const [whatsApp, setWhatsApp] = useState(null)
+  const [leads, setLeads] = useState(null)
+  const [view, setView] = useState('sales')
 
-  const refresh = () => getDashboard().then(setData).catch(() => {})
+  const refresh = () => Promise.all([
+    getDashboard().then(setData).catch(() => {}),
+    listLeads().then(setLeads).catch(() => {}),
+  ])
   useEffect(() => { refresh() }, [])
+  useLiveRefresh(refresh)
 
   if (!data) return (
     <>
       <PageHead title="Business Command Centre" subtitle="Connecting every project, payment and factory action…"/>
       <div className="card card-pad command-loading">
-        <IconTrend /><b>Loading the live Sofaamy business position…</b>
+        <IconTrend /><b>Loading the live Fabra business position…</b>
         <span>Start the backend if this message remains on screen.</span>
       </div>
     </>
@@ -101,10 +273,27 @@ export default function Dashboard() {
   return (
     <>
       <PageHead title="Business Command Centre"
-        subtitle="A live view of projects, sales, accounts, technical work and production.">
+        subtitle={role === 'management'
+          ? 'A live view of projects, sales, accounts, technical work and production.'
+          : ROLE_FOCUS[role]?.sub}>
+        <label className="dashboard-role-select">View as<select value={role} onChange={event => {
+          setRole(event.target.value)
+          localStorage.setItem('sofaamy-dashboard-role', event.target.value)
+        }}>{ROLE_OPTIONS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
         <Link to="/insights" className="btn btn-primary"><IconChart/> Insights & KPIs</Link>
         <Link to="/configurator" className="btn btn-gold"><IconCube/> New Design</Link>
       </PageHead>
+
+      {role !== 'management' && <RoleFocusDashboard role={role} data={data}/>}
+
+      {role === 'management' && <div className="register-scopes dashboard-view-switch">
+        <button className={view === 'sales' ? 'active' : ''} onClick={() => setView('sales')}>Sales</button>
+        <button className={view === 'operations' ? 'active' : ''} onClick={() => setView('operations')}>Operations</button>
+      </div>}
+
+      {role === 'management' && view === 'sales' && <SalesDashboard leads={leads}/>}
+
+      {role === 'management' && view === 'operations' && <>
 
       <section className="command-attention">
         <div className="command-attention-title">
@@ -140,7 +329,7 @@ export default function Dashboard() {
 
       <div className="command-main-grid">
         <Card title="Current projects"
-          sub={`${data.current_projects.length} client projects · open the exact next workspace`}
+          sub={`${data.current_projects.length} client projects · open the complete project context`}
           action={<Link to="/technical-workflow" className="btn btn-ghost btn-sm">All workflows →</Link>}
           pad={false}>
           <div className="tbl-wrap">
@@ -297,6 +486,7 @@ export default function Dashboard() {
               </div>}
         </Card>
       </div>
+      </>}
 
       {whatsApp && <WhatsAppModal
         to={{phone:whatsApp.phone, name:whatsApp.client}}

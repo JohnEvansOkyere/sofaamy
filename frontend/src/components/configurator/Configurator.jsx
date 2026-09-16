@@ -13,10 +13,12 @@ import { DESIGN_GROUPS, DIVIDER_LAYOUTS, MIN_SECTION_MM, templateById, buildDesi
 import { FL_GROUPS, flTemplateById, buildFrameless } from '../../lib/frameless.js'
 import { CW_GROUPS, cwTemplateById, buildCurtainWall } from '../../lib/curtainwall.js'
 import { CATEGORIES, OPENINGS, OPENING_DESIGNS, openingDesignById, GLASS, FRAMES, FINISH_TYPES, FL_GLASS, FL_PANEL_TYPES, FL_FAB, FL_SYSTEMS, FL_SYSTEM_CHOICES, CW_CELL_TYPES } from '../../lib/products.js'
-import { FRAME_SYSTEMS, FRAME_SYSTEM_ORDER, FRAME_PRODUCT_GROUPS, FRAME_GLASS_CATALOG, frameSystemSummary, frameAccessoryRows, frameRateForRateKey, frameRateKeyForOpening } from '../../lib/frameCatalog.js'
-import { calcQuote } from '../../lib/pricing.js'
-import { designBreakdown } from '../../lib/pieces.js'
+import { FRAME_SYSTEMS, FRAME_SYSTEM_ORDER, FRAME_PRODUCT_GROUPS, FRAME_GLASS_CATALOG, frameRateForRateKey, frameRateKeyForOpening, frameOpeningsForDesign, frameColoursForSystem } from '../../lib/frameCatalog.js'
+import { recipeFor, variantValue, resolveRole, roleForVariant } from '../../lib/frameRecipes.js'
+import { priceFor } from '../../lib/frameMaterials.js'
+import { calcQuote, GHS } from '../../lib/pricing.js'
 import { saveDesign, listDesigns, listProjects, createProject as createProjectApi, deleteProject, deleteDesign } from '../../lib/api.js'
+import { useLiveRefresh } from '../../lib/live.js'
 import { IconCube, IconCheck, IconPlus, IconLayers, IconCopy, IconTrash } from '../icons.jsx'
 import './configurator.css'
 
@@ -220,6 +222,87 @@ function fileToSiteImage(file) {
 
 // ── category plumbing ──
 const LIBS = { frame: FRAME_PRODUCT_GROUPS, frameless: FL_GROUPS, curtainwall: CW_GROUPS }
+
+// Door / Window split inside a category: when a category carries both (e.g.
+// Sliding Systems), the user picks Windows or Doors first and then sees every
+// design of that kind — across all systems.
+const kindOfTemplate = (t) => /\bdoor/i.test(t.name || '') ? 'Doors' : /\bwindow/i.test(t.name || '') ? 'Windows' : null
+const groupKinds = (g) => {
+  if (!g) return null
+  const present = ['Windows', 'Doors'].filter(k => g.items.some(t => kindOfTemplate(t) === k))
+  if (present.length < 2) return null
+  if (g.items.some(t => !kindOfTemplate(t))) present.push('Other designs')
+  return present
+}
+const itemsOfKind = (g, kind) => g.items.filter(t => (kindOfTemplate(t) || 'Other designs') === kind)
+
+// family glyphs for the library drill-down (A3 — icon-first navigation)
+function CatGlyph({ cat }) {
+  const accent = CATEGORIES[cat]?.accent || '#1a5276'
+  if (cat === 'frameless') return (
+    <svg width="34" height="30" viewBox="0 0 34 30">
+      <rect x="3" y="3" width="12" height="24" rx="1" fill={accent} opacity=".25"/>
+      <rect x="19" y="3" width="12" height="24" rx="1" fill={accent} opacity=".4"/>
+      <rect x="27" y="12" width="2" height="7" rx="1" fill={accent}/>
+    </svg>)
+  if (cat === 'curtainwall') return (
+    <svg width="34" height="30" viewBox="0 0 34 30">
+      <rect x="2" y="2" width="30" height="26" rx="1" fill={accent} opacity=".18"/>
+      {[10, 18, 26].map(x => <rect key={x} x={x} y="2" width="2" height="26" fill={accent}/>)}
+      <rect x="2" y="13" width="30" height="2" fill={accent} opacity=".6"/>
+    </svg>)
+  return (
+    <svg width="34" height="30" viewBox="0 0 34 30">
+      <rect x="2" y="2" width="30" height="26" rx="2" fill="none" stroke={accent} strokeWidth="3"/>
+      <rect x="15.5" y="4" width="3" height="22" fill={accent}/>
+    </svg>)
+}
+
+// glyphs for the panel's vertical tool rail (library / dividers / openings)
+function ToolGlyph({ k }) {
+  const s = { width:17, height:17, viewBox:'0 0 16 16' }
+  if (k === 'dividers') return (
+    <svg {...s} fill="none" stroke="currentColor" strokeWidth="1.5">
+      <rect x="1.8" y="1.8" width="12.4" height="12.4" rx="1.5"/>
+      <line x1="8" y1="1.8" x2="8" y2="14.2"/><line x1="1.8" y1="8" x2="14.2" y2="8"/>
+    </svg>)
+  if (k === 'openings') return (
+    <svg {...s} fill="none" stroke="currentColor" strokeWidth="1.5">
+      <rect x="1.8" y="1.8" width="12.4" height="12.4" rx="1.5"/>
+      <path d="M12.6 3.4 4 8l8.6 4.6" strokeDasharray="2.4 1.8"/>
+    </svg>)
+  if (k === 'measure') return (
+    <svg {...s} fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M1.6 10.2 10.2 1.6l4.2 4.2L5.8 14.4z"/>
+      <path d="M4.6 7.2v1.8M6.8 5v1.8M9 2.8v1.8"/>
+    </svg>)
+  if (k === 'pieces') return (
+    <svg {...s} fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M2 4.2h12M2 8h8M2 11.8h5"/>
+      <circle cx="12.6" cy="11.4" r="2.2"/>
+    </svg>)
+  if (k === 'materials') return (
+    <svg {...s} fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M8 1.7 14.3 5 8 8.3 1.7 5z"/>
+      <path d="M1.7 8 8 11.3 14.3 8M1.7 11 8 14.3 14.3 11"/>
+    </svg>)
+  return (
+    <svg {...s}>
+      <rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1.2" fill="currentColor" opacity=".9"/>
+      <rect x="9" y="1.5" width="5.5" height="5.5" rx="1.2" fill="currentColor" opacity=".5"/>
+      <rect x="1.5" y="9" width="5.5" height="5.5" rx="1.2" fill="currentColor" opacity=".5"/>
+      <rect x="9" y="9" width="5.5" height="5.5" rx="1.2" fill="currentColor" opacity=".28"/>
+    </svg>)
+}
+
+// which library group holds the open design (drill straight to its designs)
+function groupForDesign(d) {
+  const groups = LIBS[d.category || 'frame'] || []
+  for (const g of groups) if (g.items.some(t => t.id === d.templateId)) return g.group
+  if ((d.category || 'frame') === 'frame' && FRAME_SYSTEMS[d.system]?.productTypes.length)
+    for (const g of groups) if (g.items.some(t => t.system === d.system)) return g.group
+  return null
+}
 const CUT_PROFILE_OPTIONS = [
   ['frame_outer', 'Outer frame member'],
   ['frame_internal', 'Internal member'],
@@ -242,17 +325,92 @@ const anyTemplateById = (id) => {
 const buildFor = (cat, t) =>
   cat === 'frameless' ? buildFrameless(t) : cat === 'curtainwall' ? buildCurtainWall(t) : buildDesign(t)
 
+const designIssues = (d) => {
+  if (!d) return ['Choose a product design']
+  const issues = []
+  if (!String(d.ref || '').trim()) issues.push('Give the item a label/reference')
+  if (!(Number(d.width) > 0) || !(Number(d.height) > 0)) issues.push('Enter valid width and height')
+  if (d.category === 'frame') {
+    const expected = Number(d.cols || 0) * Number(d.rows || 0)
+    if (!expected || d.cells?.length !== expected) issues.push('Complete every frame section')
+    const allowed = frameOpeningsForDesign(d)
+    const invalid = allowed && (d.cells || []).find(cell => !allowed.includes(cell.opening))
+    if (invalid) issues.push(`${OPENINGS[invalid.opening]?.label || invalid.opening} is not valid for this system`)
+  }
+  return issues
+}
+
+const itemKind = item => /door/i.test(item?.name || item?.design?.name || '')
+  ? 'Door' : /window/i.test(item?.name || item?.design?.name || '') ? 'Window' : 'Item'
+
 const withAutoColour = (d) => d.customFrameColor
   ? { ...d, colourDescription:d.colourDescription || `Custom colour (${d.customFrameColor})` }
   : FRAMES[d.frame] ? { ...d, colourDescription:FRAMES[d.frame].label }
   : d
+
+// ── CATALOGUE — every Sofaamy design on one page ──────────────────────
+// A spacious grid narrowed by search and family chips, rather than a cramped
+// panel you drill through. Each card carries the drawing, the design name and
+// its product family, with one action.
+function CatalogueGrid({ onSelect }) {
+  const [query, setQuery] = useState('')
+  const [family, setFamily] = useState('all')
+
+  const all = useMemo(() => Object.entries(LIBS).flatMap(([cat, groups]) =>
+    (groups || []).flatMap(group =>
+      (group.items || []).map(t => ({ cat, group:group.group, t })))), [])
+
+  const shown = useMemo(() => {
+    const term = query.trim().toLowerCase()
+    return all.filter(row =>
+      (family === 'all' || row.cat === family) &&
+      (!term || `${row.t.name} ${row.group}`.toLowerCase().includes(term)))
+  }, [all, family, query])
+
+  return <div className="catalogue">
+    <div className="catalogue-bar">
+      <div className="catalogue-chips">
+        <button className={family === 'all' ? 'on' : ''} onClick={() => setFamily('all')}>
+          All <span>{all.length}</span>
+        </button>
+        {Object.entries(CATEGORIES).map(([key, category]) => (
+          <button key={key} className={family === key ? 'on' : ''} onClick={() => setFamily(key)}>
+            {category.label} <span>{all.filter(row => row.cat === key).length}</span>
+          </button>
+        ))}
+      </div>
+      <input className="register-search" value={query} placeholder="Search designs…"
+        onChange={event => setQuery(event.target.value)}/>
+    </div>
+
+    <div className="catalogue-grid">
+      {shown.map(row => (
+        <article key={`${row.cat}-${row.t.id}`} className="catalogue-card">
+          <div className="catalogue-thumb"><LibThumb cat={row.cat} t={row.t}/></div>
+          <div className="catalogue-meta">
+            <b>{row.t.name}</b>
+            <small>{CATEGORIES[row.cat]?.label} · {row.group}</small>
+          </div>
+          <button onClick={() => onSelect(row.t.id)}>Select design</button>
+        </article>
+      ))}
+      {!shown.length && <div className="catalogue-empty">
+        No design matches “{query}”. Clear the search or pick another family.
+      </div>}
+    </div>
+  </div>
+}
 
 const LibThumb = ({ cat, t }) =>
   cat === 'frameless' ? <FlThumb panels={t.panels} overPanel={t.overPanel}/>
   : cat === 'curtainwall' ? <CwThumb cols={t.cols} rows={t.rows} spandrelRows={t.spandrelRows}/>
   : <Thumb cols={t.cols} rows={t.rows}/>
 
-export default function Configurator() {
+// `projectId` is passed when the configurator is mounted as the Design area of
+// a project workspace; standalone it falls back to the ?project= query param.
+// `embedded` drops the project-browser chrome (title, stepper, create/delete,
+// cross-links) because the workspace header already carries all of that.
+export default function Configurator({ projectId = null, embedded = false }) {
   const [searchParams] = useSearchParams()
   const [design, setDesign] = useState(null)   // null = empty slate
   const [cat, setCat] = useState(null)         // category chosen on the slate
@@ -260,55 +418,49 @@ export default function Configurator() {
   const [client, setClient] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const [toast, setToast] = useState(null)
-  const [tool, setTool] = useState('shapes')   // shapes | dividers | designs
+  const [tool, setTool] = useState('library')  // active panel tool: library | dividers | openings | measure | pieces
+  const [editIdent, setEditIdent] = useState(false) // design card: ref / qty / location
+  const [extraMaterial, setExtraMaterial] = useState({ code:'', name:'', qty:'', unitPrice:'' })
+  const [addPath, setAddPath] = useState({ group:null, kind:null }) // category (+ windows/doors) the quick-add popover is scoped to
+  const [libShowAll, setLibShowAll] = useState(false) // lift the system scope on the shapes library
+  const [libPath, setLibPath] = useState({ cat:null, group:null, kind:null }) // drill-down position: family → category → (windows/doors) → designs
+  const [showAddItem, setShowAddItem] = useState(false) // quick-add popover on the item rail
   const [view, setView] = useState('2d')       // 2d | 3d
   const [wall, setWall] = useState(false)      // 3d wall view
   const [showNew, setShowNew] = useState(false)
   const [projectHomeId, setProjectHomeId] = useState(
-    searchParams.get('project') || null)
+    projectId || searchParams.get('project') || null)
   const [projectBrowse, setProjectBrowse] = useState('all')
+  const [designTab, setDesignTab] = useState('project') // embedded Design area: project | catalog
+  const [openItemGroup, setOpenItemGroup] = useState(null) // product group expanded in the project detail
+  useEffect(() => { setOpenItemGroup(null) }, [projectHomeId])
   const [clientHomeName, setClientHomeName] = useState(null)
   const [showLib, setShowLib] = useState(true)     // left design-tools panel
-  const [showProps, setShowProps] = useState(true) // right properties/quote column
+  const [showProps, setShowProps] = useState(false) // contextual overlay, opened by a canvas selection
   const [pan, setPan] = useState({ x:0, y:0 })
   const [focusMode, setFocusMode] = useState(false)
-  const [detailsWidth, setDetailsWidth] = useState(500)
-  const [resizing, setResizing] = useState(false)
   const undoStack = useRef([])
   const designRef = useRef(null)
-  const resizeRef = useRef(null)
   const [newForm, setNewForm] = useState({ qty:1, location:'', clientName:'', projectId:'', projectName:'', cat:'frame', templateId:'trialco-sliding-window' })
-  const [customAccessory, setCustomAccessory] = useState({ name:'', code:'', qty:1 })
   const [customPiece, setCustomPiece] = useState({ position:'', profile:'frame_outer', sourceMm:'', adjustmentMm:0, qty:1, cuts:'90°/90°', note:'' })
   const [siteImageBusy, setSiteImageBusy] = useState(false)
   useEffect(() => { designRef.current = design }, [design])
+  // A3: whenever an item opens, focus the library on that item's
+  // family → category → designs; the user can still drill back up freely
+  const focusLibraryOn = (d) => {
+    const group = d ? groupForDesign(d) : null
+    const g = group ? (LIBS[d.category || 'frame'] || []).find(x => x.group === group) : null
+    const kind = groupKinds(g) ? (kindOfTemplate(d) || 'Other designs') : null
+    setLibPath(d ? { cat:d.category || 'frame', group, kind } : { cat:null, group:null, kind:null })
+    setLibShowAll(false)
+    setTool('library')
+  }
   useEffect(() => {
     if (!focusMode) return undefined
     const onKeyDown = (event) => { if (event.key === 'Escape') setFocusMode(false) }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [focusMode])
-  useEffect(() => {
-    if (!resizing) return undefined
-    const onMove = (event) => {
-      const start = resizeRef.current
-      if (!start) return
-      const max = Math.max(360, window.innerWidth - 32 - 360)
-      setDetailsWidth(Math.min(max, Math.max(320, start.width + event.clientX - start.x)))
-    }
-    const onUp = () => { resizeRef.current = null; setResizing(false) }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-    return () => {
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-  }, [resizing])
-
   // library + hints follow the user's explicit pick; falls back to the
   // open design's family (load()/openSaved() keep `cat` in sync)
   const activeCat = cat || design?.category
@@ -339,7 +491,8 @@ export default function Configurator() {
     const d = withAutoColour({ ...buildFor(fcat, t), ...extra })
     if (designRef.current) rememberUndo()
     designRef.current = d
-    setDesign(d); setCat(fcat); setSelected(0); setView('2d'); setTool('shapes'); setPan({ x:0, y:0 })
+    setDesign(d); setCat(fcat); setSelected(0); setView('2d'); setPan({ x:0, y:0 })
+    focusLibraryOn(d)
   }
   const newDesign = () => {
     setNewForm(f => ({ ...f, projectId:activeProject?.id || f.projectId, projectName:'', clientName:activeProject?.client_name || client }))
@@ -373,12 +526,21 @@ export default function Configurator() {
   // drop an openable design (EvA: drag "Double Door" into F2) onto a section — frame only
   const applyOpening = (od, idx) => {
     if (od == null || idx == null || !design || design.category !== 'frame') return
+    if (allowedOpenings && !allowedOpenings.includes(od.opening)) {
+      fire(`${od.label} is not available on ${FRAME_SYSTEMS[design.system]?.label || 'this system'}`); return
+    }
     commitDesign(d => ({ ...d, cells: d.cells.map((c, i) =>
       i === idx ? { ...c, opening: od.opening, panels: od.panels,
         rateKey: frameRateKeyForOpening(od.opening),
         ratePerM2: frameRateForRateKey(frameRateKeyForOpening(od.opening)) } : c) }))
     setSelected(idx)
+    setShowProps(true)
     fire(`${od.label} → section F${idx + 1}`)
+  }
+
+  const selectDesignPart = (index) => {
+    setSelected(index)
+    setShowProps(index != null)
   }
 
   const onDrop = (e) => {
@@ -404,7 +566,12 @@ export default function Configurator() {
     }
     const templateId = data.startsWith('shape:') ? data.slice('shape:'.length) : data
     const m = anyTemplateById(templateId)
-    if (m) load(m.cat, m.t)
+    if (!m) return
+    // Picking a design while a project is open adds it to that project (like
+    // "+ Add item") instead of load()'s bare, project-less design — dropping
+    // a shape mid-job must never feel like starting a new project.
+    if (activeProject) quickAddItem(m.t.id)
+    else load(m.cat, m.t)
   }
 
   const applyDividerLayout = (layout) => {
@@ -429,32 +596,37 @@ export default function Configurator() {
     }
     return next
   })
-  const accessoryOverride = (row, changes) => commitDesign(d => {
-    const current = (d.accessoryOverrides || []).filter(x => x.code !== row.code)
-    return { ...d, accessoryOverrides:[...current, { code:row.code, name:row.name, unitPrice:row.unitPrice, ...changes }] }
-  })
-  const addCatalogueAccessory = (code) => {
-    const a = frameCatalog?.accessories.find(x => x.code === code)
-    if (!a) return
-    accessoryOverride(a, { qty:1, removed:false })
-    fire(`${a.name} added to this project`)
-  }
-  const addCustomAccessory = () => {
-    const name = customAccessory.name.trim()
-    if (!name) return
-    const code = customAccessory.code.trim() || `CUSTOM-${Date.now()}`
-    commitDesign(d => ({ ...d, accessoryOverrides:[...(d.accessoryOverrides || []).filter(x => x.code !== code), {
-      code, name, qty:Math.max(1, Number(customAccessory.qty || 1)), unitPrice:0, custom:true, removed:false,
-    }] }))
-    setCustomAccessory({ name:'', code:'', qty:1 })
-    fire(`${name} added to this project`)
-  }
   const updateCustomPiece = (index, changes) => commitDesign(d => ({
     ...d, customCutPieces:(d.customCutPieces || []).map((piece, i) => i === index ? { ...piece, ...changes } : piece),
   }))
   const removeCustomPiece = (index) => commitDesign(d => ({
     ...d, customCutPieces:(d.customCutPieces || []).filter((_, i) => i !== index),
   }))
+
+  // Material take-off corrections that apply to THIS item only. A price every
+  // job should use belongs in Inventory, not here.
+  const overrideAccessory = (row, changes) => commitDesign(d => {
+    const list = d.accessoryOverrides || []
+    const key = row.code || `custom:${row.name}`
+    const existing = list.find(o => (o.code || `custom:${o.name}`) === key) || {}
+    const next = { code:row.code, name:row.name, unit:row.unit,
+      qty:row.qty, unitPrice:row.unitPrice, ...existing, ...changes }
+    if (next.qty !== undefined && next.qty !== '') next.qty = Number(next.qty)
+    if (next.unitPrice !== undefined && next.unitPrice !== '') next.unitPrice = Number(next.unitPrice)
+    return { ...d, accessoryOverrides:[
+      ...list.filter(o => (o.code || `custom:${o.name}`) !== key), next] }
+  })
+
+  const addExtraMaterial = () => {
+    const code = extraMaterial.code.trim().toUpperCase()
+    if (!code) return
+    commitDesign(d => ({ ...d, accessoryOverrides:[
+      ...(d.accessoryOverrides || []).filter(o => o.code !== code),
+      { code, name:extraMaterial.name.trim() || code, custom:true, unit:'pcs',
+        qty:Number(extraMaterial.qty) || 1, unitPrice:Number(extraMaterial.unitPrice) || 0 }] }))
+    setExtraMaterial({ code:'', name:'', qty:'', unitPrice:'' })
+    fire(`✓ ${code} added to this item`)
+  }
   const addCustomPiece = () => {
     const sourceMm = Math.max(0, Number(customPiece.sourceMm || 0))
     if (!customPiece.position.trim() || !sourceMm) {
@@ -515,12 +687,31 @@ export default function Configurator() {
   })
 
   const quote = useMemo(() => design && calcQuote(design), [design])
-  const fabrication = useMemo(() => design?.category === 'frame' ? designBreakdown(design) : null, [design])
-  const accessoryRows = useMemo(() => design?.category === 'frame' ? frameAccessoryRows(design) : [], [design])
   const sel   = design && selected != null ? design.cells[selected] : null
+
+  // A1 (demo-1 feedback): scope every choice to what the design's system
+  // supports — a Trialco sliding project never offers casement anywhere.
+  const allowedOpenings = design?.category === 'frame' ? frameOpeningsForDesign(design) : null
+  const openingAllowed = (o) => !allowedOpenings || allowedOpenings.includes(o)
+  const scopedOpeningDesigns = allowedOpenings
+    ? OPENING_DESIGNS.map(g => ({ ...g, items:g.items.filter(od => openingAllowed(od.opening)) })).filter(g => g.items.length)
+    : OPENING_DESIGNS
+  const libScopeSystem = activeCat === 'frame' && design && FRAME_SYSTEMS[design.system]?.productTypes.length
+    ? design.system : null
   const frameCatalog = design?.category === 'frame'
     ? (FRAME_SYSTEMS[design.system] || FRAME_SYSTEMS.legacy)
     : null
+  // only the colours this system is stocked in; a design saved on an older
+  // colour keeps showing it so nothing silently changes underneath
+  const systemColours = useMemo(() => {
+    const stocked = frameColoursForSystem(design?.system) || Object.keys(FRAMES).filter(k => !FRAMES[k].legacy)
+    return stocked.includes(design?.frame) || !design?.frame
+      ? stocked : [...stocked, design.frame]
+  }, [design?.system, design?.frame])
+  // real alternatives inside one system (frame with or without cover, and the
+  // fixed window's outer section) — a genuine choice, so it is asked
+  const systemVariants = design?.category === 'frame'
+    ? (recipeFor(design.system)?.variants || []) : []
 
   const wrapRef = useRef(null)
   const [dims, setDims] = useState({ w: 720, h: 480 })
@@ -542,20 +733,40 @@ export default function Configurator() {
     fire(detail ? `⚠️ API request failed — ${detail}` : '⚠️ Cannot reach the API — confirm it is running on 127.0.0.1:8000')
   }
   const onSaveDesign = async () => {
+    const issues = designIssues(design)
+    if (issues.length) { fire(`⚠️ ${issues[0]}`); return }
     try {
       const r = await saveDesign(client, design)
       setDesign(d => ({ ...d, savedItemId:r.id, projectId:r.project_id || d.projectId || null }))
       refreshSaved()
-      fire(`💾 Item "${r.ref || r.name}" saved — find it in Projects`)
+      fire(r.quote_number
+        ? `💾 Measurements saved · draft ${r.quote_number} updated automatically`
+        : `💾 Item "${r.ref || r.name}" saved — find it in Projects`)
     } catch (e) { apiFail(e) }
   }
   const [saved, setSaved] = useState([])
   const [projects, setProjects] = useState([])
-  const activeProject = projects.find(p => String(p.id) === String(design?.projectId))
+  const deepLinkedItemOpened = useRef(false)
+  // With a design open its own project wins; on the project/Design screen with
+  // nothing open yet, the project being viewed is the active one — otherwise
+  // adding the first item from the catalogue has no project to attach to.
+  const activeProject = projects.find(p =>
+    String(p.id) === String(design ? design.projectId : projectHomeId))
+  const projectItems = activeProject?.items || []
   const refreshSaved = () => Promise.all([listDesigns(), listProjects()])
-    .then(([designs, projectRows]) => { setSaved(designs); setProjects(projectRows) })
+    .then(([designs, projectRows]) => {
+      setSaved(designs); setProjects(projectRows)
+      const itemId = searchParams.get('item')
+      const target = itemId && designs.find(item => String(item.id) === String(itemId))
+      if (target && !deepLinkedItemOpened.current) {
+        deepLinkedItemOpened.current = true
+        setProjectHomeId(null)
+        openSaved(target)
+      }
+    })
     .catch(() => {})
   useEffect(() => { refreshSaved() }, [])
+  useLiveRefresh(refreshSaved)
   const copyShareLink = async (s, e) => {
     e?.stopPropagation()
     if (!s.share_token) { fire('No shareable link for this item yet'); return }
@@ -576,7 +787,18 @@ export default function Configurator() {
     setClient(s.client_name || '')
     setCat(s.design.category || 'frame')
     setSelected(0); setView('2d'); setPan({ x:0, y:0 })
+    focusLibraryOn(next)
     fire(`Opened saved design "${s.ref || s.name}"`)
+  }
+  // Clicking a product group in the project view jumps straight into editing
+  // — the group already IS the project's items for that product, reachable
+  // from inside the editor via the item rail, so there is no separate
+  // "expand, then Open item" step for the common case of just getting to work.
+  const openGroupFirstItem = (g) => {
+    const item = g.items.find(x => x.saved)
+    if (!item) { fire('This item has not finished loading — try again in a moment'); return }
+    setProjectHomeId(null)
+    openSaved(item.saved)
   }
   // Duplicate = one more item in the SAME project, carrying the original's
   // configuration. It is saved straight away so it exists as its own project
@@ -594,10 +816,54 @@ export default function Configurator() {
       setDesign(next)
       setClient(s.client_name || '')
       setCat(s.design.category || 'frame')
-      setSelected(0); setView('2d'); setTool('shapes'); setPan({ x:0, y:0 })
+      setSelected(0); setView('2d'); setPan({ x:0, y:0 })
+      focusLibraryOn(next)
       refreshSaved()
       fire(`Copied "${s.ref || s.name}" into this project as "${copyRef}" — edit its measurements and save`)
     } catch (err) { apiFail(err) }
+  }
+
+  // A2 (demo-1 feedback): all of a project's windows/doors live inside the
+  // one open configurator. Switching items auto-saves the current one first,
+  // so a 22-window job is measured item by item without leaving the canvas.
+  const switchToItem = async (item) => {
+    if (design?.savedItemId && String(design.savedItemId) === String(item.id)) return
+    const target = saved.find(s => String(s.id) === String(item.id))
+    if (!target) { fire('This item has not finished loading — try again in a moment'); return }
+    const issues = designIssues(designRef.current)
+    if (issues.length) { fire(`⚠️ Finish this item before switching — ${issues[0]}`); return }
+    try {
+      if (designRef.current) await saveDesign(client, designRef.current)
+    } catch (e) { apiFail(e); return }
+    openSaved(target)
+    refreshSaved()
+  }
+
+  // Adds the next window/door to the SAME open project — no modal, no
+  // Duplicate & Edit. Current edits are saved before the new item opens.
+  const quickAddItem = async (templateId) => {
+    const m = anyTemplateById(templateId)
+    const project = activeProject
+    if (!m || !project) { setShowAddItem(false); newDesign(); return }
+    // only guard an item that is actually open — with nothing on the canvas
+    // this would otherwise block adding the project's first item
+    const issues = designRef.current ? designIssues(designRef.current) : []
+    if (issues.length) { fire(`⚠️ Finish this item before adding another — ${issues[0]}`); return }
+    try {
+      if (designRef.current) await saveDesign(client, designRef.current)
+      const refBase = (project.name || m.t.name || 'DESIGN').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toUpperCase().slice(0, 24) || 'DESIGN'
+      const ref = `${refBase}-${Date.now().toString(36).slice(-5).toUpperCase()}`
+      const d = withAutoColour({ ...buildFor(m.cat, m.t), ref, qty:1, location:project.location || '', projectId:project.id })
+      const r = await saveDesign(project.client_name || client, d)
+      const next = { ...d, savedItemId:r.id, projectId:r.project_id || d.projectId }
+      undoStack.current = []
+      designRef.current = next
+      setDesign(next); setCat(m.cat); setSelected(0); setView('2d'); setPan({ x:0, y:0 })
+      setShowAddItem(false)
+      focusLibraryOn(next)
+      refreshSaved()
+      fire(`${m.t.name} added as item ${projectItems.length + 1} — set its measurements`)
+    } catch (e) { apiFail(e) }
   }
 
   const removeSaved = async (s, e) => {
@@ -622,12 +888,6 @@ export default function Configurator() {
       fire(`Project "${p.name}" deleted`)
     } catch (err) { apiFail(err) }
   }
-
-  const toolTabs = activeCat === 'frameless'
-    ? [['shapes','Designs']]
-    : activeCat === 'curtainwall'
-      ? [['shapes','Grids'],['dividers','Divider']]
-      : [['shapes','Shapes'],['dividers','Divider'],['designs','Designs']]
 
   const newProjectModal = showNew && (
     <NewProjectModal newForm={newForm} setNewForm={setNewForm}
@@ -662,24 +922,26 @@ export default function Configurator() {
   // ── PROJECTS HOME — the first screen: saved designs + create new ──
   if (!design) return (
     <>
-      <div className="cfg-home">
-        <div className="cfg-home-head">
-          <div>
-            <div className="cfg-eyebrow">Sofaamy project workspace</div>
-            <div className="t">Projects</div>
-            <div className="s">Create a client project, measure its openings, configure each item, and save the approved technical scope.</div>
+      <div className={`cfg-home${embedded ? ' cfg-home-embedded' : ''}`}>
+        {!embedded && <>
+          <div className="cfg-home-head">
+            <div>
+              <div className="cfg-eyebrow">Fabra project workspace</div>
+              <div className="t">Projects</div>
+              <div className="s">Create a client project, measure its openings, configure each item, and save the approved technical scope.</div>
+            </div>
+            <button className="btn btn-primary" onClick={() => { setNewForm(f => ({ ...f, projectId:'', projectName:'', clientName:'' })); setShowNew(true) }}><IconPlus/> Create New Project</button>
           </div>
-          <button className="btn btn-primary" onClick={() => { setNewForm(f => ({ ...f, projectId:'', projectName:'', clientName:'' })); setShowNew(true) }}><IconPlus/> Create New Project</button>
-        </div>
-        <div className="cfg-workflow cfg-workflow-home" aria-label="Project workflow">
-          <div className="cfg-workflow-step done"><span>1</span><div><b>Project</b><small>Client and job</small></div></div>
-          <div className="cfg-workflow-line" />
-          <div className="cfg-workflow-step"><span>2</span><div><b>Design</b><small>Measure and configure</small></div></div>
-          <div className="cfg-workflow-line" />
-          <div className="cfg-workflow-step"><span>3</span><div><b>Technical handoff</b><small>Save scope and outputs</small></div></div>
-        </div>
+          <div className="cfg-workflow cfg-workflow-home" aria-label="Project workflow">
+            <div className="cfg-workflow-step done"><span>1</span><div><b>Project</b><small>Client and job</small></div></div>
+            <div className="cfg-workflow-line" />
+            <div className="cfg-workflow-step"><span>2</span><div><b>Design</b><small>Measure and configure</small></div></div>
+            <div className="cfg-workflow-line" />
+            <div className="cfg-workflow-step"><span>3</span><div><b>Technical handoff</b><small>Save scope and outputs</small></div></div>
+          </div>
+        </>}
         {projects.length > 0 && <>
-          <div className="cfg-section-heading"><div><b>Client projects</b><span>Keep every door, window and glass item under the correct job.</span></div><span>{projects.length} project{projects.length === 1 ? '' : 's'}</span></div>
+          {!embedded && <div className="cfg-section-heading"><div><b>Client projects</b><span>Keep every door, window and glass item under the correct job.</span></div><span>{projects.length} project{projects.length === 1 ? '' : 's'}</span></div>}
           {!projectHomeId ? <>
             <div className="project-browser-toolbar" aria-label="Project views">
               <div className="project-browser-tabs">
@@ -714,48 +976,113 @@ export default function Configurator() {
               ...item,
               saved: saved.find(s => String(s.id) === String(item.id)),
             }))
+            const addItem = () => { setNewForm(f => ({ ...f, projectId:String(project.id), projectName:'', clientName:project.client_name || '', location:project.location || '' })); setShowNew(true) }
             return <div className="project-detail-panel">
-              <div className="project-detail-head">
+              {!embedded && <div className="project-detail-head">
                 <div>
                   <button className="project-back" onClick={() => setProjectHomeId(null)}>← {projectBrowse === 'clients' ? 'Client projects' : 'All projects'}</button>
                   <div className="t">{project.name}</div>
                   <div className="s">{project.project_number} · {project.client_name || 'Walk-in Client'}{project.location ? ` · ${project.location}` : ''}</div>
                 </div>
                 <div className="project-detail-actions">
-                  <button className="btn btn-ghost btn-sm" onClick={() => { setNewForm(f => ({ ...f, projectId:String(project.id), projectName:'', clientName:project.client_name || '', location:project.location || '' })); setShowNew(true) }}><IconPlus/> Add item</button>
+                  <button className="btn btn-ghost btn-sm" onClick={addItem}><IconPlus/> Add item</button>
+                  <Link className="btn btn-primary btn-sm" to={`/projects/${project.id}`}>Project overview</Link>
                   <Link className="btn btn-ghost btn-sm" to={`/technical-workflow?project=${project.id}`}>Technical workflow</Link>
-                  <Link className="btn btn-primary btn-sm" to={`/quotations?project=${project.id}`}>Open quotation desk</Link>
+                  <Link className="btn btn-ghost btn-sm" to={`/quotations?project=${project.id}`}>Open quotation desk</Link>
                   <button className="btn btn-ghost btn-sm project-danger" onClick={() => removeProject(project)}><IconTrash/> Delete project</button>
                 </div>
-              </div>
-              <div className="project-detail-total"><span>{projectItems.length} technical item{projectItems.length === 1 ? '' : 's'} in this project</span></div>
-              {!projectItems.length
-                ? <div className="project-detail-empty">No saved items yet. Add the first window, door or glass item to this project.</div>
-                : <div className="project-item-grid">{projectItems.map(item => {
-                  const s = item.saved
-                  const designItem = s?.design
-                  const category = CATEGORIES[designItem?.category || 'frame'] || CATEGORIES.frame
-                  return <div className="project-detail-item" key={item.id}>
-                    <div className="project-detail-thumb">{designItem ? <SavedThumb d={designItem}/> : <IconCube/>}</div>
-                    <div className="project-detail-item-body">
-                      <b>{item.ref || item.name}</b>
-                      <span>{item.name}</span>
-                      <small>{category.label} · {designItem ? `${designItem.width} × ${designItem.height} mm` : 'Saved design'}</small>
-                      <small>Qty {item.qty}{item.location ? ` · ${item.location}` : ''}</small>
-                    </div>
-                    {s && <div className="project-detail-item-actions">
-                      <div className="flex gap-sm">
-                        <button className="project-copy-link" title="Copy client share link" onClick={e => copyShareLink(s, e)}><IconCopy/></button>
-                        <button className="project-copy-link project-item-delete" title="Delete this item" onClick={e => removeSaved(s, e)}><IconTrash/></button>
-                      </div>
-                      <div className="flex gap-sm">
-                        <button className="project-home-action" onClick={() => { setProjectHomeId(null); openSaved(s) }}>Open item</button>
-                        <button className="project-home-action" title="Add another item to this project with the same configuration" onClick={() => { setProjectHomeId(null); duplicateSaved(s) }}>Duplicate & Edit</button>
-                      </div>
-                    </div>}
+              </div>}
+              {embedded && <div className="design-subtabs">
+                <button className={designTab === 'project' ? 'on' : ''} onClick={() => setDesignTab('project')}>
+                  Project <span>{projectItems.length}</span>
+                </button>
+                <button className={designTab === 'catalog' ? 'on' : ''} onClick={() => setDesignTab('catalog')}>
+                  Catalogue
+                </button>
+              </div>}
+              {embedded && designTab === 'catalog'
+                ? <CatalogueGrid onSelect={id => { setDesignTab('project'); quickAddItem(id) }}/>
+                : <>
+              {embedded
+                ? <div className="design-area-bar">
+                    <span>{projectItems.length} item{projectItems.length === 1 ? '' : 's'} in this project</span>
+                    {!!projectItems.length && <button className="btn btn-primary btn-sm" onClick={addItem}><IconPlus/> Add item</button>}
                   </div>
-                })}</div>}
-              <div className="project-detail-note">The Quotations page receives the approved project scope and handles all pricing and client terms.</div>
+                : <div className="project-detail-total"><span>{projectItems.length} technical item{projectItems.length === 1 ? '' : 's'} in this project</span></div>}
+              {!projectItems.length
+                ? (embedded
+                  // EvA's empty Design area: two full-width choices, not a modal
+                  ? <div className="design-start">
+                      <section>
+                        <h2>Select a design from templates</h2>
+                        <p>Choose from your saved window, door, frameless and curtain-wall designs.</p>
+                        <button className="btn btn-primary" onClick={() => setDesignTab('catalog')}>Choose from catalogue</button>
+                      </section>
+                      <section className="alt">
+                        <h2>Create new design</h2>
+                        <p>Start a new typology for this client — its own system, colour and technical specification.</p>
+                        <button className="btn btn-ghost" onClick={addItem}>Create design</button>
+                      </section>
+                    </div>
+                  : <div className="project-detail-empty">No saved items yet. Add the first window, door or glass item to this project.</div>)
+                : (() => {
+                  // Group the project's items by product so a 50-window job
+                  // reads as a handful of product rows, not 50 flat cards.
+                  // Click a product to see its items inside.
+                  const itemGroups = []
+                  projectItems.forEach(item => {
+                    const label = item.name || 'Other items'
+                    let g = itemGroups.find(x => x.label === label)
+                    if (!g) { g = { label, items:[] }; itemGroups.push(g) }
+                    g.items.push(item)
+                  })
+                  const openGroup = openItemGroup
+                  return <div className="item-group-list">{itemGroups.map(g => {
+                    const open = g.label === openGroup
+                    const firstDesign = g.items[0]?.saved?.design
+                    const category = CATEGORIES[firstDesign?.category || 'frame'] || CATEGORIES.frame
+                    const totalQty = g.items.reduce((sum, item) => sum + Number(item.qty || 1), 0)
+                    return <div key={g.label} className={`item-group ${open ? 'open' : ''}`}>
+                      <div className="item-group-row">
+                        <button className="item-group-head" onClick={() => openGroupFirstItem(g)} title={`Open ${g.label} — every item is reachable from inside`}>
+                          <span className="item-group-thumb">{firstDesign ? <SavedThumb d={firstDesign}/> : <IconCube/>}</span>
+                          <div>
+                            <b>{g.label}</b>
+                            <span>{category.label} · {g.items.length} item{g.items.length === 1 ? '' : 's'}{totalQty !== g.items.length ? ` · total qty ${totalQty}` : ''}</span>
+                          </div>
+                        </button>
+                        <button className="item-group-manage" title="Delete, duplicate or copy a share link for one item" onClick={() => setOpenItemGroup(open ? null : g.label)}>
+                          {open ? 'Hide items' : 'Manage items'}<em>{open ? '▾' : '›'}</em>
+                        </button>
+                      </div>
+                      {open && <div className="project-item-grid">{g.items.map(item => {
+                        const s = item.saved
+                        const designItem = s?.design
+                        return <div className="project-detail-item" key={item.id}>
+                          <div className="project-detail-thumb">{designItem ? <SavedThumb d={designItem}/> : <IconCube/>}</div>
+                          <div className="project-detail-item-body">
+                            <b>{item.ref || item.name}</b>
+                            <span>{item.name}</span>
+                            <small>{designItem ? `${designItem.width} × ${designItem.height} mm` : 'Saved design'}</small>
+                            <small>Qty {item.qty}{item.location ? ` · ${item.location}` : ''}</small>
+                          </div>
+                          {s && <div className="project-detail-item-actions">
+                            <div className="flex gap-sm">
+                              <button className="project-copy-link" title="Copy client share link" onClick={e => copyShareLink(s, e)}><IconCopy/></button>
+                              <button className="project-copy-link project-item-delete" title="Delete this item" onClick={e => removeSaved(s, e)}><IconTrash/></button>
+                            </div>
+                            <div className="flex gap-sm">
+                              <button className="project-home-action" onClick={() => { setProjectHomeId(null); openSaved(s) }}>Open item</button>
+                              <button className="project-home-action" title="Add another item to this project with the same configuration" onClick={() => { setProjectHomeId(null); duplicateSaved(s) }}>Duplicate & Edit</button>
+                            </div>
+                          </div>}
+                        </div>
+                      })}</div>}
+                    </div>
+                  })}</div>
+                })()}
+              {!embedded && <div className="project-detail-note">The Quotations page receives the approved project scope and handles all pricing and client terms.</div>}
+              </>}
             </div>
           })()}
         </>}
@@ -798,196 +1125,215 @@ export default function Configurator() {
 
   return (
     <>
-    <div className={`cfg ${showLib ? '' : 'no-lib'} ${showProps ? '' : 'no-props'} ${focusMode ? 'focus-mode' : ''} ${resizing ? 'resizing' : ''}`}
-      style={focusMode ? { '--cfg-details-width': `${detailsWidth}px` } : undefined}>
+    <div className={`cfg ${showLib ? '' : 'no-lib'} ${showProps ? '' : 'no-props'} ${focusMode ? 'focus-mode' : ''}`}>
       {/* ── TOOL PANELS ── */}
       {showLib && <div className="cfg-panel cfg-lib">
         <h4><IconLayers style={{ width:16, height:16, color:'var(--navy-600)' }} /> <span><small className="panel-step">STEP 1</small>Choose a product</span>
           <button className="panel-x" title="Hide the design library — more room to draw" onClick={() => setShowLib(false)}>«</button>
         </h4>
 
-        {/* category switch — Sofaamy's three businesses */}
-        <div className="tool-tabs" style={{ marginBottom:8 }}>
-          {Object.entries(CATEGORIES).map(([k, c]) => (
-            <button key={k} className={activeCat===k?'on':''} title={c.sub}
-              onClick={() => { setCat(k); setTool('shapes') }}>{c.label}</button>
-          ))}
-        </div>
-
-        {activeCat && toolTabs.length > 1 && (
-          <div className="tool-tabs">
-            {toolTabs.map(([k,lbl]) => (
-              <button key={k} className={tool===k?'on':''} onClick={() => setTool(k)}>{lbl}</button>
-            ))}
+        {/* Icon tool rail + one-level-at-a-time drill-down: the panel body only
+            ever shows the level being worked in (family icons → that family's
+            categories → that category's designs). Divider / opening tools sit
+            on the vertical rail so they never crowd the product picker. */}
+        <div className="cfg-lib-cols">
+          <div className="cfg-tool-rail">
+            <button className={`rail-tool ${tool === 'library' ? 'on' : ''}`} title="Product library"
+              onClick={() => setTool('library')}><ToolGlyph k="library"/><span>Products</span></button>
+            {(activeCat === 'frame' || activeCat === 'curtainwall') && (
+              <button className={`rail-tool ${tool === 'dividers' ? 'on' : ''}`} title="Divider layouts — split the frame or a section"
+                onClick={() => setTool('dividers')}><ToolGlyph k="dividers"/><span>Divider</span></button>
+            )}
+            {activeCat === 'frame' && (
+              <button className={`rail-tool ${tool === 'openings' ? 'on' : ''}`} title="Opening designs — drop into a section"
+                onClick={() => setTool('openings')}><ToolGlyph k="openings"/><span>Designs</span></button>
+            )}
+            {/* site record and factory extras are their own tools — Properties
+                stays about the design itself, the way EvA's panel does */}
+            {activeCat === 'frame' && (
+              <button className={`rail-tool ${tool === 'measure' ? 'on' : ''}`} title="Site measurement record and site photos"
+                onClick={() => setTool('measure')}><ToolGlyph k="measure"/><span>Measure</span></button>
+            )}
+            {activeCat === 'frame' && (
+              <button className={`rail-tool ${tool === 'pieces' ? 'on' : ''}`} title="Special production pieces — curves, templates, site members"
+                onClick={() => setTool('pieces')}><ToolGlyph k="pieces"/><span>Pieces</span></button>
+            )}
+            {activeCat === 'frame' && (
+              <button className={`rail-tool ${tool === 'materials' ? 'on' : ''}`} title="Material take-off — every part this item consumes"
+                onClick={() => setTool('materials')}><ToolGlyph k="materials"/><span>Materials</span></button>
+            )}
           </div>
-        )}
 
-        {!activeCat && <div className="cfg-lib-hint">Pick a product family above — Frame, Frameless glass, or Curtain Wall — to open its design library.</div>}
+          <div className="cfg-lib-main">
+            {tool === 'library' && (!libPath.cat ? <>
+              <div className="cfg-lib-hint">Choose a product family — only what you pick will show.</div>
+              <div className="lib-cat-tiles">
+                {Object.entries(CATEGORIES).map(([k, c]) => (
+                  <button key={k} className="lib-cat-tile" style={{ '--cat-accent':c.accent }}
+                    onClick={() => { setLibPath({ cat:k, group:null, kind:null }); setCat(k) }}>
+                    <CatGlyph cat={k}/>
+                    <div><b>{c.label}</b><span>{c.sub}</span></div>
+                    <em>›</em>
+                  </button>
+                ))}
+              </div>
+            </> : !libPath.group ? <>
+              <button className="lib-back" onClick={() => setLibPath({ cat:null, group:null, kind:null })}>‹ All product families</button>
+              <div className="cfg-lib-hint">{CATEGORIES[libPath.cat]?.label} — choose a category to open its designs.</div>
+              <div className="lib-group-list">
+                {(LIBS[libPath.cat] || []).map(g => (
+                  <button key={g.group} className="lib-group-row" onClick={() => { setLibPath(p => ({ ...p, group:g.group, kind:null })); setLibShowAll(false) }}>
+                    <b>{g.group}</b><span>{g.items.length} design{g.items.length === 1 ? '' : 's'}</span><em>›</em>
+                  </button>
+                ))}
+              </div>
+            </> : (() => {
+              const group = (LIBS[libPath.cat] || []).find(g => g.group === libPath.group)
+              if (!group) return null
+              const kinds = groupKinds(group)
+              if (kinds && !libPath.kind) return <>
+                <button className="lib-back" onClick={() => { setLibPath(p => ({ ...p, group:null, kind:null })); setLibShowAll(false) }}>‹ {CATEGORIES[libPath.cat]?.label} categories</button>
+                <div className="cfg-lib-hint">{group.group} — windows or doors?</div>
+                <div className="lib-group-list">
+                  {kinds.map(k => (
+                    <button key={k} className="lib-group-row" onClick={() => setLibPath(p => ({ ...p, kind:k }))}>
+                      <b>{k}</b><span>{itemsOfKind(group, k).length} design{itemsOfKind(group, k).length === 1 ? '' : 's'}</span><em>›</em>
+                    </button>
+                  ))}
+                </div>
+              </>
+              // with a Windows/Doors pick, every design of that kind shows —
+              // across systems; otherwise the A1 system scope applies as before
+              const canScope = !kinds && libPath.cat === 'frame' && libScopeSystem && group.items.some(t => t.system === libScopeSystem)
+              const sysScope = canScope && !libShowAll
+              const items = kinds ? itemsOfKind(group, libPath.kind)
+                : sysScope ? group.items.filter(t => t.system === libScopeSystem) : group.items
+              return <>
+                <button className="lib-back" onClick={() => { setLibPath(p => kinds ? { ...p, kind:null } : { ...p, group:null, kind:null }); setLibShowAll(false) }}>
+                  ‹ {kinds ? group.group : `${CATEGORIES[libPath.cat]?.label} categories`}</button>
+                {canScope && (
+                  <div className="lib-scope-row">
+                    <span>{sysScope ? `${FRAME_SYSTEMS[libScopeSystem].label} only` : `All ${group.group}`}</span>
+                    <button onClick={() => setLibShowAll(v => !v)}>
+                      {sysScope ? `Show all ${group.group}` : `‹ ${FRAME_SYSTEMS[libScopeSystem].label} only`}
+                    </button>
+                  </div>
+                )}
+                <div className="cfg-lib-hint">Drag a design onto the canvas, or click it.</div>
+                <div className="cfg-lib-scroll">
+                  <div className="lib-group">{kinds ? `${group.group} · ${libPath.kind}` : group.group}</div>
+                  <div className="lib-grid">
+                    {items.map(t => (
+                      <div key={t.id} className="lib-item" draggable
+                        onDragStart={e => e.dataTransfer.setData('text', `shape:${t.id}`)}
+                        onClick={() => activeProject ? quickAddItem(t.id) : load(libPath.cat, t)} title={t.name}>
+                        <LibThumb cat={libPath.cat} t={t}/>
+                        <span>{t.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            })())}
 
-        {activeCat && tool === 'shapes' && <>
-          <div className="cfg-lib-hint">
-            {activeCat === 'frameless'
-              ? 'Toughened-glass products — drag one onto the canvas. Panels carry their hardware sets automatically.'
-              : activeCat === 'curtainwall'
-                ? 'Stick-system facade grids — mullions run continuous, transoms cut between.'
-                : 'Start here — drag a product shape onto the canvas, or click it.'}
-          </div>
-          <div className="cfg-lib-scroll">
-            {LIBS[activeCat].map(g => (
-              <div key={g.group}>
-                <div className="lib-group">{g.group}</div>
+            {tool === 'dividers' && <>
+              <div className="cfg-lib-hint">{design ? 'Select a section, then drag a layout onto the canvas to divide only that section. With nothing selected, it applies to the full frame.' : 'Load a shape first, then split it with dividers.'}</div>
+              <div className="cfg-lib-scroll">
+                <div className="lib-group">Divider Layouts</div>
                 <div className="lib-grid">
-                  {g.items.map(t => (
-                    <div key={t.id} className="lib-item" draggable
-                      onDragStart={e => e.dataTransfer.setData('text', `shape:${t.id}`)}
-                      onClick={() => load(activeCat, t)} title={t.name}>
-                      <LibThumb cat={activeCat} t={t}/>
-                      <span>{t.name}</span>
+                  {DIVIDER_LAYOUTS.map(l => (
+                    <div key={l.id} className={`lib-item ${!design?'disabled':''}`} draggable={!!design}
+                      onDragStart={e => e.dataTransfer.setData('text', `divider:${l.id}`)}
+                      onClick={() => design && applyDividerLayout(l)} title={l.label}>
+                      <Thumb cols={l.cols} rows={l.rows} />
+                      <span>{l.label}</span>
                     </div>
                   ))}
                 </div>
               </div>
-            ))}
-          </div>
-        </>}
+            </>}
 
-        {activeCat && tool === 'dividers' && <>
-          <div className="cfg-lib-hint">{design ? 'Select a section, then drag a layout onto the canvas to divide only that section. With nothing selected, it applies to the full frame.' : 'Load a shape first, then split it with dividers.'}</div>
-          <div className="cfg-lib-scroll">
-            <div className="lib-group">Divider Layouts</div>
-            <div className="lib-grid">
-              {DIVIDER_LAYOUTS.map(l => (
-                <div key={l.id} className={`lib-item ${!design?'disabled':''}`} draggable={!!design}
-                  onDragStart={e => e.dataTransfer.setData('text', `divider:${l.id}`)}
-                  onClick={() => design && applyDividerLayout(l)} title={l.label}>
-                  <Thumb cols={l.cols} rows={l.rows} />
-                  <span>{l.label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </>}
-
-        {activeCat === 'frame' && tool === 'designs' && <>
-          <div className="cfg-lib-hint">{design ? 'Drag a design into a section on the canvas (or click to apply to the selected section).' : 'Load a shape first, then drop designs into its sections.'}</div>
-          <div className="cfg-lib-scroll">
-            {OPENING_DESIGNS.map(g => (
-              <div key={g.group}>
-                <div className="lib-group">{g.group}</div>
-                <div className="lib-grid">
-                  {g.items.map(od => (
-                    <div key={od.id} className={`lib-item ${!design?'disabled':''}`} draggable={!!design}
-                      onDragStart={e => e.dataTransfer.setData('text', `o:${od.id}`)}
-                      onClick={() => design && applyOpening(od, selected ?? 0)}
-                      title={`${od.label} — drag into a section`}>
-                      <OpeningThumb opening={od.opening} panels={od.panels} />
-                      <span>{od.label}</span>
+            {tool === 'openings' && activeCat === 'frame' && <>
+              <div className="cfg-lib-hint">{design ? 'Drag a design into a section on the canvas (or click to apply to the selected section).' : 'Load a shape first, then drop designs into its sections.'}</div>
+              {allowedOpenings && <div className="lib-scope-row"><span>Designs valid for {FRAME_SYSTEMS[design.system]?.label || 'this system'}</span></div>}
+              <div className="cfg-lib-scroll">
+                {scopedOpeningDesigns.map(g => (
+                  <div key={g.group}>
+                    <div className="lib-group">{g.group}</div>
+                    <div className="lib-grid">
+                      {g.items.map(od => (
+                        <div key={od.id} className={`lib-item ${!design?'disabled':''}`} draggable={!!design}
+                          onDragStart={e => e.dataTransfer.setData('text', `o:${od.id}`)}
+                          onClick={() => design && applyOpening(od, selected ?? 0)}
+                          title={`${od.label} — drag into a section`}>
+                          <OpeningThumb opening={od.opening} panels={od.panels} />
+                          <span>{od.label}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  </div>
+                ))}
+              </div>
+            </>}
+
+            {tool === 'materials' && (!design
+              ? <div className="cfg-lib-hint">Load a design first — the take-off is generated from what it is made of.</div>
+              : <div className="cfg-lib-scroll cfg-tool-form">
+                <div className="takeoff-summary">
+                  <div><small>Material cost</small><b>{GHS(quote.materialCost || 0)}</b></div>
+                  <div><small>Lines</small><b>{(quote.materialRows || []).length}</b></div>
+                  <div><small>From Inventory</small><b>{quote.materialFromInventory ?? 0}</b></div>
                 </div>
-              </div>
-            ))}
-          </div>
-        </>}
-      </div>}
+                {!!quote.materialUnpriced?.length && <div className="takeoff-warn">
+                  No price yet: {quote.materialUnpriced.join(', ')} — set it in Inventory.
+                </div>}
+                {['Profile', 'Glass', 'Accessory'].map(group => {
+                  const rows = (quote.materialRows || []).filter(r => r.category === group)
+                  if (!rows.length) return null
+                  return <div className="takeoff-group" key={group}>
+                    <div className="cfg-label">{group}</div>
+                    {rows.map(r => <div className="takeoff-row" key={`${group}-${r.code}`}>
+                      <div className="takeoff-id">
+                        <b>{r.code}</b><span>{r.name}</span>
+                        <em>{r.note}{r.priceSource === 'workbook' ? ' · workbook price' : r.priceSource === 'item override' ? ' · edited on this item' : ''}</em>
+                      </div>
+                      {group === 'Accessory' ? <div className="takeoff-edit">
+                        <input type="number" min="0" step="0.01" title="Quantity" value={r.qty}
+                          onChange={e => overrideAccessory(r, { qty:e.target.value })}/>
+                        <span>{r.unit}</span>
+                        <input type="number" min="0" step="0.01" title="Unit price" value={r.unitPrice}
+                          onChange={e => overrideAccessory(r, { unitPrice:e.target.value })}/>
+                        <button className="accessory-remove" title="Remove from this item"
+                          onClick={() => overrideAccessory(r, { removed:true })}>×</button>
+                      </div> : <div className="takeoff-qty">
+                        <b>{r.qty}</b><span>{r.unit}</span><em>× {GHS(r.unitPrice)}</em>
+                      </div>}
+                      <strong>{GHS(r.total)}</strong>
+                    </div>)}
+                  </div>
+                })}
+                <div className="takeoff-add">
+                  <div className="cfg-label" style={{ marginTop:0 }}>Add a material to this item</div>
+                  <div className="takeoff-add-grid">
+                    <input placeholder="Code" value={extraMaterial.code}
+                      onChange={e => setExtraMaterial(m => ({ ...m, code:e.target.value }))}/>
+                    <input placeholder="Description" value={extraMaterial.name}
+                      onChange={e => setExtraMaterial(m => ({ ...m, name:e.target.value }))}/>
+                    <input type="number" min="0" placeholder="Qty" value={extraMaterial.qty}
+                      onChange={e => setExtraMaterial(m => ({ ...m, qty:e.target.value }))}/>
+                    <input type="number" min="0" placeholder="Unit price" value={extraMaterial.unitPrice}
+                      onChange={e => setExtraMaterial(m => ({ ...m, unitPrice:e.target.value }))}/>
+                  </div>
+                  <button className="btn btn-ghost btn-sm" disabled={!extraMaterial.code.trim()}
+                    onClick={addExtraMaterial}>Add to this item</button>
+                  <div className="cut-note">Item-only. A part every job uses belongs in Inventory instead.</div>
+                </div>
+              </div>)}
 
-      {/* ── CANVAS ── */}
-      <div className="cfg-stage">
-        <div className="cfg-stage-head">
-          <div>
-            <div className="t">{design ? `${design.name}${design.ref ? ` · Ref: ${design.ref}` : ''}${design.qty > 1 ? ` · Qty: ${design.qty}` : ''}` : 'New Design'}</div>
-            <div className="s">{design
-              ? `${CATEGORIES[design.category]?.label || 'Frame'} · ${design.width} × ${design.height} mm · ${quote.sections} ${design.category === 'frameless' ? 'panel(s)' : 'section(s)'}`
-              : 'Empty canvas — choose a product family, then drop a design'}</div>
-          </div>
-          <div className="flex gap-sm">
-            {!showProps && <button className="btn btn-gold btn-sm cfg-save-action" onClick={onSaveDesign}><IconCheck/> Save design</button>}
-            <div className="panel-toggle" title="Show / hide the side panels — free up space for the drawing">
-              <button className={showLib ? 'on' : ''} onClick={() => setShowLib(v => !v)}>Library</button>
-              <button className={showProps ? 'on' : ''} onClick={() => setShowProps(v => !v)}>Properties</button>
-            </div>
-            <button className="btn btn-ghost btn-sm cfg-undo" disabled={!undoStack.current.length} onClick={undo} title="Undo the last design change">↶ Undo</button>
-            <button className="btn btn-ghost btn-sm cfg-focus-toggle" onClick={() => setFocusMode(v => { const next = !v; if (next) setPan({ x:0, y:0 }); return next })} title={focusMode ? 'Exit full-screen editor (Esc)' : 'Open the full-screen editor'}>
-              {focusMode ? '× Exit full screen' : '⛶ Full screen'}
-            </button>
-            <button className="btn btn-ghost btn-sm" onClick={() => { undoStack.current = []; designRef.current = null; setFocusMode(false); setDesign(null); setSelected(null); refreshSaved() }}>‹ Projects</button>
-            <button className="btn btn-ghost btn-sm" onClick={newDesign}><IconPlus/> New item</button>
-          </div>
-        </div>
-
-        <div ref={wrapRef}
-          className={`cfg-canvas-wrap ${dragOver?'drop-over':''}`}
-          onDragOver={e => { e.preventDefault(); setDragOver(true) }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={onDrop}>
-          {focusMode && <div className={`focus-canvas-hint ${dragOver ? 'on' : ''}`}>Drag the drawing here to reposition it</div>}
-          {view === '2d'
-            ? (design.category === 'frameless'
-                ? <FramelessCanvas design={design} stageW={dims.w} stageH={dims.h} pan={pan} onPanChange={setPan} selected={selected} onSelect={setSelected} onDividerMove={onDividerMove} />
-                : design.category === 'curtainwall'
-                  ? <CurtainWallCanvas design={design} stageW={dims.w} stageH={dims.h} pan={pan} onPanChange={setPan} selected={selected} onSelect={setSelected} onDividerMove={onDividerMove} />
-                  : <DesignCanvas design={design} stageW={dims.w} stageH={dims.h} pan={pan} onPanChange={setPan} selected={selected} onSelect={setSelected} onDividerMove={onDividerMove} />)
-            : <div style={{ width: dims.w, height: dims.h }}>
-                <Suspense fallback={<div className="drop-zone"><div className="dz-title">Loading 3D…</div></div>}>
-                  {design.category === 'frameless'
-                    ? <Frameless3D design={design} scene={wall} />
-                    : <Design3D design={design} wall={wall} onDesignPatch={patch} fabricationDefault />}
-                </Suspense>
-              </div>}
-
-          {design && (design.category === 'frame' || design.category === 'frameless') && (
-            <div className="view-switch">
-              <button className={view==='2d'?'on':''} onClick={() => setView('2d')}>2D</button>
-              <button className={view==='3d'&&!wall?'on':''} onClick={() => { setView('3d'); setWall(false) }}>3D</button>
-              <button className={view==='3d'&&wall?'on':''} onClick={() => { setView('3d'); setWall(true) }}>
-                {design.category === 'frameless' ? 'Real' : 'Wall'}</button>
-            </div>
-          )}
-        </div>
-
-        {design && (
-          <div className="cfg-tags">
-            <span className="chip" style={{ background:CATEGORIES[design.category]?.accent, color:'#fff' }}>{CATEGORIES[design.category]?.label}</span>
-            <span className="chip">{design.category === 'frameless' ? (FL_GLASS[design.glassId]?.label || '') : FRAMES[design.frame].label}</span>
-            <span className="chip">{quote.area} m²</span>
-            <span className="chip">{quote.sections} {design.category === 'frameless' ? 'panel(s)' : 'section(s)'}</span>
-            {design.category !== 'frameless' && <span className="chip">{quote.profileLen} m profile</span>}
-            {design.category === 'frameless' && quote.totalKg != null && <span className="chip">{quote.totalKg} kg glass</span>}
-            {selected!=null && <span className="chip on">{design.category === 'curtainwall' ? 'Bay' : design.category === 'frameless' ? 'Panel' : 'Section'} {selected+1} selected</span>}
-          </div>
-        )}
-      </div>
-
-      {/* ── PROPERTIES + QUOTE ── */}
-      {showProps && <div className="cfg-props">
-        <div className="cfg-save-bar">
-          <div><b>Technical design</b><span>Save measurements and configuration changes</span></div>
-          <button className="btn btn-gold btn-sm" onClick={onSaveDesign}><IconCheck/> Save design</button>
-        </div>
-        <div className="cfg-panel">
-          <h4><IconCube style={{ width:16, height:16, color:'var(--navy-600)' }} /> <span><small className="panel-step">STEP 2</small>Design details</span>
-            <button className="panel-x" title="Hide this panel — more room to draw" onClick={() => setShowProps(false)}>»</button>
-          </h4>
-          <div className="cfg-body">
-            {!design && <div className="prop-empty">Drop a design on the canvas and its properties will appear here.</div>}
-
-            {design && <>
-              <div className="cfg-panel-intro">
-                <b>Set the essential details first</b>
-                <span>Choose a section on the drawing to edit its opening, glass and dimensions. Advanced production information is kept below.</span>
-              </div>
-              <div className="cfg-label" style={{ marginTop:0 }}>Project Item</div>
-              {activeProject && <div className="project-context">{activeProject.project_number} · {activeProject.name}</div>}
-              <div className="ref-row">
-                <input placeholder="Design ref (e.g. w3)" value={design.ref} onChange={e => patch({ ref:e.target.value })}/>
-                <input type="number" min={1} max={999} title="Quantity" value={design.qty}
-                  onChange={e => patch({ qty:Math.max(1, +e.target.value||1) })}/>
-              </div>
-              <input className="loc-input" placeholder="Location (e.g. First floor, master bedroom)"
-                value={design.location} onChange={e => patch({ location:e.target.value })}/>
-
-              {design.category === 'frame' && <>
-                <div className="cfg-label">Measurement Record</div>
+            {tool === 'measure' && (!design
+              ? <div className="cfg-lib-hint">Load a design first, then record how it was measured on site.</div>
+              : <div className="cfg-lib-scroll cfg-tool-form">
+                <div className="cfg-label" style={{ marginTop:0 }}>Measurement Record</div>
                 <select className="cfg-select" value={design.measurementStatus || 'preliminary'} onChange={e => patch({ measurementStatus:e.target.value })}>
                   <option value="preliminary">Preliminary measurement — for quotation</option>
                   <option value="final">Final measurement — production basis</option>
@@ -995,7 +1341,7 @@ export default function Configurator() {
                 </select>
                 <select className="cfg-select" value={design.measurementSource || ''} onChange={e => patch({ measurementSource:e.target.value })}>
                   <option value="">Measurement source</option>
-                  <option value="sofaamy-site-rep">Sofaamy site representative</option>
+                  <option value="sofaamy-site-rep">Site representative</option>
                   <option value="client">Client-provided</option>
                   <option value="architect-drawing">Architect/drawing</option>
                 </select>
@@ -1029,9 +1375,243 @@ export default function Configurator() {
                   </div>}
                   <div className="site-image-count">{(design.siteImages || []).length}/12 attached · save the project to keep them</div>
                 </div>
-              </>}
+              </div>)}
 
-              <div className="cfg-label">Overall Size</div>
+            {tool === 'pieces' && (!design
+              ? <div className="cfg-lib-hint">Load a design first, then add the special pieces the factory must cut.</div>
+              : <div className="cfg-lib-scroll cfg-tool-form">
+                <div className="cfg-label" style={{ marginTop:0 }}>Production piece additions</div>
+                <div className="cut-note">Add a curve, template, special member, or any site-specific piece. Measurements are per unit and flow into the cutting list and work order.</div>
+                {(design.customCutPieces || []).map((piece, index) => (
+                  <div className="piece-edit-row" key={`${piece.position}-${index}`}>
+                    <div className="piece-row-head">
+                      <b>{piece.position || `Special piece ${index + 1}`}</b>
+                      <button className="accessory-remove" title="Remove production piece" onClick={() => removeCustomPiece(index)}>×</button>
+                    </div>
+                    <div className="piece-field-grid">
+                      <label className="piece-field wide"><span>Piece / position</span><input placeholder="e.g. F1 curved head" value={piece.position || ''} onChange={e => updateCustomPiece(index, { position:e.target.value })}/></label>
+                      <label className="piece-field wide"><span>Profile member</span><select value={piece.profile || 'frame_outer'} onChange={e => updateCustomPiece(index, { profile:e.target.value })}>
+                        {CUT_PROFILE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                      </select></label>
+                      <label className="piece-field"><span>Input length (mm)</span><input type="number" min="0" placeholder="0" value={piece.sourceMm || ''} onChange={e => updateCustomPiece(index, { sourceMm:e.target.value })}/></label>
+                      <label className="piece-field"><span>Adjustment (mm)</span><input type="number" placeholder="0" value={piece.adjustmentMm ?? 0} onChange={e => updateCustomPiece(index, { adjustmentMm:e.target.value })}/></label>
+                      <label className="piece-field"><span>Quantity</span><input type="number" min="1" value={piece.qty || 1} onChange={e => updateCustomPiece(index, { qty:e.target.value })}/></label>
+                      <label className="piece-field"><span>Cut type</span><select value={piece.cuts || 'SPECIAL / TEMPLATE'} onChange={e => updateCustomPiece(index, { cuts:e.target.value })}>
+                        <option>90°/90°</option><option>45°/45°</option><option>CURVE / TEMPLATE</option><option>SPECIAL / TEMPLATE</option>
+                      </select></label>
+                    </div>
+                    <label className="piece-field wide"><span>Note / radius / template reference</span><input value={piece.note || ''} onChange={e => updateCustomPiece(index, { note:e.target.value })}/></label>
+                  </div>
+                ))}
+                <div className="piece-add-row">
+                  <div className="piece-row-head"><b>Add a special piece</b></div>
+                  <div className="piece-field-grid">
+                    <label className="piece-field wide"><span>Piece / position</span><input placeholder="e.g. F1 curved head" value={customPiece.position} onChange={e => setCustomPiece(p => ({ ...p, position:e.target.value }))}/></label>
+                    <label className="piece-field wide"><span>Profile member</span><select value={customPiece.profile} onChange={e => setCustomPiece(p => ({ ...p, profile:e.target.value }))}>
+                      {CUT_PROFILE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    </select></label>
+                    <label className="piece-field"><span>Input length (mm)</span><input type="number" min="0" placeholder="0" value={customPiece.sourceMm} onChange={e => setCustomPiece(p => ({ ...p, sourceMm:e.target.value }))}/></label>
+                    <label className="piece-field"><span>Adjustment (mm)</span><input type="number" placeholder="0" value={customPiece.adjustmentMm} onChange={e => setCustomPiece(p => ({ ...p, adjustmentMm:e.target.value }))}/></label>
+                    <label className="piece-field"><span>Quantity</span><input type="number" min="1" value={customPiece.qty} onChange={e => setCustomPiece(p => ({ ...p, qty:e.target.value }))}/></label>
+                    <label className="piece-field"><span>Cut type</span><select value={customPiece.cuts} onChange={e => setCustomPiece(p => ({ ...p, cuts:e.target.value }))}>
+                      <option>90°/90°</option><option>45°/45°</option><option>CURVE / TEMPLATE</option><option>SPECIAL / TEMPLATE</option>
+                    </select></label>
+                  </div>
+                  <label className="piece-field wide"><span>Note / radius / template reference</span><input value={customPiece.note} onChange={e => setCustomPiece(p => ({ ...p, note:e.target.value }))}/></label>
+                  <button className="btn btn-ghost btn-sm piece-add-action" onClick={addCustomPiece}>Add production piece</button>
+                </div>
+              </div>)}
+          </div>
+        </div>
+      </div>}
+
+      {/* ── CANVAS ── */}
+      <div className="cfg-stage">
+        <div className="cfg-stage-head">
+          {/* the design card: reference, quantity and location live here with
+              their own pencil, not in Properties */}
+          <div className="cfg-ident">
+            <div>
+              <div className="t">{design ? design.name : 'New Design'}</div>
+              <div className="s">{design
+                ? `Ref: ${design.ref || 'not set'} · Qty: ${design.qty} · ${design.width} × ${design.height} mm${design.location ? ` · ${design.location}` : ''}`
+                : 'Empty canvas — choose a product family, then drop a design'}</div>
+            </div>
+            {design && <button className={`cfg-ident-pen ${editIdent ? 'on' : ''}`} onClick={() => setEditIdent(v => !v)}
+              title="Edit reference, quantity and location" aria-label="Edit reference, quantity and location">✎</button>}
+          </div>
+          {/* window controls only — save, minimise the tool panels, full screen,
+              close. Everything else belongs on the drawing surface itself. */}
+          <div className="cfg-win-actions">
+            <button className="btn btn-gold btn-sm cfg-save-action" onClick={onSaveDesign}><IconCheck/> Save</button>
+            <button className="cfg-win" title="Undo the last design change" aria-label="Undo"
+              disabled={!undoStack.current.length} onClick={undo}>↶</button>
+            <button className="cfg-win" title={showLib || showProps ? 'Hide the side panels' : 'Show the design tools'}
+              aria-label="Minimise the side panels"
+              onClick={() => { if (showLib || showProps) { setShowLib(false); setShowProps(false) } else setShowLib(true) }}>–</button>
+            <button className="cfg-win" title={focusMode ? 'Exit full screen (Esc)' : 'Full screen'} aria-label="Full screen"
+              onClick={() => setFocusMode(v => { const next = !v; if (next) setPan({ x:0, y:0 }); return next })}>{focusMode ? '⤡' : '⛶'}</button>
+            <button className="cfg-win close" title="Close this drawing" aria-label="Close this drawing"
+              onClick={() => { undoStack.current = []; designRef.current = null; setFocusMode(false); setDesign(null); setSelected(null); refreshSaved() }}>✕</button>
+          </div>
+        </div>
+
+        {design && editIdent && <div className="cfg-ident-edit">
+          <label>Design ref
+            <input autoFocus placeholder="Window 1, Door 1 or site reference"
+              value={design.ref} onChange={e => patch({ ref:e.target.value })}/>
+          </label>
+          <label>Qty
+            <input type="number" min={1} max={999} value={design.qty}
+              onChange={e => patch({ qty:Math.max(1, +e.target.value||1) })}/>
+          </label>
+          <label>Location
+            <input placeholder="First floor, master bedroom"
+              value={design.location} onChange={e => patch({ location:e.target.value })}/>
+          </label>
+          <button className="cfg-win" title="Done" aria-label="Done" onClick={() => setEditIdent(false)}>✓</button>
+        </div>}
+
+        {/* A2: every item of the open project, one click apart */}
+        {activeProject && (
+          <div className="cfg-item-rail">
+            <span className="rail-label">{projectItems.length} item{projectItems.length === 1 ? '' : 's'} in this project</span>
+            <div className="rail-items">
+              {projectItems.map((item, i) => {
+                const active = design?.savedItemId && String(design.savedItemId) === String(item.id)
+                const kind = itemKind(item)
+                const kindNumber = projectItems.slice(0, i + 1).filter(row => itemKind(row) === kind).length
+                const savedItem = saved.find(row => String(row.id) === String(item.id))
+                const complete = savedItem ? designIssues({ ...savedItem.design, ref:savedItem.ref }).length === 0 : false
+                return (
+                  <button key={item.id} className={`rail-item ${active ? 'on' : ''}`} title={`${item.name}${item.location ? ` · ${item.location}` : ''}`}
+                    onClick={() => switchToItem(item)}>
+                    <b>{i + 1}</b><span><strong>{kind} {kindNumber}</strong><small>{item.ref || item.name}</small></span>
+                    <i className={complete ? 'complete' : 'needs-details'} title={complete ? 'Item details complete' : 'Item needs required details'}/>
+                  </button>
+                )
+              })}
+              {design && !design.savedItemId && (
+                <button className="rail-item on unsaved" title="Saved automatically when you switch item or press Save design">
+                  <b>{projectItems.length + 1}</b><span>{design.ref || 'New item'}</span>
+                </button>
+              )}
+              <div className="rail-add-wrap">
+                <button className="rail-add" onClick={() => setShowAddItem(v => {
+                  const next = !v
+                  // open scoped to what is being worked on (a sliding-window
+                  // project offers sliding WINDOWS first, not doors)
+                  if (next) {
+                    const groupName = design ? groupForDesign(design) : null
+                    const g = groupName ? (LIBS[activeCat || 'frame'] || []).find(x => x.group === groupName) : null
+                    const kind = groupKinds(g) ? (kindOfTemplate(design) || 'Other designs') : null
+                    setAddPath({ group:groupName, kind })
+                  }
+                  return next
+                })}>{showAddItem ? '× Close' : '+ Add item'}</button>
+                {showAddItem && (() => {
+                  const groupsAll = LIBS[activeCat || 'frame'] || []
+                  const g = addPath.group ? groupsAll.find(x => x.group === addPath.group) : null
+                  const kinds = g ? groupKinds(g) : null
+                  return <div className="rail-add-pop">
+                    {g && (!kinds || addPath.kind) ? (() => {
+                      const items = kinds ? itemsOfKind(g, addPath.kind) : g.items
+                      return <>
+                        <div className="rail-add-head">Add another <b>{kinds ? `${g.group} · ${addPath.kind}` : g.group}</b> item — current edits are saved automatically.</div>
+                        <div className="rail-add-grid">
+                          {items.map(t => (
+                            <button key={t.id} className={`rail-add-item ${libScopeSystem && t.system === libScopeSystem ? 'same-system' : ''}`}
+                              onClick={() => quickAddItem(t.id)}>
+                              <LibThumb cat={activeCat || 'frame'} t={t}/><span>{t.name}</span>
+                            </button>
+                          ))}
+                        </div>
+                        <button className="lib-back rail-add-back" onClick={() => kinds ? setAddPath(p => ({ ...p, kind:null })) : setAddPath({ group:null, kind:null })}>
+                          ‹ {kinds ? `${g.group} — windows or doors` : 'Other categories'}</button>
+                      </>
+                    })() : g && kinds ? <>
+                      <div className="rail-add-head"><b>{g.group}</b> — windows or doors?</div>
+                      <div className="lib-group-list">
+                        {kinds.map(k => (
+                          <button key={k} className="lib-group-row" onClick={() => setAddPath(p => ({ ...p, kind:k }))}>
+                            <b>{k}</b><span>{itemsOfKind(g, k).length} design{itemsOfKind(g, k).length === 1 ? '' : 's'}</span><em>›</em>
+                          </button>
+                        ))}
+                      </div>
+                      <button className="lib-back rail-add-back" onClick={() => setAddPath({ group:null, kind:null })}>‹ Other categories</button>
+                    </> : <>
+                      <div className="rail-add-head">Choose a category, then the item to add — current edits are saved automatically.</div>
+                      <div className="lib-group-list">
+                        {groupsAll.map(x => (
+                          <button key={x.group} className="lib-group-row" onClick={() => setAddPath({ group:x.group, kind:null })}>
+                            <b>{x.group}</b><span>{x.items.length} design{x.items.length === 1 ? '' : 's'}</span><em>›</em>
+                          </button>
+                        ))}
+                      </div>
+                    </>}
+                    <div className="rail-add-foot">Need a different product family? Open the Products panel and go back to all families.</div>
+                  </div>
+                })()}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div ref={wrapRef}
+          className={`cfg-canvas-wrap ${dragOver?'drop-over':''}`}
+          onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}>
+          {focusMode && <div className={`focus-canvas-hint ${dragOver ? 'on' : ''}`}>Drag the drawing here to reposition it</div>}
+          {view === '2d'
+            ? (design.category === 'frameless'
+                ? <FramelessCanvas design={design} stageW={dims.w} stageH={dims.h} pan={pan} onPanChange={setPan} selected={selected} onSelect={selectDesignPart} onDividerMove={onDividerMove} setDim={setDim} setSectionDim={setSectionDim} />
+                : design.category === 'curtainwall'
+                  ? <CurtainWallCanvas design={design} stageW={dims.w} stageH={dims.h} pan={pan} onPanChange={setPan} selected={selected} onSelect={selectDesignPart} onDividerMove={onDividerMove} setDim={setDim} setSectionDim={setSectionDim} />
+                  : <DesignCanvas design={design} stageW={dims.w} stageH={dims.h} pan={pan} onPanChange={setPan} selected={selected} onSelect={selectDesignPart} onDividerMove={onDividerMove} setDim={setDim} setSectionDim={setSectionDim} />)
+            : <div style={{ width: dims.w, height: dims.h }}>
+                <Suspense fallback={<div className="drop-zone"><div className="dz-title">Loading 3D…</div></div>}>
+                  {design.category === 'frameless'
+                    ? <Frameless3D design={design} scene={wall} />
+                    : <Design3D design={design} wall={wall} onDesignPatch={patch} fabricationDefault />}
+                </Suspense>
+              </div>}
+
+          {design && (design.category === 'frame' || design.category === 'frameless') && (
+            <div className="view-switch">
+              <button className={view==='2d'?'on':''} onClick={() => setView('2d')}>2D</button>
+              <button className={view==='3d'&&!wall?'on':''} onClick={() => { setView('3d'); setWall(false) }}>3D</button>
+              <button className={view==='3d'&&wall?'on':''} onClick={() => { setView('3d'); setWall(true) }}>
+                {design.category === 'frameless' ? 'Real' : 'Wall'}</button>
+            </div>
+          )}
+        </div>
+
+        {design && (
+          <div className="cfg-tags">
+            <span className="chip" style={{ background:CATEGORIES[design.category]?.accent, color:'#fff' }}>{CATEGORIES[design.category]?.label}</span>
+            <span className="chip">{design.category === 'frameless' ? (FL_GLASS[design.glassId]?.label || '') : FRAMES[design.frame].label}</span>
+            <span className="chip">{quote.area} m²</span>
+            <span className="chip">{quote.sections} {design.category === 'frameless' ? 'panel(s)' : 'section(s)'}</span>
+            {design.category !== 'frameless' && <span className="chip">{quote.profileLen} m profile</span>}
+            {design.category === 'frameless' && quote.totalKg != null && <span className="chip">{quote.totalKg} kg glass</span>}
+            {selected!=null && <span className="chip on">{design.category === 'curtainwall' ? 'Bay' : design.category === 'frameless' ? 'Panel' : 'Section'} {selected+1} selected</span>}
+          </div>
+        )}
+      </div>
+
+      {/* ── PROPERTIES + QUOTE ── */}
+      {showProps && <div className="cfg-props">
+        <div className="cfg-panel">
+          <h4><span>{selected == null ? 'Design details' : `${design?.category === 'curtainwall' ? 'Bay' : design?.category === 'frameless' ? 'Panel' : 'Section'} ${selected + 1}`}</span>
+            <button className="panel-x" title="Close properties" aria-label="Close properties"
+              onClick={() => { setShowProps(false); setSelected(null) }}>×</button>
+          </h4>
+          <div className="cfg-body">
+            {!design && <div className="prop-empty">Drop a design on the canvas and its properties will appear here.</div>}
+
+            {design && <>
+              <div className="cfg-label" style={{ marginTop:0 }}>Overall Size</div>
               {[['width','Width',400,design.category==='curtainwall'?8000:6000],['height','Height',400,design.category==='curtainwall'?6000:4000]].map(([k,lbl,min,max]) => (
                 <div className="dim-row" key={k}>
                   <label>{lbl}</label>
@@ -1066,7 +1646,7 @@ export default function Configurator() {
                   </div>
                   <div className="prop-sub">Opening Type</div>
                   <div className="seg">
-                    {Object.keys(OPENINGS).map(o => (
+                    {Object.keys(OPENINGS).filter(o => openingAllowed(o) || sel.opening === o).map(o => (
                       <button key={o} className={sel.opening===o?'on':''} onClick={() => setCell('opening', o)}>{OPENINGS[o].label}</button>
                     ))}
                   </div>
@@ -1082,19 +1662,6 @@ export default function Configurator() {
                     <button className="btn btn-ghost btn-sm" onClick={() => applyAll('glass', sel.glass)}>Apply glass to all</button>
                   </div>
                 </> : <div className="prop-empty">Click a section on the canvas to edit its glass and opening.</div>}
-              </div>}
-
-              {fabrication?.fabrication && <div className="trialco-formula-card" style={{ marginTop:12 }}>
-                <div className="cfg-label" style={{ margin:0 }}>Trialco Formula Check</div>
-                <div className="cut-note" style={{ marginTop:4 }}>{fabrication.fabrication.status}</div>
-                <div className="trialco-formula-grid" style={{ marginTop:8 }}>
-                  <div><span>Frame</span><b>{fabrication.fabrication.frame.wMm} × {fabrication.fabrication.frame.hMm} mm</b></div>
-                  <div><span>Leaf × 2</span><b>{fabrication.fabrication.leaf.wMm} × {fabrication.fabrication.leaf.hMm} mm</b></div>
-                  <div><span>Net × {fabrication.fabrication.net.qty}</span><b>{fabrication.fabrication.net.wMm} × {fabrication.fabrication.net.hMm} mm</b></div>
-                  <div><span>Interlock × {fabrication.fabrication.interlock.qty}</span><b>{fabrication.fabrication.interlock.lengthMm} mm long</b></div>
-                  <div><span>Glass × {fabrication.fabrication.glass.qty}</span><b>{fabrication.fabrication.glass.wMm} × {fabrication.fabrication.glass.hMm} mm</b></div>
-                </div>
-                <div className="cut-note" style={{ marginTop:8 }}>Frame W ÷ 2 · Frame H − 70 · Net H − 10 · Glass W/H − 112</div>
               </div>}
 
               {/* ── FRAME properties ── */}
@@ -1113,23 +1680,20 @@ export default function Configurator() {
                       <option value={design.system}>Existing saved system ({design.system})</option>
                       {FRAME_SYSTEM_ORDER.map(k => <option key={k} value={k}>{FRAME_SYSTEMS[k].label}</option>)}
                     </select>}
-                <div className="cut-note" style={{ marginTop:8 }}>
-                  {frameCatalog.productTypes.length
-                    ? `${frameSystemSummary(frameCatalog.id)} · 5800 mm stock references`
-                    : 'Legacy saved design — select a current Sofaamy system to use the supplied catalogue.'}
-                  <br/><span style={{ color:'var(--ink-3)' }}>Catalogue references are loaded. Per-opening consumption and cutting rules remain pending confirmation.</span>
-                </div>
-                {frameCatalog.profiles.length > 0 && <details style={{ marginTop:8 }}>
-                  <summary className="prop-sub" style={{ cursor:'pointer' }}>View catalogue parts</summary>
-                  <div style={{ maxHeight:170, overflow:'auto', marginTop:6 }}>
-                    {frameCatalog.profiles.map(p => <div key={`p-${p.code}`} className="q-line">
-                      <div><div className="k">{p.name}</div><div className="d">{p.code} · {p.lengthMm} mm · {p.colours}</div></div>
-                    </div>)}
-                    {frameCatalog.accessories.map(a => <div key={`a-${a.code}-${a.name}`} className="q-line">
-                      <div><div className="k">{a.name}</div><div className="d">{a.code}{a.note ? ` · ${a.note}` : ''}</div></div>
-                    </div>)}
+                {systemVariants.map(v => {
+                  const chosen = variantValue(design, recipeFor(design.system), v.key)
+                  return <div key={v.key}>
+                    <div className="cfg-label">{v.label}</div>
+                    <div className="seg">
+                      {v.options.map(o => {
+                        const part = resolveRole({ ...design, [v.key]:o.value }, roleForVariant(design.system, v.key))
+                        return <button key={o.value} className={chosen === o.value ? 'on' : ''}
+                          title={part?.code ? `${part.code} · ₵${priceFor(part.code).unitPrice}/bar` : ''}
+                          onClick={() => patch({ [v.key]:o.value })}>{o.label}</button>
+                      })}
+                    </div>
                   </div>
-                </details>}
+                })}
 
                 <div className="cfg-label">Surface Finish</div>
                 <select className="cfg-select" value={design.finishType} onChange={e => patch({ finishType:e.target.value })}>
@@ -1137,9 +1701,13 @@ export default function Configurator() {
                 </select>
                 <div className="cfg-label">Profile / colour</div>
                 <div className="swatches">
-                  {Object.entries(FRAMES).map(([k,v]) => (
-                    <div key={k} title={v.label} className={`swatch ${design.frame===k?'on':''}`} style={{ background:v.color }} onClick={() => patch({ frame:k, customFrameColor:'' })}/>
+                  {systemColours.map(k => (
+                    <div key={k} title={FRAMES[k].label} className={`swatch ${design.frame===k?'on':''}`}
+                      style={{ background:FRAMES[k].color }} onClick={() => patch({ frame:k, customFrameColor:'' })}/>
                   ))}
+                </div>
+                <div className="cut-note" style={{ marginTop:6 }}>
+                  {systemColours.map(k => FRAMES[k].label).join(' · ')} — stocked for {frameCatalog.label}
                 </div>
 
               </>}
@@ -1282,95 +1850,7 @@ export default function Configurator() {
           </div>
         </div>
 
-        {design && <>
-          <div className="cfg-panel" style={{ marginTop:16 }}>
-            <h4><IconLayers style={{ width:16, height:16, color:'var(--navy-600)' }} /> <span><small className="panel-step">TECHNICAL</small>Production information</span></h4>
-            <div className="cfg-body" style={{ paddingTop:6 }}>
-              {design.category === 'frame' && <div className="accessory-editor">
-                <div className="flex between items-center">
-                  <div>
-                    <div className="cfg-label" style={{ margin:0 }}>Project accessories</div>
-                    <div className="cut-note">Derived from the selected system and opening details. Edit this project without changing the master catalogue.</div>
-                  </div>
-                  <button className="btn btn-ghost btn-sm" onClick={() => patch({ accessoryOverrides:[] })}>Reset defaults</button>
-                </div>
-                <div className="accessory-list">
-                  {accessoryRows.map(a => (
-                    <div className="accessory-row" key={a.code}>
-                      <div className="accessory-main">
-                        <b>{a.name}</b><span>{a.code} · {a.rule}{a.edited ? ' · edited' : ''}</span>
-                      </div>
-                      <input type="number" min="0" step="1" value={a.qty}
-                        onChange={e => accessoryOverride(a, { qty:Math.max(0, +e.target.value || 0), removed:(+e.target.value || 0) <= 0 })}/>
-                      <button className="accessory-remove" title="Remove from this project" onClick={() => accessoryOverride(a, { qty:0, removed:true })}>×</button>
-                    </div>
-                  ))}
-                </div>
-                <select className="cfg-select" value="" onChange={e => addCatalogueAccessory(e.target.value)}>
-                  <option value="">+ Add catalogue accessory</option>
-                  {(frameCatalog?.accessories || []).filter(a => !accessoryRows.some(r => r.code === a.code)).map(a =>
-                    <option key={`${a.code}-${a.name}`} value={a.code}>{a.name} ({a.code})</option>)}
-                </select>
-                <div className="accessory-custom-row">
-                  <input placeholder="Custom accessory" value={customAccessory.name} onChange={e => setCustomAccessory(x => ({ ...x, name:e.target.value }))}/>
-                  <input placeholder="Code" value={customAccessory.code} onChange={e => setCustomAccessory(x => ({ ...x, code:e.target.value }))}/>
-                  <input type="number" min="1" value={customAccessory.qty} onChange={e => setCustomAccessory(x => ({ ...x, qty:e.target.value }))}/>
-                  <button className="btn btn-ghost btn-sm" onClick={addCustomAccessory}>Add</button>
-                </div>
-              </div>}
-              {design.category === 'frame' && <div className="piece-editor">
-                <div className="cfg-label" style={{ margin:0 }}>Production piece additions</div>
-                <div className="cut-note">Add a curve, template, special member, or any site-specific piece. Measurements are per unit and flow into the cutting list and work order.</div>
-                {(design.customCutPieces || []).map((piece, index) => (
-                  <div className="piece-edit-row" key={`${piece.position}-${index}`}>
-                    <div className="piece-row-head">
-                      <b>{piece.position || `Special piece ${index + 1}`}</b>
-                      <button className="accessory-remove" title="Remove production piece" onClick={() => removeCustomPiece(index)}>×</button>
-                    </div>
-                    <div className="piece-field-grid">
-                      <label className="piece-field wide"><span>Piece / position</span><input placeholder="e.g. F1 curved head" value={piece.position || ''} onChange={e => updateCustomPiece(index, { position:e.target.value })}/></label>
-                      <label className="piece-field wide"><span>Profile member</span><select value={piece.profile || 'frame_outer'} onChange={e => updateCustomPiece(index, { profile:e.target.value })}>
-                        {CUT_PROFILE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                      </select></label>
-                      <label className="piece-field"><span>Input length (mm)</span><input type="number" min="0" placeholder="0" value={piece.sourceMm || ''} onChange={e => updateCustomPiece(index, { sourceMm:e.target.value })}/></label>
-                      <label className="piece-field"><span>Adjustment (mm)</span><input type="number" placeholder="0" value={piece.adjustmentMm ?? 0} onChange={e => updateCustomPiece(index, { adjustmentMm:e.target.value })}/></label>
-                      <label className="piece-field"><span>Quantity</span><input type="number" min="1" value={piece.qty || 1} onChange={e => updateCustomPiece(index, { qty:e.target.value })}/></label>
-                      <label className="piece-field"><span>Cut type</span><select value={piece.cuts || 'SPECIAL / TEMPLATE'} onChange={e => updateCustomPiece(index, { cuts:e.target.value })}>
-                        <option>90°/90°</option><option>45°/45°</option><option>CURVE / TEMPLATE</option><option>SPECIAL / TEMPLATE</option>
-                      </select></label>
-                    </div>
-                    <label className="piece-field wide"><span>Note / radius / template reference</span><input value={piece.note || ''} onChange={e => updateCustomPiece(index, { note:e.target.value })}/></label>
-                  </div>
-                ))}
-                <div className="piece-add-row">
-                  <div className="piece-row-head"><b>Add a special piece</b></div>
-                  <div className="piece-field-grid">
-                    <label className="piece-field wide"><span>Piece / position</span><input placeholder="e.g. F1 curved head" value={customPiece.position} onChange={e => setCustomPiece(p => ({ ...p, position:e.target.value }))}/></label>
-                    <label className="piece-field wide"><span>Profile member</span><select value={customPiece.profile} onChange={e => setCustomPiece(p => ({ ...p, profile:e.target.value }))}>
-                      {CUT_PROFILE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                    </select></label>
-                    <label className="piece-field"><span>Input length (mm)</span><input type="number" min="0" placeholder="0" value={customPiece.sourceMm} onChange={e => setCustomPiece(p => ({ ...p, sourceMm:e.target.value }))}/></label>
-                    <label className="piece-field"><span>Adjustment (mm)</span><input type="number" placeholder="0" value={customPiece.adjustmentMm} onChange={e => setCustomPiece(p => ({ ...p, adjustmentMm:e.target.value }))}/></label>
-                    <label className="piece-field"><span>Quantity</span><input type="number" min="1" value={customPiece.qty} onChange={e => setCustomPiece(p => ({ ...p, qty:e.target.value }))}/></label>
-                    <label className="piece-field"><span>Cut type</span><select value={customPiece.cuts} onChange={e => setCustomPiece(p => ({ ...p, cuts:e.target.value }))}>
-                      <option>90°/90°</option><option>45°/45°</option><option>CURVE / TEMPLATE</option><option>SPECIAL / TEMPLATE</option>
-                    </select></label>
-                  </div>
-                  <label className="piece-field wide"><span>Note / radius / template reference</span><input value={customPiece.note} onChange={e => setCustomPiece(p => ({ ...p, note:e.target.value }))}/></label>
-                  <button className="btn btn-ghost btn-sm piece-add-action" onClick={addCustomPiece}>Add production piece</button>
-                </div>
-              </div>}
-            </div>
-          </div>
-        </>}
       </div>}
-
-      {focusMode && <div className="cfg-splitter" role="separator" aria-label="Resize design details and canvas" tabIndex="0"
-        onMouseDown={event => {
-          event.preventDefault()
-          resizeRef.current = { x:event.clientX, width:detailsWidth }
-          setResizing(true)
-        }} />}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

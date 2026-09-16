@@ -1,11 +1,13 @@
+import { useState } from 'react'
 import { Stage, Layer, Rect, Line, Text, Group, Arrow } from 'react-konva'
 import { CW_CELL_TYPES, FRAMES } from '../../lib/products.js'
 import { MIN_SECTION_MM, designLayout } from '../../lib/designs.js'
+import DimEditOverlay from './DimEditOverlay.jsx'
 
 // Curtain wall elevation — stick system: CONTINUOUS mullions over
 // transoms (the reverse of a window frame), pressure-cap grid look,
 // vision / spandrel / vent cells. Dividers drag like the frame canvas.
-export default function CurtainWallCanvas({ design, stageW, stageH, pan = { x:0, y:0 }, onPanChange, selected, onSelect, onDividerMove }) {
+export default function CurtainWallCanvas({ design, stageW, stageH, pan = { x:0, y:0 }, onPanChange, selected, onSelect, onDividerMove, setDim, setSectionDim }) {
   const { width, height, cols, rows, frame, cells } = design
   const { colW, rowH, scale, fw, fh, ox, oy, ft, cumX, cumY } = designLayout(design, stageW, stageH)
   const capColor = (FRAMES[frame] || FRAMES.mill).color
@@ -14,8 +16,26 @@ export default function CurtainWallCanvas({ design, stageW, stageH, pan = { x:0,
 
   const setCursor = (e, cur) => { const st = e.target.getStage(); if (st) st.container().style.cursor = cur }
 
+  // Double-click a dimension label to type an exact value in its place.
+  const [editing, setEditing] = useState(null) // { kind:'width'|'height'|'col'|'row', index, x, y, w, align, value }
+  const commitEdit = (raw) => {
+    const n = Math.round(Number(raw))
+    if (Number.isFinite(n) && n > 0) {
+      if (editing.kind === 'width' || editing.kind === 'height') setDim?.(editing.kind, n)
+      else setSectionDim?.(editing.kind, editing.index, n)
+    }
+    setEditing(null)
+  }
+
   return (
+    <div style={{ position:'relative', width:stageW, height:stageH }}>
     <Stage width={stageW} height={stageH} x={pan.x} y={pan.y} draggable dragDistance={4}
+      onMouseDown={event => {
+        if (event.target === event.target.getStage()) onSelect(null)
+      }}
+      onTouchStart={event => {
+        if (event.target === event.target.getStage()) onSelect(null)
+      }}
       onDragEnd={e => onPanChange?.({ x:e.target.x(), y:e.target.y() })}>
       <Layer>
         <Rect x={ox + 6} y={oy + 8} width={fw} height={fh} cornerRadius={3} fill="rgba(16,42,67,0.10)" listening={false}/>
@@ -78,7 +98,7 @@ export default function CurtainWallCanvas({ design, stageW, stageH, pan = { x:0,
           return (
             <Rect key={`dv${j}-${cumX[j + 1]}`} x={bx} y={oy} width={capW} height={fh}
               fill="rgba(0,0,0,0.001)" draggable
-              dragBoundFunc={(pos) => ({ x: Math.max(minX, Math.min(maxX, pos.x)), y: oy })}
+              dragBoundFunc={(pos) => ({ x: Math.max(minX + pan.x, Math.min(maxX + pan.x, pos.x)), y: oy + pan.y })}
               onMouseEnter={(e) => setCursor(e, 'col-resize')}
               onMouseLeave={(e) => setCursor(e, 'default')}
               onDragEnd={(e) => onDividerMove?.('col', j, (e.target.x() - bx) / scale)}
@@ -92,7 +112,7 @@ export default function CurtainWallCanvas({ design, stageW, stageH, pan = { x:0,
           return (
             <Rect key={`dh${j}-${cumY[j + 1]}`} x={ox} y={by} width={fw} height={capW}
               fill="rgba(0,0,0,0.001)" draggable
-              dragBoundFunc={(pos) => ({ x: ox, y: Math.max(minY, Math.min(maxY, pos.y)) })}
+              dragBoundFunc={(pos) => ({ x: ox + pan.x, y: Math.max(minY + pan.y, Math.min(maxY + pan.y, pos.y)) })}
               onMouseEnter={(e) => setCursor(e, 'row-resize')}
               onMouseLeave={(e) => setCursor(e, 'default')}
               onDragEnd={(e) => onDividerMove?.('row', j, (e.target.y() - by) / scale)}
@@ -102,25 +122,39 @@ export default function CurtainWallCanvas({ design, stageW, stageH, pan = { x:0,
 
         {/* bay dims */}
         {cols > 1 && colW.map((wmm, c) => (
-          <Group key={`cw${c}`} listening={false}>
+          <Group key={`cw${c}`}>
             <Arrow points={[ox + cumX[c]*scale + 2, oy + fh + 26, ox + cumX[c + 1]*scale - 2, oy + fh + 26]}
-              stroke={dim} fill={dim} strokeWidth={0.8} pointerLength={4} pointerWidth={4} pointerAtBeginning/>
+              stroke={dim} fill={dim} strokeWidth={0.8} pointerLength={4} pointerWidth={4} pointerAtBeginning listening={false}/>
             <Text x={ox + cumX[c]*scale} y={oy + fh + 30} width={wmm*scale} align="center"
-              text={`${Math.round(wmm)}`} fontSize={10.5} fill={dim}/>
+              text={`${Math.round(wmm)}`} fontSize={10.5} fill={dim}
+              onDblClick={() => setEditing({ kind:'col', index:c, value:Math.round(wmm), x:ox+cumX[c]*scale, y:oy+fh+28, w:wmm*scale, align:'center' })}
+              onDblTap={() => setEditing({ kind:'col', index:c, value:Math.round(wmm), x:ox+cumX[c]*scale, y:oy+fh+28, w:wmm*scale, align:'center' })}
+              onMouseEnter={e => setCursor(e, 'text')} onMouseLeave={e => setCursor(e, 'default')}/>
           </Group>
         ))}
         {rows > 1 && rowH.map((hmm, r) => (
-          <Group key={`rh${r}`} listening={false}>
+          <Group key={`rh${r}`}>
             <Arrow points={[ox + fw + 22, oy + cumY[r]*scale + 2, ox + fw + 22, oy + cumY[r + 1]*scale - 2]}
-              stroke={dim} fill={dim} strokeWidth={0.8} pointerLength={4} pointerWidth={4} pointerAtBeginning/>
-            <Text x={ox + fw + 26} y={oy + (cumY[r] + hmm/2)*scale - 5} text={`${Math.round(hmm)}`} fontSize={10.5} fill={dim}/>
+              stroke={dim} fill={dim} strokeWidth={0.8} pointerLength={4} pointerWidth={4} pointerAtBeginning listening={false}/>
+            <Text x={ox + fw + 26} y={oy + (cumY[r] + hmm/2)*scale - 5} text={`${Math.round(hmm)}`} fontSize={10.5} fill={dim}
+              onDblClick={() => setEditing({ kind:'row', index:r, value:Math.round(hmm), x:ox+fw+26, y:oy+(cumY[r]+hmm/2)*scale-7, w:46, align:'left' })}
+              onDblTap={() => setEditing({ kind:'row', index:r, value:Math.round(hmm), x:ox+fw+26, y:oy+(cumY[r]+hmm/2)*scale-7, w:46, align:'left' })}
+              onMouseEnter={e => setCursor(e, 'text')} onMouseLeave={e => setCursor(e, 'default')}/>
           </Group>
         ))}
         <Arrow points={[ox, oy + fh + 46, ox + fw, oy + fh + 46]} stroke={dim} fill={dim} strokeWidth={1} pointerLength={6} pointerWidth={6} pointerAtBeginning listening={false}/>
-        <Text x={ox} y={oy + fh + 52} width={fw} align="center" text={`${width} mm`} fontSize={12} fontStyle="bold" fill={dim} listening={false}/>
+        <Text x={ox} y={oy + fh + 52} width={fw} align="center" text={`${width} mm`} fontSize={12} fontStyle="bold" fill={dim}
+          onDblClick={() => setEditing({ kind:'width', value:width, x:ox, y:oy+fh+50, w:fw, align:'center' })}
+          onDblTap={() => setEditing({ kind:'width', value:width, x:ox, y:oy+fh+50, w:fw, align:'center' })}
+          onMouseEnter={e => setCursor(e, 'text')} onMouseLeave={e => setCursor(e, 'default')}/>
         <Arrow points={[ox - 36, oy, ox - 36, oy + fh]} stroke={dim} fill={dim} strokeWidth={1} pointerLength={6} pointerWidth={6} pointerAtBeginning listening={false}/>
-        <Text x={ox - 40} y={oy + fh/2 + 28} text={`${height} mm`} fontSize={12} fontStyle="bold" fill={dim} rotation={-90} listening={false}/>
+        <Text x={ox - 40} y={oy + fh/2 + 28} text={`${height} mm`} fontSize={12} fontStyle="bold" fill={dim} rotation={-90}
+          onDblClick={() => setEditing({ kind:'height', value:height, x:ox-80, y:oy+fh/2-10, w:64, align:'center' })}
+          onDblTap={() => setEditing({ kind:'height', value:height, x:ox-80, y:oy+fh/2-10, w:64, align:'center' })}
+          onMouseEnter={e => setCursor(e, 'text')} onMouseLeave={e => setCursor(e, 'default')}/>
       </Layer>
     </Stage>
+    <DimEditOverlay editing={editing} pan={pan} onCommit={commitEdit} onCancel={() => setEditing(null)}/>
+    </div>
   )
 }

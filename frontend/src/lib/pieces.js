@@ -8,6 +8,7 @@
 import { PROFILES, FAB } from './products.js'
 import { cwBreakdown } from './curtainwall.js'
 import { isTrialcoBay, trialcoBreakdown } from './trialco.js'
+import { resolveGroup, resolveRole } from './frameRecipes.js'
 
 const colWidths = (d) => d.colWidths?.length === d.cols
   ? d.colWidths : Array.from({ length: d.cols }, () => d.width / d.cols)
@@ -33,10 +34,23 @@ export function designBreakdown(d) {
   if (d.category === 'frameless') return { profiles: [], glass: [] }
   if (isTrialcoBay(d)) return trialcoBreakdown(d)
   const cw = colWidths(d), rh = rowHeights(d)
-  const profiles = [], glass = []
-  const P = (position, profile, member, lengthMm, qty, cuts, sourceMm = lengthMm, adjustmentMm = lengthMm - sourceMm, note = '') =>
+  const profiles = [], glass = [], net = []
+  // every piece carries the catalogue part it is cut from, so the cutting
+  // list, the material take-off and procurement all name the same code
+  const P = (position, profile, member, lengthMm, qty, cuts, sourceMm = lengthMm, adjustmentMm = lengthMm - sourceMm, note = '', role = null) => {
+    const part = (role && resolveRole(d, role)) || resolveGroup(d, profile)
     profiles.push({ position, profile, member, sourceMm: Math.round(sourceMm), adjustmentMm: Math.round(adjustmentMm),
-      lengthMm: Math.round(lengthMm), qty, cuts, note })
+      lengthMm: Math.round(lengthMm), qty, cuts, note,
+      code: part?.code || null, partName: part?.member || null,
+      partProvisional: part ? part.provisional : null })
+  }
+
+  // glazing bead runs round every glazed light, mitred to the glass size
+  const bead = (tag, glassW, glassH, lights = 1) => {
+    if (!resolveRole(d, 'bead')) return
+    P(`${tag} bead — head & sill`, 'frame_opening', 'Glazing bead — horizontal', glassW, 2 * lights, '45°/45°', glassW, 0, '', 'bead')
+    P(`${tag} bead — jambs`, 'frame_opening', 'Glazing bead — vertical', glassH, 2 * lights, '45°/45°', glassH, 0, '', 'bead')
+  }
 
   // ── working geometry only: exact source profile mapping is pending
   P('Frame head', 'frame_outer', 'Outer frame member — head', d.width, 1, '45°/45°', d.width, 0)
@@ -70,9 +84,11 @@ export function designBreakdown(d) {
       const paneTag = panes.length > 1 ? `${tag}.${pane.index + 1}` : tag
       const paneW = pane.wMm, paneH = pane.hMm
       if (cell.opening === 'fixed') {
+        const gw = paneW - FAB.glassDeductFixedMm, gh = paneH - FAB.glassDeductFixedMm
         glass.push({ section: paneTag, glass: cell.glass, sourceWMm: Math.round(paneW), sourceHMm: Math.round(paneH),
           adjustmentWMm: -FAB.glassDeductFixedMm, adjustmentHMm: -FAB.glassDeductFixedMm,
-          wMm: Math.round(paneW - FAB.glassDeductFixedMm), hMm: Math.round(paneH - FAB.glassDeductFixedMm), qty: 1, note: panes.length > 1 ? 'local fixed lite' : 'fixed lite' })
+          wMm: Math.round(gw), hMm: Math.round(gh), qty: 1, note: panes.length > 1 ? 'local fixed lite' : 'fixed lite' })
+        bead(paneTag, gw, gh)
         return
       }
       const n = cell.opening === 'double' ? 2 : Math.max(1, cell.panels || 1)
@@ -84,13 +100,35 @@ export function designBreakdown(d) {
       const cuts = mitred ? '45°/45°' : '90°/90°'
       for (let leaf = 1; leaf <= n; leaf++) {
         P(`${paneTag} leaf ${leaf} top rail`, 'frame_opening', 'Opening member — rail', openingW, 1, cuts, panelW, railAdjustment)
-        P(`${paneTag} leaf ${leaf} bottom rail`, 'frame_opening', 'Opening member — rail', openingW, 1, cuts, panelW, railAdjustment)
+        P(`${paneTag} leaf ${leaf} bottom rail`, 'frame_opening', 'Opening member — bottom rail', openingW, 1, cuts, panelW, railAdjustment, '', 'bottom_rail')
         P(`${paneTag} leaf ${leaf} left stile`, 'frame_opening', 'Opening member — stile', openingH, 1, cuts, paneH, -FAB.trackClearMm)
         P(`${paneTag} leaf ${leaf} right stile`, 'frame_opening', 'Opening member — stile', openingH, 1, cuts, paneH, -FAB.trackClearMm)
       }
+      // where two leaves close on each other: interlock on a slider, meeting
+      // stile or hinge adaptor on a door. One per joint between leaves.
+      if (n > 1) {
+        const meetingRole = cell.opening === 'double' && resolveRole(d, 'meeting_double')
+          ? 'meeting_double' : 'meeting'
+        P(`${paneTag} meeting member`, 'frame_opening', 'Meeting member between leaves',
+          openingH, n - 1, '90°/90°', paneH, -FAB.trackClearMm, '', meetingRole)
+      }
+      // the insect screen is a separate light: a fixed truck on the frame
+      // and a moving net leaf, one per opening
+      if (resolveRole(d, 'net_frame')) {
+        P(`${paneTag} net truck — head & sill`, 'frame_opening', 'Net truck — horizontal', panelW, 2, '90°/90°', panelW, 0, '', 'net_frame')
+        P(`${paneTag} net truck — jambs`, 'frame_opening', 'Net truck — vertical', openingH, 2, '90°/90°', paneH, -FAB.trackClearMm, '', 'net_frame')
+      }
+      if (resolveRole(d, 'net_leaf')) {
+        P(`${paneTag} net leaf — head & sill`, 'frame_opening', 'Net leaf — horizontal', panelW, 2, '90°/90°', panelW, 0, '', 'net_leaf')
+        P(`${paneTag} net leaf — jambs`, 'frame_opening', 'Net leaf — vertical', openingH, 2, '90°/90°', paneH, -FAB.trackClearMm, '', 'net_leaf')
+        // one screen per opening, as on the Trialco sheet — not one per leaf
+        net.push({ section: paneTag, wMm: Math.round(panelW), hMm: Math.round(openingH), qty: 1 })
+      }
+      const gw = openingW - FAB.glassDeductOpeningMm, gh = openingH - FAB.glassDeductOpeningMm
       glass.push({ section: paneTag, glass: cell.glass, sourceWMm: Math.round(panelW), sourceHMm: Math.round(paneH),
         adjustmentWMm: Math.round(railAdjustment - FAB.glassDeductOpeningMm), adjustmentHMm: -FAB.glassDeductOpeningMm,
-        wMm: Math.round(openingW - FAB.glassDeductOpeningMm), hMm: Math.round(openingH - FAB.glassDeductOpeningMm), qty: n, note: `${n} opening panel(s)` })
+        wMm: Math.round(gw), hMm: Math.round(gh), qty: n, note: `${n} opening panel(s)` })
+      bead(paneTag, gw, gh, n)
     })
   })
   ;(d.customCutPieces || []).forEach((piece, index) => {
@@ -102,7 +140,7 @@ export function designBreakdown(d) {
       piece.member || 'Manual fabrication piece', length, Math.max(1, Number(piece.qty || 1)),
       piece.cuts || 'SPECIAL / TEMPLATE', source, adjustment, piece.note || '')
   })
-  return { profiles, glass }
+  return { profiles, glass, net }
 }
 
 // flat piece list for the optimizer / pricing (merged identical cuts)
@@ -112,10 +150,12 @@ export function extractPieces(d) {
     // Keep the fabrication position in the optimizer key. Identical lengths
     // from different sections may share a stock bar, but production still
     // needs to know where every cut belongs.
-    const k = `${p.profile}|${p.member}|${p.lengthMm}|${p.position}`
+    const k = `${p.code || p.profile}|${p.member}|${p.lengthMm}|${p.position}`
     const m = merged.get(k)
     if (m) m.qty += p.qty
-    else merged.set(k, { profile: p.profile, member: p.member, position:p.position, lengthMm: p.lengthMm, qty: p.qty })
+    else merged.set(k, { profile: p.profile, member: p.member, position:p.position,
+      lengthMm: p.lengthMm, cuts:p.cuts || '—', qty: p.qty,
+      code: p.code || null, partName: p.partName || null, partProvisional: p.partProvisional ?? null })
   })
   return [...merged.values()].sort((a, b) =>
     a.profile === b.profile ? b.lengthMm - a.lengthMm : a.profile.localeCompare(b.profile))

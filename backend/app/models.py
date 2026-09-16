@@ -1,5 +1,8 @@
-"""ORM models — the core of the Sofaamy schema (SQLite for the demo,
-mirrors the PostgreSQL design in the Architecture Blueprint)."""
+"""ORM models for the current Sofaamy product.
+
+SQLite supports local operation; hosted environments use the same portable
+model contract with PostgreSQL as described in the Architecture Blueprint.
+"""
 from datetime import datetime
 from sqlalchemy import String, Integer, Float, DateTime, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -24,6 +27,40 @@ class Client(Base):
     type: Mapped[str] = mapped_column(String(20), default="company")
     jobs = relationship("Job", back_populates="client")
     projects = relationship("Project", back_populates="client")
+
+
+class Lead(Base):
+    """An enquiry before it becomes a client project.
+
+    Its classification fields (source, project/product type, customer size,
+    sales executive, city) are the dimensions the dashboard breaks down by,
+    so they are recorded once here rather than re-entered for reporting.
+    """
+    __tablename__ = "leads"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    lead_number: Mapped[str] = mapped_column(String(30), unique=True)
+    name: Mapped[str] = mapped_column(String(160))
+    contact_name: Mapped[str] = mapped_column(String(120), default="")
+    phone: Mapped[str] = mapped_column(String(40), default="")
+    email: Mapped[str] = mapped_column(String(160), default="")
+    site: Mapped[str] = mapped_column(String(200), default="")
+    city: Mapped[str] = mapped_column(String(80), default="")
+    source: Mapped[str] = mapped_column(String(60), default="")
+    project_type: Mapped[str] = mapped_column(String(60), default="")
+    product_type: Mapped[str] = mapped_column(String(60), default="")
+    customer_size: Mapped[str] = mapped_column(String(40), default="")
+    sales_executive: Mapped[str] = mapped_column(String(120), default="")
+    estimated_value: Mapped[float] = mapped_column(Float, default=0.0)  # GHS
+    stage: Mapped[str] = mapped_column(String(30), default="enquiry")
+    lost_reason: Mapped[str] = mapped_column(String(160), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    expected_close: Mapped[str] = mapped_column(String(20), default="")
+    client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), nullable=True)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
+    quoted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class Material(Base):
@@ -55,6 +92,10 @@ class Project(Base):
     drawing_method: Mapped[str] = mapped_column(String(20), default="configurator")
     drawing_release_percent: Mapped[float] = mapped_column(Float, default=80.0)
     released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    released_to_qc_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    released_to_qc_by: Mapped[str] = mapped_column(String(120), default="")
+    released_to_technical_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    released_to_technical_by: Mapped[str] = mapped_column(String(120), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     client = relationship("Client", back_populates="projects")
     items = relationship("DesignRecord", back_populates="project")
@@ -190,6 +231,7 @@ class Quote(Base):
     opening: Mapped[str] = mapped_column(String(30), default="fixed")
     glass: Mapped[str] = mapped_column(String(30), default="clear")
     total: Mapped[float] = mapped_column(Float, default=0.0)  # GHS
+    pricing_mode: Mapped[str] = mapped_column(String(10), default="auto")
     deposit_percent: Mapped[float] = mapped_column(Float, default=80.0)
     status: Mapped[str] = mapped_column(String(20), default="Draft")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

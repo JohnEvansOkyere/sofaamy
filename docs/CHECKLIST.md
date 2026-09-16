@@ -1,6 +1,9 @@
 # Sofaamy BMS — Master Checklist
 
-Living tracker for the Sofaamy engagement. Tick items as they complete. See `PROJECT_OUTLINE.md` for the full scope and `../CLAUDE.md` for conventions.
+The current feedback-driven execution tracker is
+[`NEXT-BUILD-CHECKLIST.md`](NEXT-BUILD-CHECKLIST.md). This file retains the
+earlier engagement, demo and implementation history. See `PROJECT_OUTLINE.md`
+for the original full scope and `../CLAUDE.md` for conventions.
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked/needs decision
 
@@ -55,19 +58,22 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked/needs dec
 
 ## C. Build Phases
 
-### Phase 0 — Demo-to-win  ✅ BUILT & VERIFIED (`frontend/` + `backend/` at repo root)
+### Phase 0 — Current product foundation ✅ BUILT & VERIFIED (`frontend/` + `backend/` at repo root)
 - [x] Sofaamy-branded app shell + full dashboard (11 modules, populated)
 - [x] Multiple product templates (window, door, sliding, partition, curtain wall, frameless, balustrade, canopy)
 - [x] Fully-interactive react-konva configurator (dimensions, panels, opening, glass, finish)
 - [x] Live GHS quote + bill of materials
-- [x] "Send on WhatsApp" / "Download PDF" / "Save & Create Job" actions (mocked)
-- [x] Production pipeline board (factory stages) + CRM, surveys, inventory, dispatch, QA, reports
+- [x] "Send on WhatsApp" / "Download PDF" / "Save & Create Job" product actions
+- [x] Production pipeline board, CRM, project-linked survey scheduler, inventory,
+  dispatch, QA and controlled reports
 - [x] FastAPI + SQLite backend (seeded; pricing + data endpoints, verified)
-- [ ] Wire frontend → backend API (currently frontend runs on seed data)
-- [ ] Real PDF generation + live WhatsApp send (Africa's Talking)
+- [x] Wire operational frontend modules to the backend API
+- [x] Real PDF generation
+- [~] WhatsApp message handoff is available; managed provider delivery and
+  delivery receipts remain a production integration
 
 ### Phase 1 — Foundation + Configurator
-- [ ] Repo init (frontend + backend) + tooling
+- [x] Repo init (frontend + backend) + tooling
 - [ ] Auth + 7 roles (JWT + Supabase RLS)
 - [ ] DB schema (jobs, clients, measurements, templates, designs, quotes, bom_items, pipeline_stages, materials)
 - [ ] M1 intake (field PWA + walk-in)
@@ -75,15 +81,16 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked/needs dec
 - [ ] Quote PDF + WhatsApp send (Africa's Talking)
 
 ### Phase 2 — Pipeline + Commercial
-- [ ] M3 pipeline tracker (real factory stages, notifications, QA/payment gates)
-- [ ] Survey capture + quote-vs-survey diff
+- [x] M3 project and factory pipeline tracking with QA/payment gates
+- [x] Project-linked live survey scheduling and status workflow
+- [ ] Survey measurement capture + quote-vs-survey difference approval
 - [ ] M5 invoicing & payments (GHS, 50/50 gates)
 
 ### Phase 3 — Optimization + Inventory + Analytics
-- [ ] M3 production/cutting optimization (nesting)
+- [x] M3 production/cutting optimization (nesting)
 - [ ] QR dispatch + on-site install tracking
-- [ ] M4 inventory & procurement
-- [ ] M6 management analytics dashboard
+- [x] M4 inventory and procurement visibility
+- [x] M6 live management analytics dashboard
 
 ---
 

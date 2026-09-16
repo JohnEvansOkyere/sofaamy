@@ -1,8 +1,11 @@
 """SQLite database setup (SQLAlchemy 2.0)."""
 import os
 
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
+
+load_dotenv()
 
 # Default: SQLite file next to the backend package. Set SOFAAMY_DATABASE_URL
 # to a postgresql:// URL (e.g. Supabase) for cloud deployment.

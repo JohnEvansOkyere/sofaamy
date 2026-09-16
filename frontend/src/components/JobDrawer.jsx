@@ -196,7 +196,7 @@ export default function JobDrawer({ jobNumber, onClose, onChanged }) {
             <div className="flex gap-sm wrap">
               {docs.map(([kind, label]) => (
                 <button key={kind} className="btn btn-ghost btn-sm"
-                  onClick={() => downloadReport(kind, job.client, job.design)
+                  onClick={() => downloadReport(kind, job.client, job.design, job.design_id)
                     .then(() => fire(`📄 ${label} downloaded`)).catch(e => fire(`⚠️ ${e.message}`))}>
                   <IconDownload style={{ width: 13, height: 13 }}/> {label}
                 </button>

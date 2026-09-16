@@ -23,6 +23,7 @@ export function optimizeCutting(pieces, kerfMm = CUTTING.kerfMm) {
     const cuts = list
       .flatMap(p => Array.from({ length: p.qty }, () => ({
         member: p.member, position:p.position || p.member, lengthMm: p.lengthMm,
+        cuts:p.cuts || '—', bundle:p.bundle || '',
       })))
       .sort((a, b) => b.lengthMm - a.lengthMm)
 

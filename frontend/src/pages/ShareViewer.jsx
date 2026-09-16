@@ -50,7 +50,7 @@ export default function ShareViewer() {
     <div className="share-page"><ShareHeader/>
       <div className="share-card share-empty">
         <h2>Link not found</h2>
-        <p>This design link is invalid or has been removed. Please ask Sofaamy Co. Ltd for a new link.</p>
+        <p>This design link is invalid or has been removed. Please ask your Fabra team for a new link.</p>
       </div>
       <ShareFooter/>
     </div>
@@ -157,15 +157,15 @@ export default function ShareViewer() {
 function ShareHeader() {
   return (
     <div className="share-head">
-      <div className="share-logo">S</div>
+      <div className="share-logo">F</div>
       <div>
-        <div className="n">Sofaamy Co. Ltd</div>
-        <div className="s">Glass · Aluminium · Fabrication — Accra, Ghana</div>
+        <div className="n">Fabra</div>
+        <div className="s">Fabrication operations for Africa</div>
       </div>
     </div>
   )
 }
 
 function ShareFooter() {
-  return <div className="share-foot">Powered by Veloxa Technology</div>
+  return <div className="share-foot">Powered by Fabra</div>
 }

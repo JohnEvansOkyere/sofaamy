@@ -6,10 +6,10 @@ import {
   listQuotes, listClients, listProjects, getProjectWorkflow,
   createQuoteFromExtraction, updateQuoteFromExtraction,
   setQuoteStatus, downloadQuotationPdf,
-  releaseProjectToFactory,
   listDesigns, saveDesign, downloadReport, previewDesignPrice,
 } from '../lib/api.js'
 import { GHS0, dateShort, quoteMessage } from '../lib/whatsapp.js'
+import { useLiveRefresh } from '../lib/live.js'
 import {
   IconFile, IconCube, IconWhatsApp, IconWallet, IconCheck, IconPlus,
 } from '../components/icons.jsx'
@@ -210,6 +210,10 @@ export default function Quotations() {
       }
     })
   useEffect(() => { refreshLists().catch(() => {}) }, [])
+  useLiveRefresh(async () => {
+    await refreshLists()
+    if (projectId) setWorkflow(await getProjectWorkflow(projectId))
+  })
 
   const selectedDesign = designs.find(row => String(row.id) === String(selectedDesignId))
   useEffect(() => {
@@ -246,7 +250,7 @@ export default function Quotations() {
     setBusy(true)
     downloadReport('quotation', selectedDesign.client_name || '', {
       ...designDraft, projectId: selectedDesign.project_id || null,
-    }).then(() => fire(`📄 Client quotation — ${selectedDesign.ref || selectedDesign.name} downloaded`))
+    }, selectedDesign.id).then(() => fire(`📄 Client quotation — ${selectedDesign.ref || selectedDesign.name} downloaded`))
       .catch(error => fire(`⚠️ ${messageFrom(error)}`))
       .finally(() => setBusy(false))
   }
@@ -468,9 +472,6 @@ export default function Quotations() {
   const currentRelease = workflow?.production_releases?.find(
     release => release.status === 'current')
   const productionComplete = currentAcceptedQuote?.job_stage === 'done'
-  const releaseReady = Boolean(
-    currentAcceptedQuote && workflow?.payment_gate?.authorized
-    && approvedDrawing && !currentRelease)
   const projectQuotes = quotes.filter(
     quote => String(quote.project_id) === String(projectId))
   const pipelineSteps = workflow ? [
@@ -508,24 +509,6 @@ export default function Quotations() {
           : 'Not authorized',
     },
   ] : []
-
-  const authorizeProduction = async () => {
-    if (!releaseReady) return
-    setBusy(true)
-    try {
-      const data = await releaseProjectToFactory(projectId, approvedDrawing.id, {
-        released_by: 'Quotation Supervisor',
-        notes: `Commercial authorization from ${currentAcceptedQuote.quote_number}`,
-      })
-      setWorkflow(data)
-      await refreshLists()
-      fire(`✅ ${data.production_releases?.[0]?.release_number || 'Project'} authorized for production`)
-    } catch (error) {
-      fire(`⚠️ ${messageFrom(error)}`)
-    } finally {
-      setBusy(false)
-    }
-  }
 
   const quoteTable = (tableRows, emptyMessage) => (
     <div className="tbl-wrap">
@@ -771,7 +754,7 @@ export default function Quotations() {
           : <div className="quote-empty quote-page-empty">Choose a project above to review its client quotations.</div>}
       </Card>}
 
-      {activePage === 'approval' && <Card title="Production approval" sub="Confirm the independent client, Accounts and Technical gates before authorizing factory production.">
+      {activePage === 'approval' && <Card title="Production approval" sub="Client, Accounts and Technical readiness. Pre-production QC releases the project to factory automatically once all three are clear.">
         {!workflow && <div className="quote-empty">Choose a project above to review its production gates.</div>}
         {workflow && <>
         <div className="quote-approval-grid">
@@ -796,13 +779,14 @@ export default function Quotations() {
             {!approvedDrawing && <Link to={`/technical-workflow?project=${projectId}`}>Open Technical</Link>}
           </div>
         </div>
-        <div className="flex gap wrap">
-          <button className="btn btn-primary" disabled={busy || !releaseReady} onClick={authorizeProduction}>
-            <IconCheck/> {currentRelease ? 'Production already authorized' : 'Approve production of project'}
-          </button>
-        </div>
-        {!releaseReady && !currentRelease && <p className="quote-gate-help">Complete client acceptance, required payment and technical drawing approval before production can be authorized.</p>}
-        {currentRelease && <div className="quote-release-confirmed"><IconCheck /> {currentRelease.release_number} is authorized for production.</div>}
+        {currentRelease
+          ? <div className="quote-release-confirmed"><IconCheck /> {currentRelease.release_number} is authorized for production.</div>
+          : <div className="flex gap wrap items-center">
+              <p className="quote-gate-help">QC approval releases this project to production automatically — no separate authorization step.</p>
+              <Link className="btn btn-primary btn-sm" to={`/quality?scope=preproduction&project=${projectId}`}>
+                Open pre-production QC check
+              </Link>
+            </div>}
         </>}
       </Card>}
 

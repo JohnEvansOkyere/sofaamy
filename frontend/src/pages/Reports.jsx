@@ -1,172 +1,300 @@
-import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { PageHead, Card, Badge } from '../components/ui.jsx'
-import { REPORT_GROUPS, REPORT_STATUS, reportKind } from '../lib/reports.js'
-import { listDesigns, listProjects, downloadReport, downloadProjectQuoteSummary, downloadProjectMaterialBOQ } from '../lib/api.js'
-import { IconChart, IconDownload } from '../components/icons.jsx'
-import CutPlan from '../components/configurator/CutPlan.jsx'
-import '../components/configurator/configurator.css'
+import { availableReportGroups, reportKind } from '../lib/reports.js'
+import {
+  listDesigns, listProjects, listJobs, downloadReport,
+  downloadProjectQuoteSummary, downloadProjectMaterialBOQ, downloadProjectCuttingList,
+  downloadQuotationPdf, downloadDeliveryNote,
+} from '../lib/api.js'
+import { useLiveRefresh } from '../lib/live.js'
+import {
+  IconBox, IconChart, IconDownload, IconFactory, IconFile, IconTruck,
+} from '../components/icons.jsx'
+import '../styles/reports.css'
 
-function ReportRow({ r, item, busy, onDownload }) {
-  const st = REPORT_STATUS[r.status]
-  const kind = item ? reportKind(r, item.design?.category || 'frame') : null
+const DEPARTMENT_ICON = {
+  technical:IconFile,
+  factory:IconFactory,
+  site:IconTruck,
+}
+
+function messageFrom(error) {
+  return String(error?.message || error)
+    .replace(/^API \d+: /, '')
+    .replace(/^\{"detail":"|"\}$/g, '')
+}
+
+function ReportAction({ name, desc, busy, onDownload }) {
   return (
-    <div className="flex between items-center" style={{ padding:'8px 0', borderBottom:'1px solid var(--line-soft)', gap:10 }}>
-      <div style={{ minWidth:0 }}>
-        <div className="t-strong" style={{ fontSize:12.5 }}>{r.name}</div>
-        <div className="muted" style={{ fontSize:11.5 }}>{r.desc}</div>
+    <div className="report-action">
+      <div>
+        <b>{name}</b>
+        <span>{desc}</span>
       </div>
-      {kind ? (
-        <button className="btn btn-ghost btn-sm" disabled={busy === r.name}
-          onClick={() => onDownload(kind, r.name)}>
-          <IconDownload style={{ width:13, height:13 }}/> {busy === r.name ? 'Preparing…' : 'PDF'}
-        </button>
-      ) : <Badge tone={st.tone}>{st.label}</Badge>}
+      <button className="btn btn-ghost btn-sm" disabled={busy} onClick={onDownload}>
+        <IconDownload/>{busy ? 'Preparing…' : 'Download PDF'}
+      </button>
     </div>
   )
 }
 
 export default function Reports() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [designs, setDesigns] = useState([])
   const [projects, setProjects] = useState([])
-  const [selectedProjectId, setSelectedProjectId] = useState('')
-  const [selectedItemId, setSelectedItemId] = useState('')
-  const [busy, setBusy] = useState(null)
-  const [msg, setMsg] = useState('')
+  const [jobs, setJobs] = useState([])
+  const [selectedProjectId, setSelectedProjectId] = useState(
+    searchParams.get('project') || '')
+  const [selectedItemId, setSelectedItemId] = useState(
+    searchParams.get('item') || '')
+  const [busy, setBusy] = useState('')
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
   const [offline, setOffline] = useState(false)
 
-  useEffect(() => {
-    Promise.all([listProjects(), listDesigns()])
-      .then(([projectRows, designRows]) => { setProjects(projectRows); setDesigns(designRows) })
-      .catch(() => setOffline(true))
-  }, [])
-
-  const selectedProject = projects.find(p => String(p.id) === String(selectedProjectId))
-  const projectItems = selectedProject
-    ? designs.filter(d => String(d.project_id || '') === String(selectedProject.id))
-    : designs
-  const selectedItem = designs.find(d => String(d.id) === String(selectedItemId))
-
-  function onProjectChange(value) {
-    setSelectedProjectId(value)
-    setSelectedItemId('')
-    setMsg('')
-  }
-
-  function onItemChange(value) {
-    setSelectedItemId(value)
-    setMsg('')
-  }
-
-  async function onDownloadProjectQuote() {
-    if (!selectedProject) return
-    setBusy('project-quote'); setMsg('')
-    try {
-      await downloadProjectQuoteSummary(selectedProject.id)
-      setMsg(`📄 Project quotation — ${selectedProject.project_number} downloaded`)
-    } catch (e) {
-      setMsg(`⚠️ ${String(e.message || e)}`)
-    }
-    setBusy(null)
-  }
-
-  async function onDownloadProjectMaterialBOQ() {
-    if (!selectedProject) return
-    setBusy('project-material-boq'); setMsg('')
-    try {
-      await downloadProjectMaterialBOQ(selectedProject.id)
-      setMsg(`📦 Project material pack — ${selectedProject.project_number} downloaded`)
-    } catch (e) {
-      setMsg(`⚠️ ${String(e.message || e)}`)
-    }
-    setBusy(null)
-  }
-
-  async function onDownload(kind, name) {
-    setBusy(name); setMsg('')
-    try {
-      await downloadReport(kind, selectedItem.client_name || '', {
-        ...selectedItem.design,
-        projectId: selectedItem.project_id || null,
+  const refresh = () => Promise.all([listProjects(), listDesigns(), listJobs()])
+      .then(([projectRows, designRows, jobRows]) => {
+        setProjects(projectRows)
+        setDesigns(designRows)
+        setJobs(jobRows)
+        setOffline(false)
       })
-      setMsg(`📄 ${name} — ${selectedItem.ref || selectedItem.name} downloaded`)
-    } catch (e) {
-      setMsg(`⚠️ ${String(e.message || e)}`)
+      .catch(() => setOffline(true))
+  useEffect(() => { refresh() }, [])
+  useLiveRefresh(refresh)
+
+  const selectedProject = projects.find(
+    project => String(project.id) === String(selectedProjectId))
+  const projectItems = useMemo(() => designs.filter(
+    item => String(item.project_id || '') === String(selectedProjectId)),
+  [designs, selectedProjectId])
+  const projectJobs = useMemo(() => jobs.filter(
+    job => String(job.project_id || '') === String(selectedProjectId)),
+  [jobs, selectedProjectId])
+  const selectedItem = projectItems.find(
+    item => String(item.id) === String(selectedItemId))
+  const itemGroups = selectedItem
+    ? availableReportGroups(selectedItem.design?.category || 'frame') : []
+
+  useEffect(() => {
+    if (!selectedProjectId || !projectItems.length) {
+      if (!selectedProjectId) setSelectedItemId('')
+      return
     }
-    setBusy(null)
+    if (!projectItems.some(item => String(item.id) === String(selectedItemId))) {
+      setSelectedItemId(String(projectItems[0].id))
+    }
+  }, [selectedProjectId, selectedItemId, projectItems])
+
+  function selectProject(value) {
+    const firstItem = designs.find(
+      item => String(item.project_id || '') === String(value))
+    setSelectedProjectId(value)
+    setSelectedItemId(firstItem ? String(firstItem.id) : '')
+    setMessage('')
+    setError('')
+    setSearchParams(value ? { project:value } : {})
+  }
+
+  function selectItem(value) {
+    setSelectedItemId(value)
+    setMessage('')
+    setError('')
+    setSearchParams(selectedProjectId
+      ? { project:selectedProjectId, ...(value ? { item:value } : {}) }
+      : {})
+  }
+
+  async function run(key, action, success) {
+    setBusy(key)
+    setMessage('')
+    setError('')
+    try {
+      await action()
+      setMessage(success)
+    } catch (error) {
+      setError(messageFrom(error))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const downloadItem = (report) => {
+    if (!selectedItem) return
+    const kind = reportKind(report, selectedItem.design?.category || 'frame')
+    if (!kind) return
+    run(
+      `item-${kind}`,
+      () => downloadReport(
+        kind,
+        selectedItem.client_name || selectedProject?.client_name || '',
+        selectedItem.design,
+        selectedItem.id,
+      ),
+      `${report.name} downloaded for ${selectedItem.ref || selectedItem.name}.`,
+    )
   }
 
   return (
     <>
-      <PageHead title="Reports" subtitle="Every document the system produces — from quotation to factory floor to handover.">
+      <PageHead title="Department Reports"
+        subtitle="Choose a project, then download only the documents each department uses.">
         <Link to="/insights" className="btn btn-ghost"><IconChart/> Insights & KPIs</Link>
         {offline
-          ? <Badge tone="orange">backend offline — start the API to download documents</Badge>
-          : <>
-              <select className="rep-select" value={selectedProjectId} onChange={e => onProjectChange(e.target.value)}>
-                <option value="">Select a full project…</option>
-                {projects.map(p => (
-                  <option key={p.id} value={p.id}>
-                    {p.project_number} · {p.name} · {p.item_count} item{p.item_count === 1 ? '' : 's'}
-                  </option>
-                ))}
-              </select>
-              <select className="rep-select" value={selectedItemId} onChange={e => onItemChange(e.target.value)}>
-                <option value="">Select an individual item…</option>
-                {projectItems.map(d => (
-                  <option key={d.id} value={d.id}>
-                    {(d.ref || d.name)} — {d.name}{d.client_name ? ` · ${d.client_name}` : ''}
-                  </option>
-                ))}
-              </select>
-            </>}
+          ? <Badge tone="orange">Backend offline</Badge>
+          : <select className="rep-select" value={selectedProjectId}
+              onChange={event => selectProject(event.target.value)}>
+              <option value="">Choose a project…</option>
+              {projects.map(project => (
+                <option key={project.id} value={project.id}>
+                  {project.project_number} · {project.name} · {project.item_count} item{project.item_count === 1 ? '' : 's'}
+                </option>
+              ))}
+            </select>}
       </PageHead>
-      {msg && <div className="muted mb" style={{ fontSize:12.5 }}>{msg}</div>}
 
-      {selectedProject && <Card title="Full project" sub="Project-level documents include every saved item under this project.">
-        <div className="flex between items-center" style={{ gap:12 }}>
-          <div>
-            <div className="t-strong">{selectedProject.name}</div>
-            <div className="muted" style={{ fontSize:11.5 }}>
-              {selectedProject.project_number} · {selectedProject.client_name || 'Walk-in Client'} · {selectedProject.item_count} item{selectedProject.item_count === 1 ? '' : 's'}
-            </div>
-          </div>
-          <div className="flex gap-sm wrap" style={{ justifyContent:'flex-end' }}>
-            <button className="btn btn-ghost btn-sm" disabled={
-              busy === 'project-material-boq'
-              || (!selectedProject.item_count && !selectedProject.approved_extraction_revision)}
-              onClick={onDownloadProjectMaterialBOQ}>
-              <IconDownload style={{ width:13, height:13 }}/>{busy === 'project-material-boq'
-                ? 'Preparing…'
-                : selectedProject.approved_extraction_revision
-                  ? `Approved E${selectedProject.approved_extraction_revision} material report`
-                  : 'All material lists PDF'}
-            </button>
-            <button className="btn btn-primary btn-sm" disabled={busy === 'project-quote' || !selectedProject.item_count}
-              onClick={onDownloadProjectQuote}>
-              <IconDownload style={{ width:13, height:13 }}/>{busy === 'project-quote' ? 'Preparing…' : 'Project quotation PDF'}
-            </button>
-          </div>
-        </div>
-      </Card>}
+      {message && <div className="report-notice success">✓ {message}</div>}
+      {error && <div className="report-notice error">⚠ {error}</div>}
 
-      <div className="grid g-2 mb">
-        {REPORT_GROUPS.map(g => (
-          <Card key={g.id} title={g.title} sub={g.sub}>
-            {g.reports.map((r, i) => (
-              <ReportRow key={i} r={r} item={selectedItem} busy={busy} onDownload={onDownload} />
-            ))}
-          </Card>
-        ))}
-      </div>
-
-      {selectedItem && ['frame', 'curtainwall'].includes(selectedItem.design?.category) && (
-        <div className="reports-production-preview">
-          <div className="section-title">Production workbench</div>
-          <div className="muted reports-production-help">Select a saved item above to review its profile breakdown, glass sizes and optimized nesting. This belongs to the factory workflow, not the design canvas.</div>
-          <CutPlan design={selectedItem.design} />
+      {!selectedProject && !offline && (
+        <div className="reports-empty">
+          <IconFile/>
+          <h2>Select a project</h2>
+          <p>The report pack will show the current client, technical, factory and dispatch documents for that project.</p>
         </div>
       )}
+
+      {selectedProject && <>
+        <div className="report-project-context">
+          <div>
+            <span>Selected project</span>
+            <h2>{selectedProject.name}</h2>
+            <p>{selectedProject.project_number} · {selectedProject.client_name || 'Walk-in Client'}{selectedProject.location ? ` · ${selectedProject.location}` : ''}</p>
+          </div>
+          <Badge tone="blue">{selectedProject.workflow_status_label || 'Project open'}</Badge>
+        </div>
+
+        <div className="grid g-2 mb report-project-pack">
+          <Card title="Sales & Accounts" sub="Client-facing project documents and issued quotation records."
+            action={<span className="report-department"><IconFile/> Project scope</span>}>
+            <ReportAction name="Current project quotation"
+              desc="One client quotation containing every saved project item and its cost."
+              busy={busy === 'project-quote'}
+              onDownload={() => run(
+                'project-quote',
+                () => downloadProjectQuoteSummary(selectedProject.id),
+                `Current project quotation downloaded for ${selectedProject.project_number}.`,
+              )}/>
+            {!!selectedProject.quotes?.length && <div className="report-issued">
+              <div className="report-issued-title">Issued quotation copies</div>
+              {selectedProject.quotes.map(quote => (
+                <div className="report-issued-row" key={quote.quote_number}>
+                  <div>
+                    <b>{quote.quote_number}</b>
+                    <span>{quote.product} · {quote.status}</span>
+                  </div>
+                  <button className="btn btn-ghost btn-sm"
+                    disabled={busy === `quote-${quote.quote_number}`}
+                    onClick={() => run(
+                      `quote-${quote.quote_number}`,
+                      () => downloadQuotationPdf(quote.quote_number),
+                      `${quote.quote_number} downloaded.`,
+                    )}>
+                    <IconDownload/>{busy === `quote-${quote.quote_number}` ? 'Preparing…' : 'PDF'}
+                  </button>
+                </div>
+              ))}
+            </div>}
+          </Card>
+
+          <Card title="Procurement & Stores"
+            sub="Combined project materials with item traceability and approved extraction quantities."
+            action={<span className="report-department"><IconBox/> Project scope</span>}>
+            <ReportAction name="Project material & BOQ pack"
+              desc="Profiles, glass, hardware, costs and consolidated quantities for every item."
+              busy={busy === 'project-materials'}
+              onDownload={() => run(
+                'project-materials',
+                () => downloadProjectMaterialBOQ(selectedProject.id),
+                `Project material and BOQ pack downloaded for ${selectedProject.project_number}.`,
+              )}/>
+          </Card>
+        </div>
+
+        {projectItems.some(item => ['frame', 'curtainwall'].includes(item.design?.category)) && <Card title="Production / Factory project pack"
+          sub="One bundle-safe cutting document for every framed project item, with dimensioned members, end angles and combined stock-bar nesting."
+          className="mb"
+          action={<span className="report-department"><IconFactory/> Project scope</span>}>
+          <ReportAction name="Project cutting & bundle pack"
+            desc="Labels every cut as Window 1, Window 2, Door 1, etc., even when stock bars are optimized across the full project."
+            busy={busy === 'project-cutting'}
+            onDownload={() => run(
+              'project-cutting',
+              () => downloadProjectCuttingList(selectedProject.id),
+              `Project cutting and bundle pack downloaded for ${selectedProject.project_number}.`,
+            )}/>
+        </Card>}
+
+        <Card title="Selected project item"
+          sub="Technical and factory documents are generated for one item so dimensions and approved revisions cannot be mixed."
+          className="mb">
+          {projectItems.length
+            ? <div className="report-item-picker">
+                {projectItems.map((item, index) => (
+                  <button key={item.id}
+                    className={String(item.id) === String(selectedItemId) ? 'active' : ''}
+                    onClick={() => selectItem(String(item.id))}>
+                    <span>{index + 1}</span>
+                    <div><b>{item.ref || `Item ${index + 1}`}</b><small>{item.name}</small></div>
+                  </button>
+                ))}
+              </div>
+            : <div className="report-inline-empty">This project has no saved design items yet.</div>}
+        </Card>
+
+        {selectedItem && <div className="grid g-2 mb report-department-grid">
+          {itemGroups.map(group => {
+            const DepartmentIcon = DEPARTMENT_ICON[group.id] || IconFile
+            return <Card key={group.id} title={group.title} sub={group.sub}
+              action={<span className="report-department"><DepartmentIcon/> {group.department}</span>}>
+              {group.reports.map(report => (
+                <ReportAction key={report.name} name={report.name} desc={report.desc}
+                  busy={busy === `item-${reportKind(report, selectedItem.design?.category || 'frame')}`}
+                  onDownload={() => downloadItem(report)}/>
+              ))}
+            </Card>
+          })}
+        </div>}
+
+        <Card title="Dispatch documents"
+          sub="Delivery notes appear here after Dispatch assigns a driver and vehicle."
+          action={<Link className="btn btn-ghost btn-sm" to="/dispatch">Open Dispatch</Link>}>
+          {projectJobs.length
+            ? <div className="report-deliveries">
+                {projectJobs.map(job => (
+                  <div className="report-delivery-row" key={job.job_number}>
+                    <div>
+                      <b>{job.job_number}</b>
+                      <span>{job.product} · {job.stage_label}</span>
+                    </div>
+                    {job.dn_number
+                      ? <button className="btn btn-ghost btn-sm"
+                          disabled={busy === `delivery-${job.job_number}`}
+                          onClick={() => run(
+                            `delivery-${job.job_number}`,
+                            () => downloadDeliveryNote(job.job_number),
+                            `${job.dn_number} downloaded.`,
+                          )}>
+                          <IconDownload/>{busy === `delivery-${job.job_number}` ? 'Preparing…' : job.dn_number}
+                        </button>
+                      : <Badge tone="orange">Delivery note not assigned</Badge>}
+                  </div>
+                ))}
+              </div>
+            : <div className="report-inline-empty">No factory jobs have been opened for this project.</div>}
+        </Card>
+      </>}
     </>
   )
 }

@@ -1,9 +1,12 @@
 import { CURRENT_USER } from '../data/seed.js'
 import { IconSearch, IconBell, IconWhatsApp } from './icons.jsx'
 
-export default function Topbar({ title, subtitle }) {
+export default function Topbar({ title, subtitle, navHidden, onShowNav }) {
   return (
     <header className="topbar">
+      {navHidden && <button className="tb-menu" onClick={onShowNav} title="Show menu">
+        <span/><span/><span/>
+      </button>}
       <div className="tb-title">{title}{subtitle && <small>{subtitle}</small>}</div>
       <div className="tb-search">
         <IconSearch style={{ width:17, height:17 }} />

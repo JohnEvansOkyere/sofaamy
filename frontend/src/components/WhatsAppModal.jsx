@@ -48,9 +48,9 @@ export default function WhatsAppModal({ to, message, link, attachment, onClose, 
               })}
               {link && (
                 <a className="wa-linkcard" href={link} target="_blank" rel="noreferrer">
-                  <div className="wa-linkthumb">S</div>
+                  <div className="wa-linkthumb">F</div>
                   <div>
-                    <div className="wa-linktitle">Sofaamy Co. Ltd — Your Design</div>
+                    <div className="wa-linktitle">Fabra — Your Design</div>
                     <div className="wa-linksub">View in 2D & 3D · {link.replace(/^https?:\/\//, '').slice(0, 34)}…</div>
                   </div>
                 </a>
@@ -74,7 +74,7 @@ export default function WhatsAppModal({ to, message, link, attachment, onClose, 
 
         <div className="wa-side">
           <h4><IconWhatsApp style={{ width: 17, height: 17, color: '#25D366' }}/> Send on WhatsApp</h4>
-          <p className="wa-hint">This is exactly what {name.split(' ')[0]} receives. It opens in your WhatsApp, ready to send from Sofaamy's number.</p>
+          <p className="wa-hint">This is exactly what {name.split(' ')[0]} receives. It opens in your WhatsApp, ready to send from your business number.</p>
           <label className="wa-field">Client WhatsApp number
             <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="+233 24 000 0000"/>
           </label>

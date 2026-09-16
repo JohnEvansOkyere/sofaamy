@@ -1,12 +1,12 @@
 # Sofaamy Technical Workflow — Gap Analysis and Next Recommendations
 
 **Scope:** Frame, Frameless, Balustrade, and other technical fabrication work
-**Purpose:** Record what is still required to move the current workflow
-foundation from a working demonstration to a safe operational system.
+**Purpose:** Record what is still required to harden the current product into a
+safe, production-authoritative operational system without replacing it.
 
 ## Current foundation
 
-The application now demonstrates the main connected workflow:
+The current product implements the main connected workflow:
 
 ```text
 Project
@@ -174,6 +174,30 @@ Approved Extraction E2
 
 Inventory transactions must record the extraction revision that authorized
 the quantity.
+
+## 2A. Require pre-production QC before factory release
+
+Procurement readiness is necessary but is not itself permission to manufacture.
+After Procurement, QA/QC must review the complete current project pack and
+confirm measurements, material specifications, quantities, approved drawings
+and material availability before Technical can release any item to the factory.
+
+```text
+Approved E/Q/R item chains
+        +
+Current procurement availability
+        ↓
+Pre-production QA/QC approval
+        ↓
+Factory Release
+```
+
+The approval must be tied to the exact current inputs for every project item.
+A changed design, extraction revision, accepted quotation, approved drawing or
+procurement quantity invalidates the earlier approval. The prior decision stays
+in audit history, but the release endpoint must reject it as stale until QA/QC
+checks the project again. This gate is distinct from final QA after production,
+which still controls movement to Dispatch.
 
 ## 3. Add project-item and opening-level extraction
 

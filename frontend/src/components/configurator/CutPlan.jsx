@@ -98,7 +98,7 @@ export default function CutPlan({ design }) {
                 ? <>Trialco bay formulas: Leaf W = Frame W ÷ 2; Leaf H = Frame H − 70; Net H = Leaf H − 10; Glass W/H = Leaf W/H − 112. Kerf {plan.kerfMm} mm and min offcut {CUTTING.minOffcutMm} mm.</>
                 : <>Current generic geometry uses −2×50 mm frame depth, +15 mm opening overlap, −30 mm track, glass −70 mm
                   (fixed) / −60 mm (opening), kerf {plan.kerfMm} mm and min offcut {CUTTING.minOffcutMm} mm.</>}
-              {' '}Exact Sofaamy source-profile mapping and production quantities still require supervisor confirmation before factory release.
+              {' '}Exact source-profile mapping and production quantities still require supervisor confirmation before factory release.
             </div>
           </div>
 

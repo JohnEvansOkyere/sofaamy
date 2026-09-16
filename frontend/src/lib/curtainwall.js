@@ -100,10 +100,12 @@ export function calcCurtainWallQuote(d) {
   })
   const ventCost = ventCount * CW_FAB.ventHardware
   const anchorCost = (d.cols + 1) * 2 * CW_FAB.anchorEach
-  const labourCost = area * RATES.labourPerM2
   const installCost = area * RATES.installPerM2 * 1.5   // facade access premium — PLACEHOLDER
 
-  const subtotal = profileCost + plateCost + gasketCost + visionCost + spandrelCost + ventCost + anchorCost + labourCost + installCost
+  // Labour is not priced per item — it's billed once for the whole
+  // project (mirrors backend calc_cw_quote), so it stays out of this
+  // item's own subtotal/margin/cost floor.
+  const subtotal = profileCost + plateCost + gasketCost + visionCost + spandrelCost + ventCost + anchorCost + installCost
   const margin = subtotal * (RATES.marginPercent / 100)
   const total = subtotal + margin
   const pieceCount = bd.profiles.reduce((s, p) => s + p.qty, 0)
@@ -119,7 +121,7 @@ export function calcCurtainWallQuote(d) {
       ...(spandrelArea > 0 ? [{ key:'Spandrel panels', detail:`${spandrelArea.toFixed(2)} m²`, amount:spandrelCost }] : []),
       ...(ventCount > 0 ? [{ key:'Openable vents', detail:`${ventCount} vent(s)`, amount:ventCost }] : []),
       { key:'Slab anchors & brackets', detail:`${(d.cols + 1) * 2} bracket(s)`, amount:anchorCost },
-      { key:'Fabrication & installation', detail:`${area.toFixed(2)} m² (facade access incl.)`, amount:labourCost + installCost },
+      { key:'Installation', detail:`${area.toFixed(2)} m² (facade access incl.)`, amount:installCost },
     ],
     subtotal:+subtotal.toFixed(2), margin:+margin.toFixed(2),
     marginPct:RATES.marginPercent, total:+total.toFixed(2),

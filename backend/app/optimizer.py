@@ -16,18 +16,25 @@ DEFAULT_KERF_MM = 5
 
 
 def optimize(pieces: list[dict], kerf_mm: int = DEFAULT_KERF_MM) -> dict:
-    """pieces: [{profile, member, length_mm, qty}] -> nested cut plan."""
+    """pieces: [{profile, member, length_mm, qty, code?}] -> nested cut plan.
+
+    Nests by the resolved catalogue code when a piece carries one, not by
+    its working-geometry tag (`profile`) — two pieces can share a tag (e.g.
+    a door's frame_opening leaf and its bottom_rail) while being cut from
+    different real stock profiles, and must not share a bar.
+    """
     by_profile: dict[str, list[dict]] = {}
     for p in pieces:
-        by_profile.setdefault(p["profile"], []).append(p)
+        by_profile.setdefault(p.get("code") or p["profile"], []).append(p)
 
     groups = []
     for profile, plist in by_profile.items():
-        stock_mm = STOCK_MM.get(profile, DEFAULT_STOCK_MM)
+        stock_mm = STOCK_MM.get(plist[0]["profile"], DEFAULT_STOCK_MM)
 
         cuts = [
             {"member": p.get("member", ""), "position": p.get("position", p.get("member", "")),
-             "length_mm": p["length_mm"]}
+             "length_mm": p["length_mm"], "cuts": p.get("cuts", "—"),
+             "bundle": p.get("bundle", ""), "code": p.get("code"), "part_name": p.get("part_name")}
             for p in plist for _ in range(p.get("qty", 1))
         ]
         cuts.sort(key=lambda c: -c["length_mm"])
@@ -52,6 +59,7 @@ def optimize(pieces: list[dict], kerf_mm: int = DEFAULT_KERF_MM) -> dict:
         total_cut = sum(c["length_mm"] for c in cuts if c["length_mm"] + kerf_mm <= stock_mm)
         groups.append({
             "profile": profile,
+            "part_name": plist[0].get("part_name"),
             "stock_mm": stock_mm,
             "bars": bars,
             "oversized": oversized,

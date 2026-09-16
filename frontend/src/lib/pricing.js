@@ -12,6 +12,7 @@ import { designBreakdown, extractPieces, metresByProfile, cellSizes } from './pi
 import { calcFramelessQuote, framelessBOM } from './frameless.js'
 import { calcCurtainWallQuote, curtainWallBOM } from './curtainwall.js'
 import { FRAME_SYSTEMS, frameAccessoryRows, frameRateForRateKey, frameRateKeyForOpening, frameGlassByCode } from './frameCatalog.js'
+import { frameMaterialTakeOff } from './frameMaterials.js'
 import { isTrialcoBay } from './trialco.js'
 import { trialcoMaterialRows, TRIALCO_MIN_MARGIN_PERCENT, TRIALCO_TARGET_MARGIN_PERCENT } from './trialcoMaterials.js'
 
@@ -44,14 +45,20 @@ export function calcDesignQuote(d) {
   const pieceCount = pieces.reduce((s, p) => s + p.qty, 0)
   const sizes = cellSizes(d)
 
-  const profileCost = Object.entries(metres)
-    .reduce((s, [id, m]) => s + m * (PROFILES[id]?.pricePerM ?? 85), 0)
-  const glassCost = breakdown.glass.reduce((s, g) =>
-    s + (g.wMm * g.hMm / 1e6) * (frameGlassByCode(g.glass)?.pricePerM2 ?? GLASS[g.glass]?.price ?? 120), 0)
+  // material cost is the take-off: bars consumed at their catalogue or
+  // Inventory-corrected price, glass by area, accessories by working recipe
+  const takeOff = d.category === 'frame' ? frameMaterialTakeOff(d, breakdown, qty) : null
+  const perUnit = (rows) => rows.reduce((s, r) => s + r.total, 0) / qty
+  const profileCost = takeOff
+    ? perUnit(takeOff.rows.filter(r => r.category === 'Profile'))
+    : Object.entries(metres).reduce((s, [id, m]) => s + m * (PROFILES[id]?.pricePerM ?? 85), 0)
+  const glassCost = takeOff
+    ? perUnit(takeOff.rows.filter(r => r.category === 'Glass'))
+    : breakdown.glass.reduce((s, g) =>
+      s + (g.wMm * g.hMm / 1e6) * (frameGlassByCode(g.glass)?.pricePerM2 ?? GLASS[g.glass]?.price ?? 120), 0)
   const accessories = d.category === 'frame' ? frameAccessoryRows(d) : []
-  const accessoryProjectCost = accessories.reduce((s, a) => s + Number(a.qty || 0) * Number(a.unitPrice || 0), 0)
-  const hardwareCost = d.category === 'frame'
-    ? accessoryProjectCost / qty
+  const hardwareCost = takeOff
+    ? perUnit(takeOff.rows.filter(r => r.category === 'Accessory'))
     : d.cells.reduce((s,c) => s + (OPENINGS[c.opening]?.hardware ?? 80) * (c.opening === 'fixed' ? 1 : (c.panels || 1)), 0)
   const labourCost   = area * RATES.labourPerM2
   const installCost  = area * RATES.installPerM2
@@ -60,7 +67,10 @@ export function calcDesignQuote(d) {
   const materialCostPerUnit = materialSheet ? materialSheet.materialCostPerUnit : profileCost + glassCost + hardwareCost
   const internalLabourCost = materialSheet ? 0 : labourCost
   const internalInstallCost = materialSheet ? materialSheet.installationCostPerUnit : installCost
-  const subtotal = materialSheet ? materialSheet.totalCostPerUnit : profileCost + glassCost + hardwareCost + labourCost + installCost
+  // Labour is not priced per item — it's billed once for the whole
+  // project (mirrors backend calc_design_quote), so it stays out of this
+  // item's own subtotal/margin/cost floor.
+  const subtotal = materialSheet ? materialSheet.totalCostPerUnit : profileCost + glassCost + hardwareCost + installCost
   const margin   = materialSheet ? 0 : subtotal * (RATES.marginPercent / 100)
   const internalTotal = subtotal + margin
 
@@ -106,7 +116,17 @@ export function calcDesignQuote(d) {
         total:+(rowArea * rowQty * unitPrice).toFixed(2), rateKey,
       }
     })
-  const clientSubtotal = clientRows.reduce((s, r) => s + r.total, 0)
+  // Ad-hoc commercial lines added on the pricing review screen (e.g.
+  // transport, packing) — flat GHS amounts appended to the same
+  // client-facing rows so they flow through the subtotal and PDF with no
+  // separate handling. Mirrors calc_design_quote in the backend engine.
+  const extraRows = (d.extraLines || []).map(x => {
+    const amount = +Number(x.amount || 0).toFixed(2)
+    return { description: x.description || 'Additional line', widthMm:0, heightMm:0,
+      qty:1, m2:0, unitPrice:amount, total:amount, rateKey:'manual', manual:true }
+  })
+  const allClientRows = [...clientRows, ...extraRows]
+  const clientSubtotal = allClientRows.reduce((s, r) => s + r.total, 0)
   const discountPercent = Math.max(0, Number(d.discountPercent ?? 0))
   const getfNhisPercent = Math.max(0, Number(d.getfNhisPercent ?? 5))
   const vatPercent = Math.max(0, Number(d.vatPercent ?? 15))
@@ -125,12 +145,17 @@ export function calcDesignQuote(d) {
     fabrication:breakdown.fabrication || null,
     netPanels:breakdown.net || [],
     glassBreakdown:breakdown.glass || [],
-    materialRows:materialSheet?.rows || [],
-    materialCost:materialSheet?.materialCost ?? null,
+    materialRows:materialSheet?.rows || takeOff?.rows || [],
+    materialCost:materialSheet?.materialCost ?? takeOff?.materialCost ?? null,
     installationPercent:materialSheet?.installationPercent ?? null,
     installationCost:materialSheet?.installationCost ?? null,
     totalMaterialCost:materialSheet?.totalCost ?? null,
     materialPriceSource:materialSheet?.priceSource || null,
+    // take-off health, so every document can say what still needs a real value
+    materialUnpriced:takeOff?.unpriced || [],
+    materialUnmapped:takeOff?.unmapped || [],
+    materialProvisionalCount:takeOff?.provisionalCount ?? null,
+    materialFromInventory:takeOff?.fromInventory ?? null,
     pricingModel:materialSheet ? 'cost-plus' : 'rate-card',
     minimumMarginPercent, targetMarginPercent,
     minimumClientNet:minimumClientNet == null ? null : +minimumClientNet.toFixed(2),
@@ -145,7 +170,6 @@ export function calcDesignQuote(d) {
       { key:'Aluminium profile', detail:`${profileLen.toFixed(2)} m · ${pieceCount} cut pieces`, amount:profileCost },
       { key:'Glass', detail:`${(isTrialcoBay(d) ? breakdown.glass.reduce((s, g) => s + g.wMm * g.hMm, 0) / 1e6 : area).toFixed(2)} m² · ${isTrialcoBay(d) ? breakdown.glass.length : sections} panel(s)`, amount:glassCost },
       { key:'Hardware & accessories', detail:`${accessories.length} catalogue/custom line(s)`, amount:hardwareCost },
-      { key:'Fabrication labour', detail:`${area.toFixed(2)} m² × ₵${RATES.labourPerM2}/m²`, amount:labourCost },
       { key:'Installation', detail:`${area.toFixed(2)} m² × ₵${RATES.installPerM2}/m²`, amount:installCost },
     ],
     subtotal:+subtotal.toFixed(2), margin:+margin.toFixed(2),
@@ -159,7 +183,7 @@ export function calcDesignQuote(d) {
     costFloorSource:floorOverride > 0 ? 'approved project BOQ / material sheet' : 'working estimate',
     clientNet:+clientNet.toFixed(2), floorGap:+floorGap.toFixed(2),
     floorStatus:floorGap >= -0.01 ? 'OK' : 'BELOW FLOOR',
-    clientLines:clientRows,
+    clientLines:allClientRows,
     clientSubtotal:+clientSubtotal.toFixed(2),
     discountPercent, discountAmount:+clientDiscount.toFixed(2),
     getfNhisPercent, getfNhis:+clientGetfNhis.toFixed(2),
@@ -170,6 +194,23 @@ export function calcDesignQuote(d) {
 
 export function designBOM(d) {
   const q = calcDesignQuote(d)
+  // A frame design has a real take-off: every line is a catalogue part with a
+  // quantity, so the BOM is that list rather than a geometry summary.
+  if (d.category === 'frame' && q.materialRows?.length) {
+    const rows = q.materialRows.map(r => ({
+      item:`${r.name} (${r.code})`,
+      qty:`${r.qty} ${r.unit}`,
+      note:[r.note, r.priceSource === 'inventory' ? 'Inventory price'
+        : r.priceSource === 'workbook' ? 'Workbook price'
+          : r.priceSource === 'item override' ? 'Edited on this item' : 'No price set',
+      `₵${r.unitPrice}/${r.unit}`].filter(Boolean).join(' · '),
+    }))
+    if (q.materialUnmapped?.length) rows.push({
+      item:'Unmapped fabrication members', qty:`${q.materialUnmapped.length} group(s)`,
+      note:`${q.materialUnmapped.join(', ')} — no catalogue part assigned yet`,
+    })
+    return rows
+  }
   const byGlass = {}, byOpening = {}
   d.cells.forEach(c => {
     byGlass[c.glass] = (byGlass[c.glass] || 0) + 1

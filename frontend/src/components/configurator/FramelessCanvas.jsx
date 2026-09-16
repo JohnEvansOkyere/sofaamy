@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { Stage, Layer, Rect, Line, Text, Group, Arrow, Circle } from 'react-konva'
 import { FL_GLASS, FL_FAB } from '../../lib/products.js'
 import { MIN_SECTION_MM, designLayout } from '../../lib/designs.js'
 import { framelessBreakdown } from '../../lib/frameless.js'
 import { panelFeatures, PREP_TEMPLATES } from '../../lib/preps.js'
+import DimEditOverlay from './DimEditOverlay.jsx'
 
 // Draw a panel's glass preps (holes / patch cutouts / notches) at
 // true positions — the same parametric library that generates the
@@ -47,7 +49,7 @@ function Preps({ feats, x0, top, w, h, wMm, hMm, steel }) {
 // joints, patch fittings, floor springs, handles and an optional
 // over-panel band. Mirrors the SmartGlazier drawing style Sofaamy
 // already knows (see images/sofaamy.pdf).
-export default function FramelessCanvas({ design, stageW, stageH, pan = { x:0, y:0 }, onPanChange, selected, onSelect, onDividerMove }) {
+export default function FramelessCanvas({ design, stageW, stageH, pan = { x:0, y:0 }, onPanChange, selected, onSelect, onDividerMove, setDim, setSectionDim }) {
   const { width, height, cells, doorH } = design
   const { colW, scale, fw, fh, ox, oy, cumX } = designLayout(design, stageW, stageH)
   const dim = '#CA6F1E'
@@ -72,8 +74,26 @@ export default function FramelessCanvas({ design, stageW, stageH, pan = { x:0, y
 
   const setCursor = (e, cur) => { const st = e.target.getStage(); if (st) st.container().style.cursor = cur }
 
+  // Double-click a dimension label to type an exact value in its place.
+  const [editing, setEditing] = useState(null) // { kind:'width'|'height'|'col', index, x, y, w, align, value }
+  const commitEdit = (raw) => {
+    const n = Math.round(Number(raw))
+    if (Number.isFinite(n) && n > 0) {
+      if (editing.kind === 'width' || editing.kind === 'height') setDim?.(editing.kind, n)
+      else setSectionDim?.(editing.kind, editing.index, n)
+    }
+    setEditing(null)
+  }
+
   return (
+    <div style={{ position:'relative', width:stageW, height:stageH }}>
     <Stage width={stageW} height={stageH} x={pan.x} y={pan.y} draggable dragDistance={4}
+      onMouseDown={event => {
+        if (event.target === event.target.getStage()) onSelect(null)
+      }}
+      onTouchStart={event => {
+        if (event.target === event.target.getStage()) onSelect(null)
+      }}
       onDragEnd={e => onPanChange?.({ x:e.target.x(), y:e.target.y() })}>
       <Layer>
         {/* void / wall opening */}
@@ -180,7 +200,7 @@ export default function FramelessCanvas({ design, stageW, stageH, pan = { x:0, y
           return (
             <Rect key={`j${j}-${cumX[j + 1]}`} x={bx} y={oy} width={10} height={fh}
               fill="rgba(0,0,0,0.001)" draggable
-              dragBoundFunc={(pos) => ({ x: Math.max(minX, Math.min(maxX, pos.x)), y: oy })}
+              dragBoundFunc={(pos) => ({ x: Math.max(minX + pan.x, Math.min(maxX + pan.x, pos.x)), y: oy + pan.y })}
               onMouseEnter={(e) => setCursor(e, 'col-resize')}
               onMouseLeave={(e) => setCursor(e, 'default')}
               onDragEnd={(e) => onDividerMove?.('col', j, (e.target.x() - bx) / scale)}
@@ -190,17 +210,26 @@ export default function FramelessCanvas({ design, stageW, stageH, pan = { x:0, y
 
         {/* per-bay widths + overall dims (SmartGlazier style) */}
         {design.cols > 1 && colW.map((wmm, c) => (
-          <Group key={`cw${c}`} listening={false}>
+          <Group key={`cw${c}`}>
             <Arrow points={[ox + cumX[c]*scale + 2, floorY + 20, ox + cumX[c + 1]*scale - 2, floorY + 20]}
-              stroke={dim} fill={dim} strokeWidth={0.8} pointerLength={4} pointerWidth={4} pointerAtBeginning/>
+              stroke={dim} fill={dim} strokeWidth={0.8} pointerLength={4} pointerWidth={4} pointerAtBeginning listening={false}/>
             <Text x={ox + cumX[c]*scale} y={floorY + 24} width={wmm*scale} align="center"
-              text={`${Math.round(wmm)}`} fontSize={10.5} fill={dim}/>
+              text={`${Math.round(wmm)}`} fontSize={10.5} fill={dim}
+              onDblClick={() => setEditing({ kind:'col', index:c, value:Math.round(wmm), x:ox+cumX[c]*scale, y:floorY+22, w:wmm*scale, align:'center' })}
+              onDblTap={() => setEditing({ kind:'col', index:c, value:Math.round(wmm), x:ox+cumX[c]*scale, y:floorY+22, w:wmm*scale, align:'center' })}
+              onMouseEnter={e => setCursor(e, 'text')} onMouseLeave={e => setCursor(e, 'default')}/>
           </Group>
         ))}
         <Arrow points={[ox, floorY + 40, ox + fw, floorY + 40]} stroke={dim} fill={dim} strokeWidth={1} pointerLength={6} pointerWidth={6} pointerAtBeginning listening={false}/>
-        <Text x={ox} y={floorY + 46} width={fw} align="center" text={`${width} mm`} fontSize={12} fontStyle="bold" fill={dim} listening={false}/>
+        <Text x={ox} y={floorY + 46} width={fw} align="center" text={`${width} mm`} fontSize={12} fontStyle="bold" fill={dim}
+          onDblClick={() => setEditing({ kind:'width', value:width, x:ox, y:floorY+44, w:fw, align:'center' })}
+          onDblTap={() => setEditing({ kind:'width', value:width, x:ox, y:floorY+44, w:fw, align:'center' })}
+          onMouseEnter={e => setCursor(e, 'text')} onMouseLeave={e => setCursor(e, 'default')}/>
         <Arrow points={[ox - 36, oy, ox - 36, floorY]} stroke={dim} fill={dim} strokeWidth={1} pointerLength={6} pointerWidth={6} pointerAtBeginning listening={false}/>
-        <Text x={ox - 40} y={oy + fh/2 + 28} text={`${height} mm`} fontSize={12} fontStyle="bold" fill={dim} rotation={-90} listening={false}/>
+        <Text x={ox - 40} y={oy + fh/2 + 28} text={`${height} mm`} fontSize={12} fontStyle="bold" fill={dim} rotation={-90}
+          onDblClick={() => setEditing({ kind:'height', value:height, x:ox-80, y:oy+fh/2-10, w:64, align:'center' })}
+          onDblTap={() => setEditing({ kind:'height', value:height, x:ox-80, y:oy+fh/2-10, w:64, align:'center' })}
+          onMouseEnter={e => setCursor(e, 'text')} onMouseLeave={e => setCursor(e, 'default')}/>
         {showOver && <>
           <Arrow points={[ox + fw + 16, oy, ox + fw + 16, mmY(overH)]} stroke={dim} fill={dim} strokeWidth={0.8} pointerLength={4} pointerWidth={4} pointerAtBeginning listening={false}/>
           <Text x={ox + fw + 20} y={mmY(overH / 2) - 5} text={`${Math.round(overH)}`} fontSize={10.5} fill={dim} listening={false}/>
@@ -209,5 +238,7 @@ export default function FramelessCanvas({ design, stageW, stageH, pan = { x:0, y
         </>}
       </Layer>
     </Stage>
+    <DimEditOverlay editing={editing} pan={pan} onCommit={commitEdit} onCancel={() => setEditing(null)}/>
+    </div>
   )
 }

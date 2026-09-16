@@ -10,6 +10,7 @@
 // but do not establish per-opening consumption or cut deductions. Those rules
 // remain explicit pending Sofaamy confirmation.
 // ============================================================
+import { designBreakdown } from './pieces.js'
 
 const profile = (name, code, listedPrice, colours = 'White, Grey & Black') => ({
   name, code, lengthMm: 5800, colours, listedPrice,
@@ -32,9 +33,13 @@ const slidingAccessories = (rollerName, rollerCode, rollerValue, cornerName = '0
   accessory('Glazing rubber', 'ACCGRB', 128),
   accessory('Net rubber', 'ACCNRB', 60),
   accessory('Installation screws', 'ACCITS', 55),
-  accessory('Wall plugs', 'ACCWPL', 54),
-  accessory('Water drain cap', 'ACCWDC', 4.5),
-  accessory('PVC hole cover', 'ACCPVC', 6),
+  // The sliding block of `PROFILES, CODES, PRICE…` is shifted by one row on
+  // these three: it reads 54 / 4.5 / 6. Both the FDT blocks of the same
+  // workbook, every block of `PROFILES AND ACCESORIES (2)`, and Sofaamy's own
+  // Trialco costing sheet read 4.5 / 6 / 46. Corrected to the agreeing three.
+  accessory('Wall plugs', 'ACCWPL', 4.5),
+  accessory('Water drain cap', 'ACCWDC', 6),
+  accessory('PVC hole cover', 'ACCPVC', 46),
   accessory('Silicone', 'SIL', 30),
   accessory('Italian brush', 'ACCITB', 65),
   accessory('Italian sliding lock with key', 'ACCIT SLK', 40, 'Sliding doors only'),
@@ -128,9 +133,9 @@ export const FRAME_SYSTEMS = {
       accessory('Glazing rubber', 'ACCGRB', 128),
       accessory('Net rubber', 'ACCNRB', 60),
       accessory('Installation screws', 'ACCITS', 55),
-      accessory('Wall plugs', 'ACCWPL', 54),
-      accessory('Water drain cap', 'ACCWDC', 4.5),
-      accessory('PVC hole cover', 'ACCPVC', 6),
+      accessory('Wall plugs', 'ACCWPL', 4.5),
+      accessory('Water drain cap', 'ACCWDC', 6),
+      accessory('PVC hole cover', 'ACCPVC', 46),
       accessory('Silicone', 'SIL', 30),
       accessory('Italian brush', 'ACCITB', 65),
       accessory('Italian sliding lock with key', 'ACCIT SLK', 40, 'Sliding doors only'),
@@ -158,9 +163,9 @@ export const FRAME_SYSTEMS = {
       accessory('Glazing rubber', 'ACCGRB', 128),
       accessory('Net rubber', 'ACCNRB', 60),
       accessory('Installation screws', 'ACCITS', 55),
-      accessory('Wall plugs', 'ACCWPL', 54),
-      accessory('Water drain cap', 'ACCWDC', 4.5),
-      accessory('PVC hole cover', 'ACCPVC', 6),
+      accessory('Wall plugs', 'ACCWPL', 4.5),
+      accessory('Water drain cap', 'ACCWDC', 6),
+      accessory('PVC hole cover', 'ACCPVC', 46),
       accessory('Silicone', 'SIL', 30),
       accessory('Italian brush', 'ACCITB', 65),
       accessory('Italian sliding lock with key', 'ACCIT SLK', 40, 'Sliding doors only'),
@@ -336,9 +341,54 @@ export const FRAME_PRODUCT_GROUPS = [
   { group:'FDT Doors', items:[
     { id:'fdt-swing-door', name:'FDT Swing Door', system:'fdt_swing', rateKey:'swingDoor', cols:1, rows:1, opening:'single', w:900, h:2100 },
     { id:'fdt-single-hinge-door', name:'FDT Single Hinge Door', system:'fdt_hinge', rateKey:'hingeDoor', cols:1, rows:1, opening:'single', w:900, h:2100 },
-    { id:'fdt-double-hinge-door', name:'FDT Double Hinge Door', system:'fdt_hinge', rateKey:'hingeDoor', cols:2, rows:1, opening:'double', w:1800, h:2100 },
+    // one opening carrying two leaves — `double` already yields both, so a
+    // second column would build a four-leaf door
+    { id:'fdt-double-hinge-door', name:'FDT Double Hinge Door', system:'fdt_hinge', rateKey:'hingeDoor', cols:1, rows:1, opening:'double', w:1800, h:2100 },
   ]},
 ]
+
+// Opening types each system genuinely supports (demo-1 feedback A1:
+// a Trialco sliding project must never offer casement options).
+// `fixed` is allowed everywhere — any system can carry a fixed lite.
+export const FRAME_SYSTEM_OPENINGS = {
+  trialco: ['sliding', 'fixed'],
+  ks50: ['sliding', 'fixed'],
+  italian: ['sliding', 'fixed'],
+  fdt_casement: ['casement', 'fixed'],
+  fdt_projected: ['awning', 'fixed'],
+  fdt_fixed: ['fixed'],
+  fdt_hinge: ['single', 'double', 'fixed'],
+  fdt_swing: ['single', 'fixed'],
+}
+
+// null = legacy/unknown system → no scoping (show everything, as before)
+export function frameOpeningsForDesign(design) {
+  return FRAME_SYSTEM_OPENINGS[design?.system] || null
+}
+
+// Colours are stated per system on every profile row of the source workbooks
+// ("WHITE, GRAY & BLACK" for Trialco; "WHI,BLCK,GRAY,CHMP" for the rest).
+// → ['white','grey','black'] — the swatches that system can actually be made in.
+const COLOUR_KEYS = [
+  [/champ/i, 'champagne'], [/white|^whi/i, 'white'],
+  [/gr[ae]y|^gray|^gry/i, 'grey'], [/black|^blck/i, 'black'],
+]
+
+export function frameColoursForSystem(systemId) {
+  const system = FRAME_SYSTEMS[systemId]
+  if (!system?.profiles?.length) return null
+  const found = new Set()
+  system.profiles.forEach(p => (p.colours || '').split(/[,&]/).forEach(part => {
+    const hit = COLOUR_KEYS.find(([test]) => test.test(part.trim()))
+    if (hit) found.add(hit[1])
+  }))
+  const order = ['white', 'grey', 'black', 'champagne']
+  return order.filter(k => found.has(k))
+}
+
+// The colour a new design of this system should start on.
+export const defaultFrameColour = (systemId) =>
+  frameColoursForSystem(systemId)?.[0] || 'white'
 
 export function frameRateForRateKey(rateKey) {
   return FRAME_QUOTE_RATES[rateKey] || FRAME_QUOTE_RATES.fixed
@@ -379,6 +429,27 @@ export function frameSystemSummary(id) {
 const accessoryKind = (a) => `${a.name} ${a.code}`.toLowerCase()
 const isDoorCell = (c) => ['single', 'double'].includes(c?.opening)
 
+// Linear and area consumption for one unit, measured off the same breakdown
+// the cutting list is built from — so rubber, mesh and brush are quantified,
+// not allowed for.
+function accessoryGeometry(d) {
+  const empty = { glassPerimeterM:0, netPerimeterM:0, netAreaM2:0, leafPerimeterM:0,
+    framePerimeterM:0, nets:0 }
+  let breakdown
+  try { breakdown = designBreakdown(d) } catch { return empty }
+  const glass = breakdown?.glass || []
+  const nets = breakdown?.net || []
+  const leaves = (breakdown?.profiles || []).filter(p => /leaf|stile|rail/i.test(p.member || ''))
+  return {
+    glassPerimeterM: glass.reduce((s, g) => s + 2 * (g.wMm + g.hMm) * (g.qty || 1), 0) / 1000,
+    netPerimeterM: nets.reduce((s, n) => s + 2 * (n.wMm + n.hMm) * (n.qty || 1), 0) / 1000,
+    netAreaM2: nets.reduce((s, n) => s + n.wMm * n.hMm * (n.qty || 1), 0) / 1e6,
+    leafPerimeterM: leaves.reduce((s, p) => s + p.lengthMm * (p.qty || 1), 0) / 1000,
+    framePerimeterM: 2 * ((Number(d?.width) || 0) + (Number(d?.height) || 0)) / 1000,
+    nets: nets.reduce((s, n) => s + (n.qty || 1), 0),
+  }
+}
+
 export function frameAccessoryRows(d) {
   const system = FRAME_SYSTEMS[d?.system]
   const cells = d?.cells || []
@@ -393,17 +464,35 @@ export function frameAccessoryRows(d) {
   const hasSlidingDoor = cells.some(c => c.opening === 'sliding' &&
     (c.rateKey === 'slidingDoor' || /sliding\s+door/i.test(d?.name || '')))
 
+  // Consumption follows Sofaamy's own Trialco costing sheet, generalised:
+  // linear goods by the metre they actually run, mesh by area, everything
+  // else per bay, per leaf or per screen.
+  const geo = accessoryGeometry(d)
+  const round2 = (n) => Math.round(n * 100) / 100
+
   const rows = system.accessories.map(a => {
     const k = accessoryKind(a)
     let qty = openingCount * projectQty
+    let unit = 'pcs'
     let rule = 'one working allowance per project opening'
     if (/sliding doors only/.test((a.note || '').toLowerCase()) && !hasSlidingDoor) { qty = 0; rule = 'only for sliding doors' }
+    else if (/glazing rubber/.test(k)) { qty = round2(geo.glassPerimeterM * projectQty); unit = 'm'; rule = 'glass perimeter' }
+    else if (/net rubber/.test(k)) { qty = round2(geo.netPerimeterM * projectQty); unit = 'm'; rule = 'screen perimeter' }
+    else if (/brush/.test(k)) { qty = round2((geo.netPerimeterM || geo.leafPerimeterM) * projectQty); unit = 'm'; rule = 'screen / leaf perimeter' }
+    else if (/frame rubber/.test(k)) { qty = round2(geo.framePerimeterM * projectQty); unit = 'm'; rule = 'outer frame perimeter' }
+    else if (/net fibre/.test(k)) { qty = round2(geo.netAreaM2 * projectQty); unit = 'm²'; rule = 'screen area' }
+    else if (/silicone/.test(k)) { qty = projectQty; unit = 'tube'; rule = '1 tube per unit' }
+    else if (/kit/.test(k)) { qty = projectQty; unit = 'set'; rule = '1 set per unit' }
+    else if (/screw|wall plug/.test(k)) { qty = 4 * projectQty; rule = '4 per unit' }
+    else if (/drain cap|hole cover/.test(k)) { qty = 2 * projectQty; rule = '2 per unit' }
+    else if (/net truck corner|net corner/.test(k)) { qty = 4 * geo.nets * projectQty; rule = '4 per screen' }
     else if (/roller|wheel|truck/.test(k)) { qty = movingPanels * 2 * projectQty; rule = '2 per moving panel' }
-    else if (/corner/.test(k)) { qty = movingPanels * 4 * projectQty; rule = '4 per moving panel' }
+    else if (/corner/.test(k)) { qty = (4 + 4 * movingPanels) * projectQty; rule = '4 for the frame + 4 per leaf' }
+    else if (/net handle/.test(k)) { qty = geo.nets * projectQty; rule = '1 per screen' }
     else if (/hinge/.test(k)) { qty = Math.max(1, doors.length) * 2 * projectQty; rule = '2 per door leaf' }
     else if (/flash bolt/.test(k)) { qty = Math.max(1, doors.length) * projectQty + doubleDoors * projectQty; rule = '1 per door + 1 extra per double door' }
     else if (/handle|lock|closer|stopper|stricker/.test(k)) { qty = Math.max(1, openingCells.length) * projectQty; rule = '1 per opening/door leaf' }
-    return { ...a, qty, suggestedQty:qty, rule, source:'catalogue + working recipe', unitPrice:Number(a.listedValue || 0) }
+    return { ...a, qty, suggestedQty:qty, unit, rule, source:'catalogue + working recipe', unitPrice:Number(a.listedValue || 0) }
   })
 
   const overrides = Object.fromEntries((d.accessoryOverrides || []).map(x => [x.code || `custom:${x.name}`, x]))

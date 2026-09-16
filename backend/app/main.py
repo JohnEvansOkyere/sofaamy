@@ -1,9 +1,9 @@
-"""Sofaamy Cloud API — FastAPI + SQLite.
+"""Fabra API — FastAPI + SQLAlchemy (SQLite or PostgreSQL).
 
 Run:  uvicorn app.main:app --reload
 Docs: http://localhost:8000/docs
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -20,13 +20,17 @@ import os
 
 from .database import Base, engine, get_db, SessionLocal
 from . import models, schemas, lifecycle as lc
-from .pricing import calc_quote, calc_any_quote, extract_pieces_any, frameless_breakdown
+from .pricing import (
+    calc_quote, calc_any_quote, extract_pieces_any, frameless_breakdown,
+    LABOUR_PER_M2, MARGIN_PCT,
+)
 from .optimizer import optimize
 from .pdf import quote_pdf, project_quote_summary_pdf
 from .reports import (boq_pdf, cutting_list_pdf, work_order_pdf,
                       glass_order_pdf, hardware_list_pdf, fl_work_order_pdf,
                       installation_sheet_pdf, delivery_note_pdf,
                       project_summary_pdf, project_material_boq_pdf,
+                      project_cutting_list_pdf,
                       elevation_pdf, price_breakdown_pdf)
 
 Base.metadata.create_all(bind=engine)
@@ -46,7 +50,16 @@ def _auto_migrate_postgres():
         "technical_extractions": [("design_id", "INTEGER")],
         "drawing_tasks": [("design_id", "INTEGER")],
         "production_releases": [("design_id", "INTEGER")],
-        "quotes": [("extra_extraction_ids", "TEXT DEFAULT '[]'")],
+        "quotes": [
+            ("extra_extraction_ids", "TEXT DEFAULT '[]'"),
+            ("pricing_mode", "TEXT DEFAULT 'auto'"),
+        ],
+        "projects": [
+            ("released_to_qc_at", "TIMESTAMP"),
+            ("released_to_qc_by", "TEXT DEFAULT ''"),
+            ("released_to_technical_at", "TIMESTAMP"),
+            ("released_to_technical_by", "TEXT DEFAULT ''"),
+        ],
     }
     with engine.begin() as conn:
         for table, cols in wanted.items():
@@ -70,7 +83,8 @@ def _auto_migrate():
                  ("project_id", "INTEGER")],
         "quotes": [("deposit_percent", "FLOAT DEFAULT 80"), ("project_id", "INTEGER"),
                     ("design_id", "INTEGER"), ("extraction_id", "INTEGER"),
-                    ("extra_extraction_ids", "TEXT DEFAULT '[]'")],
+                    ("extra_extraction_ids", "TEXT DEFAULT '[]'"),
+                    ("pricing_mode", "TEXT DEFAULT 'auto'")],
         "designs": [("project_id", "INTEGER")],
         "stock_moves": [
             ("extraction_id", "INTEGER"),
@@ -98,6 +112,10 @@ def _auto_migrate():
             ("drawing_method", "TEXT DEFAULT 'configurator'"),
             ("drawing_release_percent", "FLOAT DEFAULT 80"),
             ("released_at", "DATETIME"),
+            ("released_to_qc_at", "DATETIME"),
+            ("released_to_qc_by", "TEXT DEFAULT ''"),
+            ("released_to_technical_at", "DATETIME"),
+            ("released_to_technical_by", "TEXT DEFAULT ''"),
         ],
     }
     with engine.begin() as conn:
@@ -112,7 +130,7 @@ _auto_migrate()
 with SessionLocal() as _db:
     lc.ensure_engine_materials(_db)
 
-app = FastAPI(title="Sofaamy Cloud API", version="0.1.0")
+app = FastAPI(title="Fabra API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
@@ -149,6 +167,7 @@ WORKFLOW_STATUSES = [
 WORKFLOW_LABELS = {
     key: label for key, label in (
         ("measurement_received", "Measurement received"),
+        ("survey_scheduled", "Site survey scheduled"),
         ("extraction_in_progress", "Extraction in progress"),
         ("extraction_ready", "Extraction ready for quote"),
         ("quote_in_preparation", "Quote in preparation"),
@@ -167,7 +186,7 @@ WORKFLOW_LABELS = {
 
 @app.get("/")
 def root():
-    return {"service": "Sofaamy Cloud API", "status": "ok", "db": engine.dialect.name}
+    return {"service": "Fabra API", "status": "ok", "db": engine.dialect.name}
 
 
 @app.get("/api/clients")
@@ -191,10 +210,230 @@ def create_client(c: schemas.ClientIn, db: Session = Depends(get_db)):
     return {"id": client.id, "name": client.name}
 
 
+@app.get("/api/clients/{client_id}")
+def get_client(client_id: int, db: Session = Depends(get_db)):
+    client = db.get(models.Client, client_id)
+    if client is None:
+        raise HTTPException(404, "Client not found")
+    leads = db.scalars(select(models.Lead).where(models.Lead.client_id == client_id)
+                        .order_by(models.Lead.created_at.desc())).all()
+    jobs = client.jobs or []
+    won = sum(1 for lead in leads if lead.stage == "won")
+    lost = sum(1 for lead in leads if lead.stage == "lost")
+    closed = won + lost
+    return {
+        "id": client.id, "name": client.name, "contact": client.contact,
+        "phone": client.phone, "location": client.location, "type": client.type,
+        "jobs": len(jobs), "value": round(sum(job.value for job in jobs), 2),
+        "win_rate": round(won / closed * 100, 1) if closed else None,
+        "won": won, "lost": lost,
+        "leads": [{
+            "id": lead.id, "lead_number": lead.lead_number, "name": lead.name,
+            "stage": lead.stage, "estimated_value": lead.estimated_value,
+            "created_at": lead.created_at.isoformat() if lead.created_at else None,
+            "project_id": lead.project_id,
+        } for lead in leads],
+    }
+
+
 def _workflow_log(db: Session, project: models.Project, kind: str, note: str,
-                  who: str = "System") -> None:
-    db.add(models.WorkflowEvent(
-        project_id=project.id, kind=kind, note=note, who=who))
+                  who: str = "System") -> models.WorkflowEvent:
+    event = models.WorkflowEvent(
+        project_id=project.id, kind=kind, note=note, who=who)
+    db.add(event)
+    return event
+
+
+_PM_PREFIX = "PM:"
+_TASK_STATUSES = {"todo", "in_progress", "blocked", "done"}
+_PROJECT_PRIORITIES = {"normal", "high", "urgent"}
+_SURVEY_STATUSES = {"scheduled", "in_progress", "completed", "cancelled"}
+
+
+def _pm_note(payload: dict) -> str:
+    note = _PM_PREFIX + json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+    if len(note) > 400:
+        raise HTTPException(400, "Project-management note is too long")
+    return note
+
+
+def _pm_payload(note: str) -> dict | None:
+    if not str(note or "").startswith(_PM_PREFIX):
+        return None
+    try:
+        return json.loads(note[len(_PM_PREFIX):])
+    except (TypeError, ValueError):
+        return None
+
+
+def _valid_date(value: str, field: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    try:
+        datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(400, f"{field} must be YYYY-MM-DD") from exc
+    return value[:10]
+
+
+def _valid_datetime(value: str, field: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        raise HTTPException(400, f"{field} is required")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(
+            400, f"{field} must be a valid local date and time") from exc
+    return parsed.replace(tzinfo=None, second=0, microsecond=0).isoformat(
+        timespec="minutes")
+
+
+def _project_management_payload(project: models.Project) -> dict:
+    assignment = {
+        "owner": "", "team": "", "planned_start": "", "due_date": "",
+        "priority": "normal", "updated_at": None, "updated_by": "",
+        "board_stage": "", "board_stage_base": "",
+    }
+    tasks: dict[int, dict] = {}
+    events = sorted(project.workflow_events or [], key=lambda row: (row.created_at, row.id))
+    for event in events:
+        payload = _pm_payload(event.note)
+        if not payload:
+            continue
+        if event.kind == "project_assignment":
+            assignment.update({
+                key: payload.get(key, assignment[key])
+                for key in ("owner", "team", "planned_start", "due_date", "priority")
+            })
+            assignment.update({
+                "updated_at": event.created_at.isoformat() if event.created_at else None,
+                "updated_by": event.who,
+            })
+        elif event.kind == "board_position":
+            assignment["board_stage"] = payload.get("stage", "")
+            assignment["board_stage_base"] = payload.get("base_stage", "")
+        elif event.kind == "project_task":
+            tasks[event.id] = {
+                "id": event.id,
+                "department": payload.get("department", "General"),
+                "title": payload.get("title", "Project task"),
+                "assignee": payload.get("assignee", ""),
+                "due_date": payload.get("due_date", ""),
+                "status": payload.get("status", "todo"),
+                "notes": payload.get("notes", ""),
+                "created_at": event.created_at.isoformat() if event.created_at else None,
+                "created_by": event.who,
+                "updated_at": event.created_at.isoformat() if event.created_at else None,
+            }
+        elif event.kind == "project_task_update":
+            task = tasks.get(int(payload.get("task_id") or 0))
+            if task:
+                task.update({key: value for key, value in payload.items()
+                             if key in ("status", "assignee", "due_date", "notes")
+                             and value is not None})
+                task["updated_at"] = event.created_at.isoformat() if event.created_at else None
+    today = datetime.now().date()
+    for task in tasks.values():
+        try:
+            due = datetime.fromisoformat(task["due_date"]).date() if task["due_date"] else None
+        except ValueError:
+            due = None
+        task["overdue"] = bool(due and due < today and task["status"] != "done")
+    open_tasks = [task for task in tasks.values() if task["status"] != "done"]
+    return {
+        **assignment,
+        "tasks": sorted(tasks.values(), key=lambda task: (
+            task["status"] == "done", task["due_date"] or "9999-12-31", task["id"])),
+        "open_task_count": len(open_tasks),
+        "overdue_task_count": sum(1 for task in open_tasks if task["overdue"]),
+    }
+
+
+def _project_surveys(project: models.Project) -> list[dict]:
+    surveys: dict[int, dict] = {}
+    events = sorted(
+        project.workflow_events or [], key=lambda row: (row.created_at, row.id))
+    for event in events:
+        payload = _pm_payload(event.note)
+        if not payload:
+            continue
+        if event.kind == "site_survey":
+            surveys[event.id] = {
+                "id": event.id,
+                "survey_number": f"SV-{event.id:04d}",
+                "project_id": project.id,
+                "project_number": project.project_number,
+                "project_name": project.name,
+                "client_name": project.client.name if project.client else "Walk-in Client",
+                "site": project.location,
+                "assigned_to": payload.get("assigned_to", ""),
+                "scheduled_for": payload.get("scheduled_for", ""),
+                "units": int(payload.get("units") or 0),
+                "notes": payload.get("notes", ""),
+                "status": payload.get("status", "scheduled"),
+                "variance": payload.get("variance", ""),
+                "created_at": event.created_at.isoformat() if event.created_at else None,
+                "created_by": event.who,
+                "updated_at": event.created_at.isoformat() if event.created_at else None,
+                "updated_by": event.who,
+                "completed_at": None,
+            }
+        elif event.kind == "site_survey_update":
+            survey = surveys.get(int(payload.get("survey_id") or 0))
+            if survey:
+                survey.update({
+                    key: value for key, value in payload.items()
+                    if key in {
+                        "status", "assigned_to", "scheduled_for", "units",
+                        "notes", "variance", "completed_at",
+                    } and value is not None
+                })
+                survey["updated_at"] = (
+                    event.created_at.isoformat() if event.created_at else None)
+                survey["updated_by"] = event.who
+    now = datetime.now()
+    for survey in surveys.values():
+        try:
+            scheduled = datetime.fromisoformat(survey["scheduled_for"])
+        except (TypeError, ValueError):
+            scheduled = None
+        survey["overdue"] = bool(
+            scheduled and scheduled < now
+            and survey["status"] not in {"completed", "cancelled"})
+    return sorted(surveys.values(), key=lambda row: (
+        row["status"] in {"completed", "cancelled"},
+        row["scheduled_for"] or "9999-12-31T23:59", row["id"]))
+
+
+def _workflow_event_note(event: models.WorkflowEvent) -> str:
+    payload = _pm_payload(event.note)
+    if not payload:
+        return event.note
+    if event.kind == "project_assignment":
+        owner = payload.get("owner") or payload.get("team") or "unassigned"
+        due = f" due {payload['due_date']}" if payload.get("due_date") else ""
+        return f"assigned project to {owner}{due}"
+    if event.kind == "project_task":
+        return f"created {payload.get('department', 'project')} task: {payload.get('title', 'task')}"
+    if event.kind == "project_task_update":
+        return f"updated task #{payload.get('task_id')} to {payload.get('status', 'updated')}"
+    if event.kind == "site_survey":
+        return (
+            f"scheduled site survey for {payload.get('scheduled_for', 'unscheduled')}"
+            f" with {payload.get('assigned_to', 'unassigned')}")
+    if event.kind == "site_survey_update":
+        return (
+            f"updated survey #{payload.get('survey_id')} to "
+            f"{payload.get('status', 'updated')}")
+    if event.kind == "preproduction_qc":
+        result = payload.get("result", payload.get("r", "hold"))
+        return (
+            "approved the pre-production QC gate"
+            if result == "approved"
+            else "placed the project on pre-production QC hold")
+    return "updated project management"
 
 
 def _project_contract_value(project: models.Project) -> float:
@@ -246,6 +485,28 @@ def _payment_authorization(db: Session, project: models.Project) -> dict:
             else "An accepted quotation must open a project job before drawing can begin."
             if not jobs
             else f"GHS {round(required - paid, 2):,.2f} still required against the project's combined contract."
+        ),
+    }
+
+
+def _project_schedule_authorization(
+        db: Session, project: models.Project) -> dict:
+    """Whether commercial dates may be committed to a project.
+
+    A quotation is an offer, not a production promise. Project dates are only
+    meaningful once the customer has accepted and Accounts has cleared the
+    configured payment gate.
+    """
+    payment = _payment_authorization(db, project)
+    client_accepted = payment["accepted_quote_count"] > 0
+    authorized = client_accepted and payment["authorized"]
+    return {
+        "authorized": authorized,
+        "reason": (
+            "" if authorized else
+            "Client acceptance is required before setting the project schedule."
+            if not client_accepted else
+            "Required payment must be cleared before setting the project schedule."
         ),
     }
 
@@ -649,6 +910,272 @@ def _procurement_payload(
     }
 
 
+def _drawing_task_for_chain(
+        project: models.Project,
+        design_id: int | None,
+        extraction: models.TechnicalExtraction | None,
+        quote: models.Quote | None) -> models.DrawingTask | None:
+    """The drawing task (any method) open on one item's current
+    extraction/quote chain, if any. Shared by the approved-drawing lookup and
+    the pre-production QC gate's readiness check.
+    """
+    if extraction is None or quote is None:
+        return None
+    return next((
+        row for row in sorted(
+            project.drawing_tasks or [],
+            key=lambda value: value.created_at, reverse=True)
+        if row.design_id == design_id
+        and row.extraction_id == extraction.id
+        and row.quote_id == quote.id
+    ), None)
+
+
+def _current_approved_drawing(
+        project: models.Project,
+        design_id: int | None,
+        extraction: models.TechnicalExtraction | None,
+        quote: models.Quote | None) -> models.DrawingRevision | None:
+    """The approved drawing on one item's current extraction/quote chain."""
+    task = _drawing_task_for_chain(project, design_id, extraction, quote)
+    if task is None:
+        return None
+    return next((
+        revision for revision in sorted(
+            task.revisions or [], key=lambda value: value.revision, reverse=True)
+        if revision.status == "approved"
+    ), None)
+
+
+def _drawing_not_required(
+        project: models.Project,
+        design_id: int | None,
+        extraction: models.TechnicalExtraction | None,
+        quote: models.Quote | None) -> bool:
+    """Whether Technical has explicitly declared no drawing is needed for
+    this item on its current extraction/quote chain."""
+    task = _drawing_task_for_chain(project, design_id, extraction, quote)
+    return task is not None and task.status == "not_required"
+
+
+def _qc_item_scopes(
+        project: models.Project,
+) -> list[tuple[int | None, models.DesignRecord | None]]:
+    """The (extraction-chain design_id, item record) pairs QC checks for
+    this project — one per saved item, scoped the same way extraction/
+    drawing/procurement chains are scoped elsewhere. Shared by the QC gate
+    itself and anything that needs to match its exact per-item scoping
+    (e.g. auto-generating a missing extraction for an item QC will check).
+    """
+    records = sorted(project.items or [], key=lambda row: row.created_at)
+    has_ungrouped_chain = any(
+        row.design_id is None for row in (
+            list(project.extractions or [])
+            + list(project.drawing_tasks or [])))
+    has_item_scoped_chain = any(
+        row.design_id is not None for row in (
+            list(project.extractions or [])
+            + list(project.drawing_tasks or [])))
+    # Older single-item projects used a project-wide (design_id=None) chain.
+    # Treat that as the one item's chain until an operator explicitly scopes
+    # it, without asking QA/QC to approve the same physical item twice.
+    if len(records) == 1 and has_ungrouped_chain and not has_item_scoped_chain:
+        scopes = [(None, records[0])]
+    else:
+        scopes = [(record.id, record) for record in records]
+    if has_ungrouped_chain and not (
+            len(records) == 1 and not has_item_scoped_chain):
+        scopes.append((None, None))
+    return scopes
+
+
+def _qc_readiness(project: models.Project) -> dict:
+    """Whether every real item in the project is ready for Technical to
+    submit to QC — each item needs either an approved drawing or an
+    explicit not-required declaration. Shared by `submit_project_to_qc`,
+    `_technical_workflow_payload`'s `qc_submission` block and the drawings
+    queue.
+    """
+    items = []
+    not_ready = []
+    for design_id, record in _qc_item_scopes(project):
+        if record is None:
+            continue
+        label = record.ref or record.name or f"Item {record.id}"
+        extraction = _latest_approved_extraction(project, design_id)
+        quote = _current_commercial_quote(project, extraction)
+        drawing = _current_approved_drawing(project, design_id, extraction, quote)
+        if drawing is not None:
+            status = "approved"
+        elif _drawing_not_required(project, design_id, extraction, quote):
+            status = "not_required"
+        else:
+            status = "pending"
+            not_ready.append(label)
+        items.append({"design_id": design_id, "label": label, "status": status})
+    return {"ready": not not_ready, "items": items, "not_ready_items": not_ready}
+
+
+def _drawing_queue_payload(project: models.Project) -> dict:
+    """One row of the cross-project drawings queue — every project Accounts
+    has released to Technical, with per-item drawing readiness."""
+    readiness = _qc_readiness(project)
+    return {
+        "project_id": project.id,
+        "project_number": project.project_number,
+        "project_name": project.name,
+        "client_name": project.client.name if project.client else "Walk-in Client",
+        "released_to_technical_at": (
+            project.released_to_technical_at.isoformat()
+            if project.released_to_technical_at else None),
+        "released_to_technical_by": project.released_to_technical_by,
+        "released_to_qc_at": (
+            project.released_to_qc_at.isoformat()
+            if project.released_to_qc_at else None),
+        "released_to_qc_by": project.released_to_qc_by,
+        "ready_for_qc": readiness["ready"],
+        "items": readiness["items"],
+        "not_ready_items": readiness["not_ready_items"],
+    }
+
+
+def _preproduction_qc_payload(db: Session, project: models.Project) -> dict:
+    """Resolve the project-wide QC gate against its exact current inputs.
+
+    Approval is deliberately tied to a hash of the saved design, approved
+    extraction, accepted quotation, approved drawing and live procurement
+    quantities for every project item. If any of those inputs changes, the
+    old approval remains in the audit history but can no longer release work.
+    """
+    scopes = _qc_item_scopes(project)
+
+    issues = []
+    snapshot_items = []
+    item_rows = []
+    if not scopes:
+        issues.append("No measured project items are available for checking")
+    if project.released_to_qc_at is None:
+        issues.append("Technical must submit the project to QC")
+
+    for design_id, record in scopes:
+        label = (
+            record.ref or record.name or f"Item {record.id}"
+            if record is not None else "Ungrouped project item")
+        extraction = _latest_approved_extraction(project, design_id)
+        quote = _current_commercial_quote(project, extraction)
+        drawing = _current_approved_drawing(
+            project, design_id, extraction, quote)
+        procurement = _procurement_payload(db, extraction)
+        # Extraction/quote/procurement are shown to QC below for judgment,
+        # not required to reach QC — Accounts releasing the project is what
+        # puts it in front of QC (see `issues` above). The drawing pack IS
+        # required to *approve*, since QC approval releases it straight to
+        # the factory floor (see `_release_project_to_factory`): an item
+        # with no drawing yet will be auto-confirmed from its saved design
+        # at release time, but a drawing genuinely in progress must not be
+        # silently bypassed.
+        if drawing is None and record is not None:
+            if extraction is None or quote is None:
+                issues.append(
+                    f"{label} needs an approved extraction and accepted "
+                    "quotation before QC can release it")
+            else:
+                pending_task = _drawing_task_for_chain(
+                    project, design_id, extraction, quote)
+                if pending_task and pending_task.revisions:
+                    issues.append(
+                        f"{label}'s drawing pack (client overview + factory "
+                        "breakdown files) is not complete yet")
+
+        snapshot_row = {
+            "design_id": design_id,
+            "record_id": record.id if record is not None else None,
+            "design_hash": (
+                hashlib.sha256(record.design_json.encode("utf-8")).hexdigest()
+                if record is not None else None),
+            "qty": int(record.qty or 1) if record is not None else None,
+            "extraction_id": extraction.id if extraction else None,
+            "extraction_revision": extraction.revision if extraction else None,
+            "quote_id": quote.id if quote else None,
+            "drawing_revision_id": drawing.id if drawing else None,
+            "drawing_revision": drawing.revision if drawing else None,
+            "procurement": [{
+                "code": row["code"],
+                "required": row["required"],
+                "unit": row["unit"],
+                "available": row["available"],
+                "status": row["status"],
+            } for row in procurement["rows"]],
+        }
+        snapshot_items.append(snapshot_row)
+        item_rows.append({
+            "design_id": design_id,
+            "label": label,
+            "extraction_revision": extraction.revision if extraction else None,
+            "quote_number": quote.quote_number if quote else None,
+            "drawing_revision": drawing.revision if drawing else None,
+            "procurement_ready": procurement["ready"],
+            "procurement_shortages": procurement["shortage_count"],
+        })
+
+    snapshot_hash = hashlib.sha256(json.dumps(
+        {"project_id": project.id, "items": snapshot_items},
+        sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    latest_event = next((
+        event for event in sorted(
+            project.workflow_events or [],
+            key=lambda row: (row.created_at, row.id), reverse=True)
+        if event.kind == "preproduction_qc" and _pm_payload(event.note)
+    ), None)
+    stored = _pm_payload(latest_event.note) if latest_event else None
+    current = bool(stored and stored.get("snapshot", stored.get("s")) == snapshot_hash)
+    result = stored.get("result", stored.get("r")) if stored else None
+    approved = bool(current and result == "approved" and not issues)
+    if approved:
+        status = "approved"
+    elif current and result == "hold":
+        status = "hold"
+    elif stored:
+        status = "stale"
+    elif issues:
+        status = "not_ready"
+    else:
+        status = "ready_for_check"
+    checks = stored.get("checks", stored.get("c", {})) if stored else {}
+    latest_check = ({
+        "id": latest_event.id,
+        "result": result,
+        "current": current,
+        "inspector": stored.get("inspector", stored.get("i", latest_event.who)),
+        "notes": stored.get("notes", stored.get("n", "")),
+        "checked_at": (
+            latest_event.created_at.isoformat()
+            if latest_event.created_at else None),
+        "checklist": {
+            "measurements_verified": bool(checks.get("m")),
+            "materials_verified": bool(checks.get("mat")),
+            "quantities_verified": bool(checks.get("qty")),
+            "drawings_verified": bool(checks.get("drw")),
+            "procurement_verified": bool(checks.get("proc")),
+        },
+    } if latest_event else None)
+    return {
+        "project_id": project.id,
+        "project_number": project.project_number,
+        "project_name": project.name,
+        "client_name": project.client.name if project.client else "Walk-in Client",
+        "site": project.location,
+        "status": status,
+        "ready": not issues,
+        "approved": approved,
+        "snapshot_hash": snapshot_hash,
+        "item_count": len(scopes),
+        "items": item_rows,
+        "issues": issues,
+        "latest_check": latest_check,
+    }
+
+
 def _drawing_task_payload(
         task: models.DrawingTask,
         current_extraction_id: int | None = None,
@@ -691,6 +1218,521 @@ def _drawing_task_payload(
             "files": [_file_payload(file) for file in sorted(
                 revision.files or [], key=lambda row: row.created_at)],
         } for revision in revisions],
+    }
+
+
+def _project_workspace_payload(
+        db: Session,
+        project: models.Project,
+        payment: dict) -> dict:
+    """Management view of one project using the existing workflow records.
+
+    Commercial/payment values stay project-wide. Extraction, drawing and
+    release status is resolved independently for every saved design item.
+    """
+    now = datetime.utcnow()
+    management = _project_management_payload(project)
+    schedule = _project_schedule_authorization(db, project)
+    surveys = _project_surveys(project)
+    preproduction_qc = _preproduction_qc_payload(db, project)
+    records = sorted(project.items or [], key=lambda row: row.created_at)
+    jobs = sorted(project.jobs or [], key=lambda row: row.created_at)
+    job_ids = [job.id for job in jobs]
+    job_by_id = {job.id: job for job in jobs}
+    job_events = (
+        db.scalars(select(models.Event).where(
+            models.Event.job_id.in_(job_ids))).all()
+        if job_ids else [])
+    qc_checks = (
+        db.scalars(select(models.QcCheck).where(
+            models.QcCheck.job_id.in_(job_ids))).all()
+        if job_ids else [])
+    latest_qc = {}
+    for check in sorted(qc_checks, key=lambda row: row.created_at):
+        latest_qc[check.job_id] = check
+
+    drawing_tasks = sorted(
+        project.drawing_tasks or [], key=lambda row: row.created_at,
+        reverse=True)
+    releases = sorted(
+        project.production_releases or [], key=lambda row: row.created_at,
+        reverse=True)
+
+    item_rows = []
+    current_drawing_revision_ids = set()
+    for record in records:
+        extraction = _latest_approved_extraction(project, record.id)
+        quote = _current_commercial_quote(project, extraction)
+        task = next((row for row in drawing_tasks
+                     if row.design_id == record.id
+                     and extraction is not None
+                     and row.extraction_id == extraction.id
+                     and quote is not None
+                     and row.quote_id == quote.id), None)
+        approved_revision = next((
+            revision for revision in sorted(
+                task.revisions or [], key=lambda row: row.revision,
+                reverse=True)
+            if revision.status == "approved"), None) if task else None
+        release = next((row for row in releases
+                        if row.design_id == record.id
+                        and row.status == "current"
+                        and extraction is not None
+                        and row.extraction_id == extraction.id
+                        and quote is not None
+                        and row.quote_id == quote.id
+                        and approved_revision is not None
+                        and row.drawing_revision_id == approved_revision.id), None)
+        if approved_revision is not None:
+            current_drawing_revision_ids.add(approved_revision.id)
+        procurement = _procurement_payload(db, extraction)
+        job = job_by_id.get(record.job_id)
+        if job is None and len(records) == 1 and len(jobs) == 1:
+            job = jobs[0]
+
+        if extraction is None:
+            status, blocker = "Needs extraction", "No approved material extraction"
+        elif quote is None:
+            status, blocker = "Needs quotation", "No accepted current quotation"
+        elif not payment["authorized"]:
+            status, blocker = "Payment hold", payment["reason"]
+        elif approved_revision is None:
+            status, blocker = "Needs drawing approval", "No approved current drawing"
+        elif procurement["shortage_count"]:
+            status, blocker = "Procurement hold", (
+                f"{procurement['shortage_count']} material line"
+                f"{'' if procurement['shortage_count'] == 1 else 's'} need action")
+        elif not preproduction_qc["approved"]:
+            status = "Pre-production QC hold"
+            blocker = (
+                "QA/QC must approve the current measurements, materials, "
+                "quantities, drawings and procurement position")
+        elif release is None:
+            status, blocker = "Ready for factory release", "Factory pack not released"
+        elif job is not None:
+            status = lc.STAGE_LABEL.get(job.stage, job.stage)
+            blocker = lc.advance_block_reason(db, job) or ""
+        else:
+            status, blocker = "Factory released", "Production job is not linked to this item"
+
+        item_rows.append({
+            "design_id": record.id,
+            "ref": record.ref,
+            "name": record.name,
+            "category": _design_category(record),
+            "system": _design_system(record),
+            "qty": record.qty,
+            "location": record.location,
+            "status": status,
+            "blocking_reason": blocker,
+            "references": {
+                "extraction": (
+                    f"E{extraction.revision}" if extraction else None),
+                "quotation": quote.quote_number if quote else None,
+                "drawing": (
+                    f"R{approved_revision.revision}"
+                    if approved_revision else None),
+                "factory_release": (
+                    release.release_number if release else None),
+            },
+            "procurement": procurement,
+            "job": ({
+                "job_number": job.job_number,
+                "stage": job.stage,
+                "stage_label": lc.STAGE_LABEL.get(job.stage, job.stage),
+                "progress": lc.STAGE_PROGRESS.get(job.stage, job.progress),
+                "block": lc.advance_block_reason(db, job),
+            } if job else None),
+            "complete": bool(job and job.stage == "done"),
+        })
+
+    grouped = []
+    for item in item_rows:
+        group = next((row for row in grouped if row["name"] == item["name"]), None)
+        if group is None:
+            group = {
+                "key": f"product-{len(grouped) + 1}",
+                "name": item["name"],
+                "category": item["category"],
+                "system": item["system"],
+                "item_count": 0,
+                "total_qty": 0,
+                "complete_count": 0,
+                "items": [],
+            }
+            grouped.append(group)
+        group["item_count"] += 1
+        group["total_qty"] += int(item["qty"] or 1)
+        group["complete_count"] += 1 if item["complete"] else 0
+        group["items"].append(item)
+
+    extraction_complete = bool(item_rows) and all(
+        item["references"]["extraction"] for item in item_rows)
+    # Quotation only needs the client's quote accepted per item — it must not
+    # wait on a technical extraction existing (extraction is generated for
+    # costing/procurement, but is no longer a required gate; see accounts_release).
+    quotation_complete = bool(records) and all(
+        any(quote.design_id == record.id and quote.status in ("Accepted", "Approved")
+            for quote in project.quotes or [])
+        for record in records)
+    drawing_complete = bool(item_rows) and _qc_readiness(project)["ready"]
+    procurement_shortages = sum(
+        item["procurement"]["shortage_count"] for item in item_rows)
+    # Only a real, known shortage blocks — no extraction means nothing to
+    # check yet, not a shortage.
+    procurement_complete = procurement_shortages == 0
+    preproduction_qc_complete = preproduction_qc["approved"]
+    release_complete = bool(item_rows) and all(
+        item["references"]["factory_release"] for item in item_rows)
+    production_complete = bool(jobs) and all(
+        lc.stage_index(job.stage) >= lc.stage_index("qa") for job in jobs)
+    qa_complete = bool(jobs) and all(
+        latest_qc.get(job.id) is not None
+        and latest_qc[job.id].result == "pass" for job in jobs)
+    dispatch_complete = bool(jobs) and all(
+        lc.stage_index(job.stage) >= lc.stage_index("install")
+        and bool(job.dn_number) for job in jobs)
+    delivered_complete = bool(jobs) and all(
+        job.stage == "done" for job in jobs)
+    released_to_technical = project.released_to_technical_at is not None
+    submitted_to_qc = project.released_to_qc_at is not None
+
+    stage_defs = [
+        ("measurement", "Measurement", bool(item_rows), "Measurements captured in saved project items."),
+        ("design", "Design", bool(item_rows), f"{len(item_rows)} saved design item{'' if len(item_rows) == 1 else 's'}."),
+        ("quotation", "Quotation", quotation_complete, "The accepted quotation must cover every current item extraction."),
+        ("payment", "Payment", payment["authorized"], payment["reason"] or "Drawing payment gate cleared."),
+        ("accounts_release", "Accounts Release to Technical", released_to_technical, (
+            f"Released to Technical by {project.released_to_technical_by}."
+            if released_to_technical else
+            "Accounts must confirm payment and release the project to Technical.")),
+        ("drawing", "Drawing", drawing_complete, (
+            "Every item has an approved drawing or is marked drawing-not-required."
+            if drawing_complete else
+            "Technical must complete or mark not-required each item's drawing.")),
+        ("submit_to_qc", "Submit to QC", submitted_to_qc, (
+            f"Submitted to QC by {project.released_to_qc_by}."
+            if submitted_to_qc else
+            "Technical must submit the project to QC.")),
+        ("procurement", "Procurement", procurement_complete, f"{procurement_shortages} material line{'' if procurement_shortages == 1 else 's'} need action."),
+        ("preproduction_qc", "Pre-production QC", preproduction_qc_complete, (
+            "QA/QC approval is current for all measurements, materials, quantities, drawings and procurement."
+            if preproduction_qc_complete else
+            "QA/QC must verify all measurements, materials, quantities, drawings and procurement before factory release.")),
+        ("release", "Factory Release", release_complete, "Each item requires a current approved factory pack."),
+        ("production", "Production", production_complete, "Factory work must reach Quality Check."),
+        ("qa", "QA", qa_complete, "Every production job needs a passing QA check."),
+        ("dispatch", "Dispatch", dispatch_complete, "Delivery note, dispatch and installation are required."),
+        ("delivered", "Delivered", delivered_complete, "All project jobs must be completed."),
+    ]
+    first_incomplete = next((index for index, row in enumerate(stage_defs)
+                             if not row[2]), len(stage_defs))
+    stages = []
+    for index, (key, label, complete, detail) in enumerate(stage_defs):
+        if complete:
+            state = "complete"
+        elif index == first_incomplete:
+            state = "blocked" if key in {
+                "payment", "accounts_release", "drawing", "submit_to_qc",
+                "procurement", "preproduction_qc"} else "current"
+        else:
+            state = "not_started"
+        stages.append({
+            "key": key,
+            "label": label,
+            "state": state,
+            "complete": complete,
+            "detail": detail,
+        })
+
+    first_job = jobs[0] if jobs else None
+    next_routes = {
+        "measurement": ("Add the first measured item", "Supervisor", "/configurator"),
+        "design": ("Complete the project design", "Design Team", "/configurator"),
+        "quotation": ("Prepare or approve the current quotation", "Sales & Accounts", f"/quotations?project={project.id}"),
+        "payment": ("Record the required customer payment", "Accounts", f"/accounts?job={first_job.job_number}" if first_job else "/accounts"),
+        "accounts_release": ("Confirm payment and release to Technical", "Accounts", f"/accounts?job={first_job.job_number}" if first_job else "/accounts"),
+        "drawing": ("Complete or mark not-required each item's drawing", "Technical", f"/drawings?project={project.id}"),
+        "submit_to_qc": ("Submit the project to QC", "Technical", f"/drawings?project={project.id}"),
+        "procurement": ("Resolve project material shortages", "Procurement", "/inventory"),
+        "preproduction_qc": ("Complete the pre-production release check", "QA / QC", f"/quality?scope=preproduction&project={project.id}"),
+        "release": ("Complete pre-production QC — release to factory happens automatically", "QA / QC", f"/quality?scope=preproduction&project={project.id}"),
+        "production": ("Continue factory production", "Factory", f"/production/{first_job.job_number}" if first_job else "/production"),
+        "qa": ("Complete quality checks", "QA", "/quality"),
+        "dispatch": ("Assign delivery and installation", "Dispatch", "/dispatch"),
+        "delivered": ("Complete delivery and close the project", "Dispatch", "/dispatch"),
+    }
+    next_stage = stages[first_incomplete] if first_incomplete < len(stages) else None
+    if (next_stage and management["due_date"]
+            and management["due_date"] < now.date().isoformat()):
+        next_stage["state"] = "overdue"
+    next_label, next_owner, next_url = next_routes.get(
+        next_stage["key"] if next_stage else "", (
+            "Project complete", "Management", f"/projects/{project.id}"))
+    open_survey = next((survey for survey in surveys
+                        if survey["status"] not in {"completed", "cancelled"}), None)
+    if next_stage and next_stage["key"] == "measurement" and open_survey:
+        next_label = (
+            "Complete overdue site survey" if open_survey["overdue"]
+            else "Complete scheduled site survey")
+        next_owner = open_survey["assigned_to"] or "Sales / Field Team"
+        next_url = "/surveys"
+        next_stage["detail"] = (
+            f"{open_survey['survey_number']} is scheduled for "
+            f"{open_survey['scheduled_for']}.")
+
+    alerts = []
+    for survey in surveys:
+        if survey["overdue"]:
+            alerts.append({
+                "severity": "critical",
+                "title": f"Overdue site survey {survey['survey_number']}",
+                "detail": (
+                    f"{survey['assigned_to'] or 'Unassigned'} · scheduled "
+                    f"{survey['scheduled_for']}"),
+            })
+    for task in management["tasks"]:
+        if task["overdue"]:
+            alerts.append({
+                "severity": "critical",
+                "title": f"Overdue {task['department']} task",
+                "detail": f"{task['title']} · {task['assignee'] or 'No assignee'} · due {task['due_date']}",
+            })
+    for item in item_rows:
+        if not item["references"]["extraction"]:
+            alerts.append({
+                "severity": "warning",
+                "title": f"{item['ref'] or item['name']} has no approved extraction",
+                "detail": "Technical quantities and downstream documents are not controlled yet.",
+            })
+    if quotation_complete and jobs and not payment["authorized"]:
+        alerts.append({
+            "severity": "critical", "title": "Customer payment is holding drawing work",
+            "detail": payment["reason"],
+        })
+    if procurement_shortages:
+        alerts.append({
+            "severity": "critical", "title": "Procurement action required",
+            "detail": f"{procurement_shortages} approved material line{'' if procurement_shortages == 1 else 's'} are short, unmapped or use a different unit.",
+        })
+    if procurement_complete and not preproduction_qc_complete:
+        qc_status = preproduction_qc["status"]
+        alerts.append({
+            "severity": "critical" if qc_status == "hold" else "warning",
+            "title": (
+                "Pre-production QC placed the project on hold"
+                if qc_status == "hold" else
+                "Pre-production QC approval required"),
+            "detail": (
+                "The previous approval is stale because a controlled project input changed."
+                if qc_status == "stale" else
+                "Factory release is blocked until QA/QC verifies the current project pack."),
+        })
+    stale_quotes = [quote for quote in project.quotes or []
+                    if quote.extraction_id and any(
+                        (row := db.get(models.TechnicalExtraction, extraction_id)) is None
+                        or row.status != "approved"
+                        for extraction_id in _quote_extraction_ids(quote))]
+    if stale_quotes:
+        alerts.append({
+            "severity": "warning", "title": "Superseded quotation basis exists",
+            "detail": f"{len(stale_quotes)} quotation record{'' if len(stale_quotes) == 1 else 's'} must not drive current production.",
+        })
+    superseded_releases = [row for row in releases if row.status == "superseded"]
+    if superseded_releases:
+        alerts.append({
+            "severity": "warning", "title": "Superseded factory packs retained for audit",
+            "detail": f"{len(superseded_releases)} pack{'' if len(superseded_releases) == 1 else 's'} are marked Do Not Produce.",
+        })
+    if payment["authorized"] and jobs and all(job.stage == "pending" for job in jobs):
+        alerts.append({
+            "severity": "warning", "title": "Paid project has not started production",
+            "detail": "The payment gate is clear but every project job is still waiting for cutting.",
+        })
+    if payment["authorized"] and not (management["owner"] or management["team"]):
+        alerts.append({
+            "severity": "critical", "title": "Paid project has no responsible owner",
+            "detail": "Assign a person or team so the paid work cannot disappear between departments.",
+        })
+    if payment["authorized"] and not management["open_task_count"]:
+        alerts.append({
+            "severity": "warning", "title": "Paid project has no open departmental task",
+            "detail": "Create the next accountable task with an assignee and due date.",
+        })
+
+    current_documents = []
+    if records:
+        current_documents.extend([
+            {"kind": "project_quote", "label": "Current project quotation", "scope": "Project"},
+            {"kind": "project_boq", "label": "Project material & BOQ pack", "scope": "Project"},
+        ])
+        if any(item["category"] in ("frame", "curtainwall") for item in item_rows):
+            current_documents.append({
+                "kind": "project_cutting", "label": "Project cutting & bundle pack",
+                "scope": "Factory",
+            })
+    for quote in sorted(project.quotes or [], key=lambda row: row.created_at,
+                        reverse=True):
+        if quote.status in ("Accepted", "Approved") and quote not in stale_quotes:
+            current_documents.append({
+                "kind": "quotation", "label": quote.quote_number,
+                "scope": "Issued quotation", "quote_number": quote.quote_number,
+            })
+    for item in item_rows:
+        current_documents.append({
+            "kind": "item_reports",
+            "label": f"{item['ref'] or item['name']} report pack",
+            "scope": item["status"],
+            "design_id": item["design_id"],
+        })
+    for task in drawing_tasks:
+        for revision in task.revisions or []:
+            if revision.id in current_drawing_revision_ids:
+                for file in revision.files or []:
+                    current_documents.append({
+                        "kind": "drawing", "label": file.filename,
+                        "scope": f"Approved drawing R{revision.revision}",
+                        "download_url": f"/api/drawing-files/{file.id}",
+                    })
+    for job in jobs:
+        if job.dn_number:
+            current_documents.append({
+                "kind": "delivery", "label": job.dn_number,
+                "scope": job.job_number, "job_number": job.job_number,
+            })
+
+    audit_documents = [{
+        "kind": "factory_release",
+        "label": row.release_number,
+        "scope": "Do Not Produce",
+        "status": row.status,
+    } for row in superseded_releases]
+    for task in drawing_tasks:
+        for revision in task.revisions or []:
+            if (revision.status == "approved"
+                    and revision.id not in current_drawing_revision_ids):
+                audit_documents.extend({
+                    "kind": "drawing",
+                    "label": file.filename,
+                    "scope": f"Drawing R{revision.revision} — Do Not Produce",
+                    "download_url": f"/api/drawing-files/{file.id}",
+                } for file in revision.files or [])
+    audit_documents.extend({
+        "kind": "quotation",
+        "label": quote.quote_number,
+        "scope": "Superseded basis — Do Not Produce",
+        "quote_number": quote.quote_number,
+    } for quote in stale_quotes)
+
+    timeline = [{
+        "id": f"workflow-{event.id}",
+        "source": "project",
+        "kind": event.kind,
+        "who": event.who,
+        "note": _workflow_event_note(event),
+        "job_number": None,
+        "at": event.created_at.isoformat() if event.created_at else None,
+    } for event in project.workflow_events or []]
+    for event in job_events:
+        job = job_by_id.get(event.job_id)
+        timeline.append({
+            "id": f"job-{event.id}",
+            "source": "factory",
+            "kind": event.kind,
+            "who": event.who,
+            "note": event.note,
+            "job_number": job.job_number if job else None,
+            "at": event.created_at.isoformat() if event.created_at else None,
+        })
+    timeline.sort(key=lambda row: row["at"] or "", reverse=True)
+    last_activity = next((row["at"] for row in timeline if row["at"]), None)
+    last_activity_dt = datetime.fromisoformat(last_activity) if last_activity else project.created_at
+    waiting_days = max(0, (now - last_activity_dt).days) if last_activity_dt else 0
+
+    passed_qc = sum(1 for job in jobs
+                    if latest_qc.get(job.id)
+                    and latest_qc[job.id].result == "pass")
+    rework_qc = sum(1 for job in jobs
+                    if latest_qc.get(job.id)
+                    and latest_qc[job.id].result == "rework")
+    return {
+        "header": {
+            "project_number": project.project_number,
+            "name": project.name,
+            "client_name": project.client.name if project.client else "Walk-in Client",
+            "client_phone": project.client.phone if project.client else "",
+            "site": project.location,
+            "status": project.workflow_status or "measurement_received",
+            "status_label": WORKFLOW_LABELS.get(
+                project.workflow_status, project.workflow_status),
+            "owner": management["owner"] or None,
+            "team": management["team"] or None,
+            "planned_start": management["planned_start"] or None,
+            "due_date": management["due_date"] or None,
+            "priority": management["priority"],
+            "created_at": project.created_at.isoformat() if project.created_at else None,
+            "last_activity": last_activity,
+            "waiting_days": waiting_days,
+        },
+        "commercial": {
+            "contract_value": payment["contract_value"],
+            "paid_amount": payment["paid_amount"],
+            "outstanding_balance": round(max(
+                payment["contract_value"] - payment["paid_amount"], 0), 2),
+            "required_now": payment["outstanding"],
+            "deposit_percent": _project_deposit_percent(project),
+            "payment_gate_cleared": payment["authorized"],
+            "schedule_authorized": schedule["authorized"],
+            "schedule_reason": schedule["reason"],
+            # Labour is billed once for the whole project, not per item — see
+            # _project_client_quote_totals. Item totals below don't include
+            # it, so the Pricing tab needs this to reconcile with contract_value.
+            "labour_amount": (
+                _project_client_quote_totals(project)["project_labour_with_margin"]
+                if project.items else 0),
+        },
+        "next_action": {
+            "stage": next_stage["key"] if next_stage else "complete",
+            "label": next_label,
+            "responsible": management["owner"] or management["team"] or next_owner,
+            "url": next_url,
+            "waiting_days": waiting_days,
+            "blocking_reason": next_stage["detail"] if next_stage else "",
+        },
+        "pipeline": stages,
+        "item_groups": grouped,
+        "rollups": {
+            "items": {"count": len(item_rows), "total_qty": sum(
+                int(item["qty"] or 1) for item in item_rows)},
+            "technical": {
+                "approved_extractions": sum(1 for item in item_rows if item["references"]["extraction"]),
+                "approved_drawings": sum(1 for item in item_rows if item["references"]["drawing"]),
+                "factory_releases": sum(1 for item in item_rows if item["references"]["factory_release"]),
+            },
+            "procurement": {"shortage_count": procurement_shortages},
+            "production": {
+                "job_count": len(jobs),
+                "completed_jobs": sum(1 for job in jobs if job.stage == "done"),
+                "average_progress": round(sum(
+                    lc.STAGE_PROGRESS.get(job.stage, job.progress) for job in jobs
+                ) / len(jobs)) if jobs else 0,
+            },
+            "quality": {
+                "preproduction_status": preproduction_qc["status"],
+                "passed": passed_qc, "rework": rework_qc,
+            },
+            "delivery": {"completed": sum(
+                1 for job in jobs if job.stage == "done"), "total": len(jobs)},
+        },
+        "alerts": alerts,
+        "documents": {
+            "current": current_documents,
+            "audit": audit_documents,
+        },
+        "management": management,
+        "surveys": surveys,
+        "preproduction_qc": preproduction_qc,
+        "timeline": timeline[:80],
     }
 
 
@@ -773,26 +1815,14 @@ def _technical_workflow_payload(db: Session, project: models.Project) -> dict:
         key=lambda row: row.created_at, reverse=True)
     return {
         "project": {
-            "id": project.id,
-            "project_number": project.project_number,
-            "name": project.name,
-            "client_name": project.client.name if project.client else "",
-            "location": project.location,
-            "product_family": project.product_family or "frame",
-            "product_system": project.product_system or "",
-            "workflow_status": (
-                project.workflow_status or "measurement_received"),
-            "workflow_status_label": WORKFLOW_LABELS.get(
-                project.workflow_status, project.workflow_status),
-            "extraction_method": project.extraction_method or "manual",
-            "drawing_method": project.drawing_method or "configurator",
+            **_project_payload(project),
             "drawing_release_percent": (
                 project.drawing_release_percent
                 if project.drawing_release_percent is not None else 80),
-            "item_count": len(project.items or []),
             "released_at": (
                 project.released_at.isoformat()
                 if project.released_at else None),
+            "share_token": project_share_token(project.id),
         },
         "workflow_stages": [{
             "key": key,
@@ -806,7 +1836,19 @@ def _technical_workflow_payload(db: Session, project: models.Project) -> dict:
             "current": key == project.workflow_status,
         } for key in WORKFLOW_STATUSES],
         "payment_gate": payment,
+        "qc_submission": {
+            "released_to_technical_at": (
+                project.released_to_technical_at.isoformat()
+                if project.released_to_technical_at else None),
+            "released_to_technical_by": project.released_to_technical_by,
+            "released_to_qc_at": (
+                project.released_to_qc_at.isoformat()
+                if project.released_to_qc_at else None),
+            "released_to_qc_by": project.released_to_qc_by,
+            **_qc_readiness(project),
+        },
         "procurement": _procurement_payload(db, approved_extraction),
+        "preproduction_qc": _preproduction_qc_payload(db, project),
         "integrity": {
             "approved_extraction_id": (
                 approved_extraction.id if approved_extraction else None),
@@ -911,6 +1953,7 @@ def _technical_workflow_payload(db: Session, project: models.Project) -> dict:
         } for row in events[:50]],
         "items": item_list,
         "item_summary": item_summary,
+        "workspace": _project_workspace_payload(db, project, payment),
     }
 
 
@@ -963,6 +2006,7 @@ def _project_payload(project: models.Project) -> dict:
             "quote_number": q.quote_number, "product": q.product,
             "total": q.total, "status": q.status,
             "design_id": q.design_id,
+            "pricing_mode": q.pricing_mode,
             "created_at": q.created_at.isoformat() if q.created_at else None,
         } for q in quotes],
         "items": item_rows,
@@ -984,16 +2028,29 @@ def _project_client_quote_totals(project: models.Project) -> dict:
         "vat", "client_grand_total", "internal_floor",
     )}
     first_design = None
+    total_labour_area = 0.0
     for item in sorted(project.items or [], key=lambda row: row.created_at):
         try:
             raw_design = json.loads(item.design_json)
             design = schemas.DesignIn(**raw_design).engine_dict()
             result = calc_any_quote(design)
         except Exception:
-            design, result = None, None
+            raw_design, design, result = None, None, None
         if first_design is None and design is not None:
             first_design = design
-        if result:
+        manual_price = float((raw_design or {}).get("manualSellingPrice", 0) or 0)
+        is_manual = (raw_design or {}).get("pricingMode") == "manual" and manual_price > 0
+        if is_manual:
+            # A manual price is the agreed final figure for this item — it
+            # doesn't go through the computed discount/tax cascade, so it
+            # only contributes to subtotal and grand total, keeping
+            # subtotal - discount + tax == grand_total true in aggregate.
+            totals["client_subtotal"] += manual_price
+            totals["client_grand_total"] += manual_price
+            if result:
+                total_labour_area += (float(result.get("area", 0) or 0)
+                                       * float(result.get("qty", 1) or 1))
+        elif result:
             # Frame prices in client_grand_total (post discount/VAT/GETF);
             # Frameless and Curtain Wall have no tax split and only ever
             # return grand_total — same figure, different key per engine.
@@ -1002,12 +2059,39 @@ def _project_client_quote_totals(project: models.Project) -> dict:
             for key in totals:
                 if key != "client_grand_total":
                     totals[key] += float(result.get(key, 0) or 0)
+            total_labour_area += (float(result.get("area", 0) or 0)
+                                   * float(result.get("qty", 1) or 1))
         else:
             # Preserve an older saved item's last known total even when its
             # payload predates the current schema and can't be recalculated.
             totals["client_grand_total"] += float(item.total or 0)
+
+    # Labour is billed once for the whole project rather than folded into
+    # each item's own price — one line sized off total project area, with
+    # margin applied like any other cost head, then taxed the same way the
+    # rest of the quote is (using the first item's rates as the project's).
+    project_labour = total_labour_area * LABOUR_PER_M2
+    project_labour_with_margin = project_labour * (1 + MARGIN_PCT / 100)
+    discount_percent = max(0, float((first_design or {}).get("discount_percent", 0) or 0))
+    getf_nhis_percent = max(0, float((first_design or {}).get("getf_nhis_percent", 5) or 0))
+    vat_percent = max(0, float((first_design or {}).get("vat_percent", 15) or 0))
+    labour_discount = project_labour_with_margin * discount_percent / 100
+    labour_net = project_labour_with_margin - labour_discount
+    labour_getf_nhis = labour_net * getf_nhis_percent / 100
+    labour_vat = labour_net * vat_percent / 100
+    totals["client_subtotal"] += project_labour_with_margin
+    totals["discount_amount"] += labour_discount
+    totals["client_net"] += labour_net
+    totals["getf_nhis"] += labour_getf_nhis
+    totals["vat"] += labour_vat
+    totals["client_grand_total"] += labour_net + labour_getf_nhis + labour_vat
+    totals["internal_floor"] += project_labour  # true cost, no margin — for the floor guardrail
+
     return {
         **{key: round(value, 2) for key, value in totals.items()},
+        "project_labour": round(project_labour, 2),
+        "project_labour_with_margin": round(project_labour_with_margin, 2),
+        "project_labour_area": round(total_labour_area, 2),
         "deposit_percent": max(0, min(
             100, float((first_design or {}).get("deposit_percent") or 80))),
         "quote_valid_days": max(1, int(
@@ -1034,8 +2118,22 @@ def _project_quote_payload(project: models.Project) -> dict:
         except Exception:
             design = raw_design
             result = None
+        approved_item_extraction = (
+            _latest_approved_extraction(project, record.id) if record else None)
+        current_item_quote = _current_commercial_quote(
+            project, approved_item_extraction)
+        if result and approved_item_extraction:
+            result = _result_with_approved_extraction(
+                result,
+                approved_item_extraction,
+                _quote_snapshot(current_item_quote)
+                if current_item_quote else None,
+            )
         row = {**item, "design": design, "result": result}
-        if result:
+        manual_price = float(raw_design.get("manualSellingPrice", 0) or 0)
+        if raw_design.get("pricingMode") == "manual" and manual_price > 0:
+            row["total"] = manual_price
+        elif result:
             row["total"] = result.get("client_grand_total", result.get("grand_total", 0))
         enriched_items.append(row)
 
@@ -1052,7 +2150,12 @@ def _project_quote_payload(project: models.Project) -> dict:
     payload["effective_vat_percent"] = round(
         (payload["vat"] / payload["client_net"] * 100)
         if payload["client_net"] else 0, 2)
-    approved_extraction = _latest_approved_extraction(project)
+    has_item_approved_extraction = any(
+        (item.get("result") or {}).get("approved_extraction")
+        for item in enriched_items)
+    approved_extraction = (
+        None if has_item_approved_extraction
+        else _latest_approved_extraction(project))
     approved_payload = (
         _extraction_payload(approved_extraction)
         if approved_extraction else None)
@@ -1091,6 +2194,182 @@ def _project_quote_payload(project: models.Project) -> dict:
     return payload
 
 
+LEAD_STAGES = ("enquiry", "contacted", "quoted", "won", "lost")
+
+
+def _lead_value(db: Session, lead: models.Lead) -> float:
+    """See `list_leads` for why this isn't just `lead.estimated_value`."""
+    if lead.project_id is None:
+        return round(lead.estimated_value or 0.0, 2)
+    total = db.scalar(
+        select(func.sum(models.DesignRecord.total))
+        .where(models.DesignRecord.project_id == lead.project_id)) or 0.0
+    return round(float(total), 2)
+
+
+def _mark_lead_won_on_payment(db: Session, project: models.Project | None) -> None:
+    """A recorded payment against a converted lead's project is a won deal —
+    Evans's own framing ("any payment from client is a deal won"). Does not
+    touch a lead already resolved (`won`/`lost`), so a manual "lost" call
+    after the fact is never silently reopened by a later payment."""
+    if project is None:
+        return
+    lead = db.scalar(select(models.Lead).where(models.Lead.project_id == project.id))
+    if lead is None or lead.stage in ("won", "lost"):
+        return
+    lead.stage = "won"
+    lead.quoted_at = lead.quoted_at or datetime.utcnow()
+    lead.closed_at = lead.closed_at or datetime.utcnow()
+    lead.updated_at = datetime.utcnow()
+
+
+def _lead_payload(lead: models.Lead, value: float) -> dict:
+    return {
+        "id": lead.id, "lead_number": lead.lead_number, "name": lead.name,
+        "contact_name": lead.contact_name, "phone": lead.phone, "email": lead.email,
+        "site": lead.site, "city": lead.city, "source": lead.source,
+        "project_type": lead.project_type, "product_type": lead.product_type,
+        "customer_size": lead.customer_size, "sales_executive": lead.sales_executive,
+        "estimated_value": value, "stage": lead.stage,
+        "lost_reason": lead.lost_reason, "note": lead.note,
+        "expected_close": lead.expected_close,
+        "client_id": lead.client_id, "project_id": lead.project_id,
+        "quoted_at": lead.quoted_at.isoformat() if lead.quoted_at else None,
+        "closed_at": lead.closed_at.isoformat() if lead.closed_at else None,
+        "created_at": lead.created_at.isoformat() if lead.created_at else None,
+        "updated_at": lead.updated_at.isoformat() if lead.updated_at else None,
+    }
+
+
+@app.get("/api/leads")
+def list_leads(db: Session = Depends(get_db)):
+    """Every lead plus the aggregates the dashboard reports on."""
+    leads = db.scalars(
+        select(models.Lead).order_by(models.Lead.created_at.desc())).all()
+
+    # A lead's pipeline value once it has a project is the real total of
+    # that project's saved items/quotes — not `estimated_value`, which has
+    # no UI to enter it and so is always its 0.0 default. This lets a
+    # value show up automatically the moment a quote exists, and lets
+    # staff compare quoted value against what Accounts has actually
+    # collected (Accounts/Production track payments separately per job).
+    project_ids = [lead.project_id for lead in leads if lead.project_id is not None]
+    design_totals: dict[int, float] = {}
+    if project_ids:
+        design_totals = {
+            project_id: float(total or 0)
+            for project_id, total in db.execute(
+                select(models.DesignRecord.project_id, func.sum(models.DesignRecord.total))
+                .where(models.DesignRecord.project_id.in_(project_ids))
+                .group_by(models.DesignRecord.project_id)
+            ).all()
+        }
+
+    def value_of(lead):
+        if lead.project_id is not None:
+            return round(design_totals.get(lead.project_id, 0.0), 2)
+        return round(lead.estimated_value or 0.0, 2)
+
+    def totals(rows):
+        return {"count": len(rows),
+                "value": round(sum(value_of(row) for row in rows), 2)}
+
+    quoted = [lead for lead in leads if lead.quoted_at is not None]
+    won = [lead for lead in leads if lead.stage == "won"]
+    lost = [lead for lead in leads if lead.stage == "lost"]
+
+    def breakdown(field, rows):
+        grouped: dict[str, dict] = {}
+        for row in rows:
+            key = (getattr(row, field) or "").strip() or "Not recorded"
+            entry = grouped.setdefault(key, {"label": key, "count": 0, "value": 0.0})
+            entry["count"] += 1
+            entry["value"] = round(entry["value"] + value_of(row), 2)
+        return sorted(grouped.values(), key=lambda entry: -entry["value"])
+
+    return {
+        "leads": [_lead_payload(lead, value_of(lead)) for lead in leads],
+        "summary": {
+            "created": totals(leads), "quoted": totals(quoted),
+            "won": totals(won), "lost": totals(lost),
+        },
+        "by_source": breakdown("source", leads),
+        "by_city": breakdown("city", leads),
+        "by_product_type": breakdown("product_type", leads),
+        "lost_reasons": breakdown("lost_reason", lost),
+    }
+
+
+@app.post("/api/leads")
+def create_lead(req: schemas.LeadIn, db: Session = Depends(get_db)):
+    if not req.name.strip():
+        raise HTTPException(400, "Lead name is required")
+    if req.stage not in LEAD_STAGES:
+        raise HTTPException(400, f"Stage must be one of {', '.join(LEAD_STAGES)}")
+    n = db.scalar(select(func.count(models.Lead.id))) or 0
+    lead = models.Lead(
+        lead_number=f"SOF-L-{datetime.now():%Y}-{n + 1:03d}",
+        **{field: (value.strip() if isinstance(value, str) else value)
+           for field, value in req.model_dump().items()},
+    )
+    if lead.stage in ("quoted", "won", "lost"):
+        lead.quoted_at = datetime.utcnow()
+    if lead.stage in ("won", "lost"):
+        lead.closed_at = datetime.utcnow()
+    db.add(lead); db.commit(); db.refresh(lead)
+    return _lead_payload(lead, _lead_value(db, lead))
+
+
+@app.patch("/api/leads/{lead_id}")
+def update_lead(lead_id: int, req: schemas.LeadUpdate, db: Session = Depends(get_db)):
+    lead = db.get(models.Lead, lead_id)
+    if lead is None:
+        raise HTTPException(404, "Lead not found")
+    changes = req.model_dump(exclude_unset=True)
+    if "stage" in changes and changes["stage"] not in LEAD_STAGES:
+        raise HTTPException(400, f"Stage must be one of {', '.join(LEAD_STAGES)}")
+    for field, value in changes.items():
+        setattr(lead, field, value.strip() if isinstance(value, str) else value)
+    # timestamps are derived from the stage so conversion analytics stay honest
+    if lead.stage in ("quoted", "won", "lost") and lead.quoted_at is None:
+        lead.quoted_at = datetime.utcnow()
+    if lead.stage in ("won", "lost"):
+        lead.closed_at = lead.closed_at or datetime.utcnow()
+    else:
+        lead.closed_at = None
+    if lead.stage != "lost":
+        lead.lost_reason = ""
+    lead.updated_at = datetime.utcnow()
+    db.commit(); db.refresh(lead)
+    return _lead_payload(lead, _lead_value(db, lead))
+
+
+@app.post("/api/leads/{lead_id}/convert")
+def convert_lead(lead_id: int, req: schemas.ProjectIn, db: Session = Depends(get_db)):
+    """Turn a won lead into a client project, carrying its context forward."""
+    lead = db.get(models.Lead, lead_id)
+    if lead is None:
+        raise HTTPException(404, "Lead not found")
+    if lead.project_id:
+        raise HTTPException(409, f"{lead.lead_number} already has a project")
+    project = create_project(req, db)
+    lead.project_id = project["id"]
+    lead.client_id = project.get("client_id")
+    lead.stage = "won"
+    lead.quoted_at = lead.quoted_at or datetime.utcnow()
+    lead.closed_at = lead.closed_at or datetime.utcnow()
+    lead.updated_at = datetime.utcnow()
+    if lead.sales_executive:
+        # carries the lead's assignee forward as the project's owner, so the
+        # person who owned the lead is already on record as who builds the quote
+        _workflow_log(db, _get_project(db, project["id"]), "project_assignment", _pm_note({
+            "owner": lead.sales_executive, "team": "", "planned_start": "",
+            "due_date": "", "priority": "normal",
+        }), who="System")
+    db.commit(); db.refresh(lead)
+    return {"lead": _lead_payload(lead, _lead_value(db, lead)), "project": project}
+
+
 @app.post("/api/projects")
 def create_project(req: schemas.ProjectIn, db: Session = Depends(get_db)):
     """Create a project container under a client."""
@@ -1122,6 +2401,219 @@ def create_project(req: schemas.ProjectIn, db: Session = Depends(get_db)):
     return _project_payload(project)
 
 
+def _quote_workspace_meta(project: models.Project) -> dict:
+    event = next((row for row in sorted(
+        project.workflow_events or [], key=lambda row: row.created_at,
+        reverse=True) if row.kind == "quote_workspace"), None)
+    payload = _pm_payload(event.note) if event else None
+    return payload or {"lead_id": None}
+
+
+def _quote_workspace_payload(project: models.Project, lead: models.Lead | None) -> dict:
+    meta = _quote_workspace_meta(project)
+    management = _project_management_payload(project)
+    quotes = sorted(project.quotes or [], key=lambda row: row.created_at)
+    current_quotes = [row for row in quotes if row.status != "Declined"]
+    default_quote = current_quotes[-1] if current_quotes else None
+    if ((lead and lead.stage == "lost") or project.status in {"lost", "declined"}
+            or (quotes and not current_quotes)):
+        scope = "lost"
+    elif ((lead and lead.stage == "won") or project.status == "accepted"
+          or any(row.status in {"Accepted", "Approved"} for row in quotes)):
+        scope = "won"
+    else:
+        scope = "active"
+
+    total_area = 0.0
+    total_qty = 0
+    for record in project.items or []:
+        total_qty += max(1, int(record.qty or 1))
+        try:
+            design = json.loads(record.design_json)
+            total_area += (
+                float(design.get("width", 0) or 0)
+                * float(design.get("height", 0) or 0)
+                / 1_000_000
+                * max(1, int(record.qty or 1)))
+        except (TypeError, ValueError, AttributeError):
+            continue
+
+    design_total = round(sum(float(row.total or 0) for row in project.items or []), 2)
+    return {
+        "project_id": project.id,
+        "project_number": project.project_number,
+        "project_name": project.name,
+        "client_name": project.client.name if project.client else "Walk-in Client",
+        "opportunity_id": lead.id if lead else meta.get("lead_id"),
+        "opportunity_number": lead.lead_number if lead else None,
+        "scope": scope,
+        "deal_stage": lead.stage if lead else project.status,
+        "default_quote": default_quote.quote_number if default_quote else None,
+        "quote_count": len(quotes),
+        "item_count": len(project.items or []),
+        "quantity": total_qty,
+        "area": round(total_area, 2),
+        "value": design_total,
+        "quote_value": design_total,
+        "planned_start": management["planned_start"],
+        "due_date": management["due_date"],
+        "created_at": project.created_at.isoformat() if project.created_at else None,
+    }
+
+
+@app.get("/api/quote-workspaces")
+def list_quote_workspaces(db: Session = Depends(get_db)):
+    projects = db.scalars(select(models.Project).order_by(
+        models.Project.created_at.desc())).all()
+    leads = db.scalars(select(models.Lead).where(
+        models.Lead.project_id.is_not(None))).all()
+    lead_by_project = {lead.project_id: lead for lead in leads}
+    rows = []
+    for project in projects:
+        meta = _quote_workspace_meta(project)
+        if not (meta.get("lead_id") or project.items or project.quotes):
+            continue
+        rows.append(_quote_workspace_payload(
+            project, lead_by_project.get(project.id)))
+    return rows
+
+
+@app.post("/api/quote-workspaces")
+def create_quote_workspace(
+        req: schemas.QuoteWorkspaceIn, db: Session = Depends(get_db)):
+    lead = db.get(models.Lead, req.lead_id)
+    if lead is None:
+        raise HTTPException(404, "Lead not found")
+    if lead.stage == "lost":
+        raise HTTPException(409, "A lost lead must be reopened before quoting")
+    if lead.project_id:
+        raise HTTPException(
+            409, f"{lead.lead_number} already has a quote workspace")
+
+    product_family = (
+        "frameless" if "frameless" in lead.product_type.lower()
+        else "balustrade" if "balustrade" in lead.product_type.lower()
+        else "other" if "curtain" in lead.product_type.lower()
+        else "frame")
+    created = create_project(schemas.ProjectIn(
+        name=lead.name,
+        client_name=lead.contact_name or lead.name,
+        location=lead.site or lead.city,
+        product_family=product_family,
+    ), db)
+    project = db.get(models.Project, created["id"])
+    project.extraction_method = "generated"
+    if project.client:
+        project.client.contact = lead.contact_name
+        project.client.phone = lead.phone
+        project.client.location = lead.site or lead.city
+
+    lead.project_id = project.id
+    lead.client_id = project.client_id
+    if lead.stage not in {"won", "lost"}:
+        lead.stage = "quoted"
+        lead.closed_at = None
+    lead.quoted_at = lead.quoted_at or datetime.utcnow()
+    lead.updated_at = datetime.utcnow()
+    _workflow_log(db, project, "quote_workspace", _pm_note({
+        "lead_id": lead.id,
+    }), who="Sales")
+    db.commit(); db.refresh(project); db.refresh(lead)
+    return _quote_workspace_payload(project, lead)
+
+
+def _current_quote_workspace_quotes(project: models.Project) -> list[models.Quote]:
+    """Return the newest persisted quote for every current design item."""
+    latest_by_design: dict[int, models.Quote] = {}
+    for quote in sorted(
+            project.quotes or [], key=lambda row: (row.created_at, row.id)):
+        if quote.design_id is not None:
+            latest_by_design[quote.design_id] = quote
+    return [latest_by_design[item.id] for item in project.items or []
+            if item.id in latest_by_design]
+
+
+def _process_quote_workspace_status(
+        db: Session, project: models.Project, status: str, who: str,
+        lost_reason: str = "") -> dict:
+    """Shared core of a project-wide quote decision — used by the staff
+    endpoint below and by the public client-accept endpoint (share links),
+    so both paths run exactly the same guards and side effects."""
+    reason = lost_reason.strip()
+    if status == "Declined" and not reason:
+        raise HTTPException(400, "A lost reason is required")
+    if len(reason) > 160:
+        raise HTTPException(400, "Lost reason must be 160 characters or fewer")
+
+    quotes = _current_quote_workspace_quotes(project)
+    if not project.items or len(quotes) != len(project.items):
+        raise HTTPException(
+            409, "Save measurements for every design before issuing the quotation")
+    if any(quote.status in {"Accepted", "Approved"} for quote in quotes):
+        if status == "Accepted" and all(
+                quote.status in {"Accepted", "Approved"} for quote in quotes):
+            return {
+                "project_id": project.id,
+                "status": "Accepted",
+                "quote_numbers": [quote.quote_number for quote in quotes],
+                "job_numbers": [quote.job.job_number for quote in quotes if quote.job],
+            }
+        raise HTTPException(
+            409, "An accepted project quotation cannot be replaced; use the controlled change workflow")
+    if any(quote.status == "Declined" for quote in quotes):
+        raise HTTPException(
+            409, "Revise the declined design and save it before recording a new decision")
+
+    results = [
+        _apply_quote_status(db, quote, status, who)
+        for quote in quotes
+    ]
+    lead = db.scalar(select(models.Lead).where(
+        models.Lead.project_id == project.id))
+    now = datetime.utcnow()
+    if lead:
+        if status == "Accepted":
+            lead.stage = "won"
+            lead.lost_reason = ""
+            lead.closed_at = now
+        elif status == "Declined":
+            lead.stage = "lost"
+            lead.lost_reason = reason
+            lead.closed_at = now
+        else:
+            lead.stage = "quoted"
+            lead.lost_reason = ""
+            lead.closed_at = None
+        lead.quoted_at = lead.quoted_at or now
+        lead.updated_at = now
+    if status == "Declined":
+        project.status = "lost"
+        _workflow_log(
+            db, project, "quote",
+            f"client declined project quotation — {reason}", who=who)
+    db.commit()
+    return {
+        "project_id": project.id,
+        "status": status,
+        "quote_numbers": [result["quote_number"] for result in results],
+        "job_numbers": [result.get("job_number") for result in results
+                        if result.get("job_number")],
+    }
+
+
+@app.post("/api/quote-workspaces/{project_id}/status")
+def update_quote_workspace_status(
+        project_id: int, req: schemas.QuoteWorkspaceStatusIn,
+        db: Session = Depends(get_db)):
+    project = db.get(models.Project, project_id)
+    if project is None:
+        raise HTTPException(404, "Quote workspace not found")
+    if req.status not in {"Sent", "Accepted", "Declined"}:
+        raise HTTPException(400, "status must be Sent|Accepted|Declined")
+    return _process_quote_workspace_status(
+        db, project, req.status, req.who, req.lost_reason)
+
+
 @app.get("/api/projects")
 def list_projects(db: Session = Depends(get_db)):
     return [_project_payload(project) for project in db.scalars(
@@ -1142,6 +2634,15 @@ def _get_project(db: Session, project_id: int) -> models.Project:
     if project is None:
         raise HTTPException(404, "Project not found")
     return project
+
+
+def _materials_by_code(db: Session) -> dict:
+    """Live Inventory prices, for calc_any_quote's frame material take-off.
+    The backend queries Supabase directly here — no frontend-style cache."""
+    return {
+        m.code: {"name": m.name, "unit": m.unit, "unit_price": m.unit_price}
+        for m in db.query(models.Material).all()
+    }
 
 
 @app.delete("/api/projects/{project_id}")
@@ -1188,6 +2689,390 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
 @app.get("/api/projects/{project_id}/workflow")
 def get_project_workflow(project_id: int, db: Session = Depends(get_db)):
     return _technical_workflow_payload(db, _get_project(db, project_id))
+
+
+@app.get("/api/preproduction-qc")
+def list_preproduction_qc(db: Session = Depends(get_db)):
+    projects = db.scalars(select(models.Project).order_by(
+        models.Project.created_at.desc())).all()
+    return [_preproduction_qc_payload(db, project) for project in projects]
+
+
+@app.get("/api/projects/{project_id}/preproduction-qc")
+def get_preproduction_qc(project_id: int, db: Session = Depends(get_db)):
+    return _preproduction_qc_payload(db, _get_project(db, project_id))
+
+
+@app.get("/api/drawings/queue")
+def list_drawings_queue(db: Session = Depends(get_db)):
+    projects = db.scalars(select(models.Project).where(
+        models.Project.released_to_technical_at.isnot(None)
+    ).order_by(models.Project.released_to_technical_at.desc())).all()
+    return [_drawing_queue_payload(project) for project in projects]
+
+
+@app.post("/api/projects/{project_id}/preproduction-qc")
+def record_preproduction_qc(
+        project_id: int, req: schemas.PreProductionQcIn,
+        db: Session = Depends(get_db)):
+    project = _get_project(db, project_id)
+    result = req.result.strip().lower()
+    if result not in {"approved", "hold"}:
+        raise HTTPException(400, "result must be approved|hold")
+    inspector = req.inspector.strip()
+    notes = req.notes.strip()
+    if not inspector:
+        raise HTTPException(400, "inspector is required")
+    if len(inspector) > 60:
+        raise HTTPException(400, "inspector must be 60 characters or fewer")
+    if len(notes) > 160:
+        raise HTTPException(400, "notes must be 160 characters or fewer")
+    if result == "hold" and not notes:
+        raise HTTPException(400, "Explain why the project is on hold")
+
+    gate = _preproduction_qc_payload(db, project)
+    checklist = {
+        "m": req.measurements_verified,
+        "mat": req.materials_verified,
+        "qty": req.quantities_verified,
+        "drw": req.drawings_verified,
+        "proc": req.procurement_verified,
+    }
+    if result == "approved":
+        if gate["issues"]:
+            raise HTTPException(
+                409, "Pre-production QC cannot approve this project: "
+                + "; ".join(gate["issues"]))
+        if not all(checklist.values()):
+            raise HTTPException(
+                400, "Every pre-production QC checklist item must be verified")
+
+    releases = []
+    if result == "approved":
+        releases = _release_project_to_factory(
+            db, project, released_by=inspector,
+            notes="Released to factory floor by pre-production QC approval.")
+        # Auto-confirming a missing drawing changes the exact inputs the QC
+        # snapshot hashes (each item's drawing revision). The session cached
+        # `project.drawing_tasks` when `gate` was first computed above, and a
+        # flush alone doesn't invalidate that — expire it so the recompute
+        # actually observes the new drawing, instead of being marked stale
+        # by its own side effect.
+        db.expire(project)
+        gate = _preproduction_qc_payload(db, project)
+
+    _workflow_log(db, project, "preproduction_qc", _pm_note({
+        "r": result,
+        "s": gate["snapshot_hash"],
+        "c": checklist,
+        "n": notes,
+        "i": inspector,
+        "count": gate["item_count"],
+    }), inspector)
+    if releases:
+        _workflow_log(
+            db, project, "release",
+            "released to factory on QC approval: " + ", ".join(
+                f"{release.release_number} (drawing R"
+                f"{release.drawing_revision_number})" for release in releases),
+            who=inspector)
+    db.commit()
+    return _preproduction_qc_payload(db, project)
+
+
+@app.get("/api/team")
+def list_team(db: Session = Depends(get_db)):
+    return [{"id": user.id, "name": user.name, "role": user.role,
+             "phone": user.phone}
+            for user in db.scalars(select(models.User).order_by(
+                models.User.role, models.User.name)).all()]
+
+
+@app.put("/api/projects/{project_id}/management")
+def update_project_management(
+        project_id: int, req: schemas.ProjectManagementIn,
+        db: Session = Depends(get_db)):
+    project = _get_project(db, project_id)
+    if req.priority not in _PROJECT_PRIORITIES:
+        raise HTTPException(400, "priority must be normal|high|urgent")
+    planned_start = _valid_date(req.planned_start, "planned_start")
+    due_date = _valid_date(req.due_date, "due_date")
+    if planned_start and due_date and due_date < planned_start:
+        raise HTTPException(400, "due_date cannot be before planned_start")
+    current = _project_management_payload(project)
+    schedule_changed = (
+        planned_start != current["planned_start"]
+        or due_date != current["due_date"])
+    if schedule_changed and (planned_start or due_date):
+        schedule = _project_schedule_authorization(db, project)
+        if not schedule["authorized"]:
+            raise HTTPException(409, schedule["reason"])
+    payload = {
+        "owner": req.owner.strip(), "team": req.team.strip(),
+        "planned_start": planned_start, "due_date": due_date,
+        "priority": req.priority,
+    }
+    _workflow_log(db, project, "project_assignment", _pm_note(payload), req.who)
+    db.commit()
+    return _project_management_payload(project)
+
+
+@app.patch("/api/projects/{project_id}/board-position")
+def set_project_board_position(
+        project_id: int, req: schemas.BoardPositionIn,
+        db: Session = Depends(get_db)):
+    """Manual drag-and-drop on the Projects board. Purely a display
+    position — it never touches payment/drawing/QC state, so it can't be
+    used to skip a real gate. See `_board_stage` for how it's discarded once
+    automation catches up."""
+    project = _get_project(db, project_id)
+    if req.stage not in BOARD_STAGES:
+        raise HTTPException(400, "Unknown board column")
+    workspace = _project_workspace_payload(
+        db, project, _payment_authorization(db, project))
+    auto_stage = _board_stage_auto(workspace)
+    payload = {
+        "stage": "" if req.stage == auto_stage else req.stage,
+        "base_stage": "" if req.stage == auto_stage else auto_stage,
+    }
+    _workflow_log(db, project, "board_position", _pm_note(payload), req.who)
+    db.commit()
+    return {"stage": req.stage}
+
+
+@app.post("/api/projects/{project_id}/tasks")
+def create_project_task(
+        project_id: int, req: schemas.ProjectTaskIn,
+        db: Session = Depends(get_db)):
+    project = _get_project(db, project_id)
+    if not req.department.strip() or not req.title.strip():
+        raise HTTPException(400, "department and title are required")
+    if req.status not in _TASK_STATUSES:
+        raise HTTPException(400, "status must be todo|in_progress|blocked|done")
+    payload = {
+        "department": req.department.strip(), "title": req.title.strip(),
+        "assignee": req.assignee.strip(),
+        "due_date": _valid_date(req.due_date, "due_date"),
+        "status": req.status, "notes": req.notes.strip(),
+    }
+    _workflow_log(db, project, "project_task", _pm_note(payload), req.who)
+    db.commit()
+    return _project_management_payload(project)
+
+
+@app.put("/api/projects/{project_id}/tasks/{task_id}")
+def update_project_task(
+        project_id: int, task_id: int, req: schemas.ProjectTaskUpdateIn,
+        db: Session = Depends(get_db)):
+    project = _get_project(db, project_id)
+    task_event = db.get(models.WorkflowEvent, task_id)
+    if (task_event is None or task_event.project_id != project.id
+            or task_event.kind != "project_task"):
+        raise HTTPException(404, "Project task not found")
+    if req.status not in _TASK_STATUSES:
+        raise HTTPException(400, "status must be todo|in_progress|blocked|done")
+    payload = {"task_id": task_id, "status": req.status}
+    if req.assignee is not None:
+        payload["assignee"] = req.assignee.strip()
+    if req.due_date is not None:
+        payload["due_date"] = _valid_date(req.due_date, "due_date")
+    if req.notes is not None:
+        payload["notes"] = req.notes.strip()
+    _workflow_log(db, project, "project_task_update", _pm_note(payload), req.who)
+    db.commit()
+    return _project_management_payload(project)
+
+
+@app.get("/api/surveys")
+def list_site_surveys(db: Session = Depends(get_db)):
+    projects = db.scalars(select(models.Project).order_by(
+        models.Project.created_at.desc())).all()
+    surveys = [
+        survey for project in projects for survey in _project_surveys(project)]
+    surveys.sort(key=lambda row: (
+        row["status"] in {"completed", "cancelled"},
+        row["scheduled_for"] or "9999-12-31T23:59", row["id"]))
+    today = datetime.now().date()
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=7)
+
+    def scheduled_date(row):
+        try:
+            return datetime.fromisoformat(row["scheduled_for"]).date()
+        except (TypeError, ValueError):
+            return None
+
+    active = [row for row in surveys
+              if row["status"] not in {"completed", "cancelled"}]
+    next_survey = next((row for row in active
+                        if row["scheduled_for"] >= datetime.now().isoformat(
+                            timespec="minutes")), None)
+    return {
+        "surveys": surveys,
+        "stats": {
+            "this_week": sum(
+                1 for row in surveys
+                if (day := scheduled_date(row)) is not None
+                and week_start <= day < week_end),
+            "completed": sum(1 for row in surveys if row["status"] == "completed"),
+            "scheduled": sum(1 for row in surveys if row["status"] == "scheduled"),
+            "in_progress": sum(1 for row in surveys if row["status"] == "in_progress"),
+            "overdue": sum(1 for row in surveys if row["overdue"]),
+            "next": next_survey["scheduled_for"] if next_survey else None,
+        },
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+@app.post("/api/projects/{project_id}/surveys")
+def create_site_survey(
+        project_id: int, req: schemas.SiteSurveyIn,
+        db: Session = Depends(get_db)):
+    project = _get_project(db, project_id)
+    assigned_to = req.assigned_to.strip()
+    if not assigned_to:
+        raise HTTPException(400, "assigned_to is required")
+    if req.units < 0:
+        raise HTTPException(400, "units cannot be negative")
+    payload = {
+        "scheduled_for": _valid_datetime(
+            req.scheduled_for, "scheduled_for"),
+        "assigned_to": assigned_to,
+        "units": req.units,
+        "notes": req.notes.strip(),
+        "status": "scheduled",
+    }
+    event = _workflow_log(
+        db, project, "site_survey", _pm_note(payload), req.who)
+    if not project.items and not project.extractions and not project.quotes:
+        project.workflow_status = "survey_scheduled"
+    db.commit()
+    surveys = _project_surveys(project)
+    return {
+        "survey": next(row for row in surveys if row["id"] == event.id),
+        "surveys": surveys,
+    }
+
+
+@app.put("/api/projects/{project_id}/surveys/{survey_id}")
+def update_site_survey(
+        project_id: int, survey_id: int, req: schemas.SiteSurveyUpdateIn,
+        db: Session = Depends(get_db)):
+    project = _get_project(db, project_id)
+    survey_event = db.get(models.WorkflowEvent, survey_id)
+    if (survey_event is None or survey_event.project_id != project.id
+            or survey_event.kind != "site_survey"):
+        raise HTTPException(404, "Site survey not found")
+    payload: dict = {"survey_id": survey_id}
+    if req.status is not None:
+        if req.status not in _SURVEY_STATUSES:
+            raise HTTPException(
+                400, "status must be scheduled|in_progress|completed|cancelled")
+        payload["status"] = req.status
+        if req.status == "completed":
+            payload["completed_at"] = datetime.now().isoformat(
+                timespec="seconds")
+            if project.workflow_status == "survey_scheduled":
+                project.workflow_status = "measurement_received"
+    if req.scheduled_for is not None:
+        payload["scheduled_for"] = _valid_datetime(
+            req.scheduled_for, "scheduled_for")
+    if req.assigned_to is not None:
+        assigned_to = req.assigned_to.strip()
+        if not assigned_to:
+            raise HTTPException(400, "assigned_to is required")
+        payload["assigned_to"] = assigned_to
+    if req.units is not None:
+        if req.units < 0:
+            raise HTTPException(400, "units cannot be negative")
+        payload["units"] = req.units
+    if req.notes is not None:
+        payload["notes"] = req.notes.strip()
+    if req.variance is not None:
+        payload["variance"] = req.variance.strip()
+    if len(payload) == 1:
+        raise HTTPException(400, "No survey changes supplied")
+    _workflow_log(
+        db, project, "site_survey_update", _pm_note(payload), req.who)
+    db.commit()
+    surveys = _project_surveys(project)
+    return {
+        "survey": next(row for row in surveys if row["id"] == survey_id),
+        "surveys": surveys,
+    }
+
+
+BOARD_STAGES = ("measurement", "quotation", "awaiting_payment", "paid_technical",
+                "production", "qa", "dispatch", "delivered")
+
+
+def _board_stage_auto(workspace: dict) -> str:
+    stage = workspace["next_action"]["stage"]
+    if stage in ("measurement", "design"):
+        return "measurement"
+    if stage == "quotation":
+        return "quotation"
+    if stage == "payment":
+        return "awaiting_payment"
+    if stage in ("accounts_release", "drawing", "submit_to_qc", "procurement",
+                 "preproduction_qc", "release"):
+        return "paid_technical"
+    if stage == "production":
+        return "production"
+    if stage == "qa":
+        return "qa"
+    if stage == "dispatch":
+        return "dispatch"
+    return "delivered"
+
+
+def _board_stage(workspace: dict) -> str:
+    """Automated pipeline stage, unless someone dragged the card manually on
+    the board (see set_project_board_position) and automation hasn't moved
+    the project past the stage it was dragged away from yet — once it does,
+    the manual position is discarded and the card follows automation again.
+    """
+    auto = _board_stage_auto(workspace)
+    management = workspace.get("management") or {}
+    override = management.get("board_stage")
+    if override and management.get("board_stage_base") == auto:
+        return override
+    return auto
+
+
+@app.get("/api/project-board")
+def project_board(db: Session = Depends(get_db)):
+    projects = db.scalars(select(models.Project).order_by(
+        models.Project.created_at.desc())).all()
+    cards = []
+    for project in projects:
+        workspace = _project_workspace_payload(
+            db, project, _payment_authorization(db, project))
+        cards.append({
+            "id": project.id,
+            "project_number": project.project_number,
+            "name": project.name,
+            "client_name": workspace["header"]["client_name"],
+            "site": workspace["header"]["site"],
+            "stage": _board_stage(workspace),
+            "status_label": workspace["header"]["status_label"],
+            "owner": workspace["header"]["owner"],
+            "team": workspace["header"].get("team"),
+            "planned_start": workspace["header"]["planned_start"],
+            "due_date": workspace["header"]["due_date"],
+            "priority": workspace["header"].get("priority", "normal"),
+            "waiting_days": workspace["header"]["waiting_days"],
+            "next_action": workspace["next_action"],
+            "commercial": workspace["commercial"],
+            "item_count": workspace["rollups"]["items"]["count"],
+            "open_task_count": workspace["management"]["open_task_count"],
+            "overdue_task_count": workspace["management"]["overdue_task_count"],
+            "alert_count": len(workspace["alerts"]),
+            "serious_alert": next((alert for alert in workspace["alerts"]
+                                   if alert["severity"] == "critical"),
+                                  workspace["alerts"][0] if workspace["alerts"] else None),
+        })
+    return {"cards": cards}
 
 
 @app.post("/api/projects/{project_id}/workflow")
@@ -1240,10 +3125,9 @@ def update_project_workflow(project_id: int, req: schemas.ProjectWorkflowIn,
                 "drawing_authorized", "drawing_in_progress",
                 "drawing_under_review", "client_overview_sent",
                 "drawing_approved", "production_pack_ready",
-                "released_to_factory"):
-            payment = _payment_authorization(db, project)
-            if not payment["authorized"]:
-                raise HTTPException(409, payment["reason"])
+                "released_to_factory") and project.released_to_technical_at is None:
+            raise HTTPException(
+                409, "Accounts must release this project to Technical first")
         project.workflow_status = req.workflow_status
         changes.append(f"status: {WORKFLOW_LABELS[req.workflow_status]}")
     if changes:
@@ -1251,6 +3135,51 @@ def update_project_workflow(project_id: int, req: schemas.ProjectWorkflowIn,
             db, project, "workflow", "; ".join(changes), who=req.who)
     db.commit()
     return _technical_workflow_payload(db, project)
+
+
+def _finalize_extraction(
+        db: Session, extraction: models.TechnicalExtraction,
+        project: models.Project, approved_by: str,
+        reset_workflow_status: bool = True) -> bool:
+    """Extraction has no separate manual sign-off anymore — this runs at
+    creation time and does what the old `approve_extraction` endpoint used
+    to do: supersede any prior approved extraction on the same item's chain
+    and mark dependent drawing tasks/releases stale. Returns True if
+    downstream work existed that this invalidates, for the log message.
+
+    `reset_workflow_status=False` skips moving the project's Technical
+    Workflow stepper — used when an extraction is auto-generated as a
+    side effect of a project that never used Technical Workflow (the
+    quick quote-from-design path), where rewinding an already-later
+    `workflow_status` back to "extraction_ready" would be a confusing
+    regression, not a real technical-review step.
+    """
+    siblings = db.query(models.TechnicalExtraction).filter_by(
+        project_id=project.id, design_id=extraction.design_id).all()
+    sibling_ids = {row.id for row in siblings}
+    downstream_exists = bool(
+        any(task.design_id == extraction.design_id
+            for task in project.drawing_tasks or [])
+        or any(release.design_id == extraction.design_id
+               for release in project.production_releases or [])
+        or any(sibling_ids.intersection(_quote_extraction_ids(quote))
+               for quote in project.quotes or []))
+    for other in siblings:
+        if other.id != extraction.id and other.status == "approved":
+            other.status = "superseded"
+    for task in project.drawing_tasks or []:
+        if task.design_id == extraction.design_id and task.extraction_id != extraction.id:
+            task.status = "stale_extraction"
+    for release in project.production_releases or []:
+        if release.design_id == extraction.design_id and release.status == "current":
+            release.status = "superseded"
+    extraction.status = "approved"
+    extraction.approved_by = approved_by
+    extraction.approved_at = datetime.utcnow()
+    if reset_workflow_status:
+        project.workflow_status = "extraction_ready"
+        project.released_at = None
+    return downstream_exists
 
 
 @app.post("/api/projects/{project_id}/extractions")
@@ -1302,98 +3231,36 @@ def create_extraction(project_id: int, req: schemas.ExtractionIn,
                 else req.method),
             notes=item.notes.strip(),
         ))
+    db.flush()
+    downstream_exists = _finalize_extraction(
+        db, extraction, project, req.created_by.strip())
     project.extraction_method = req.method
-    project.workflow_status = "extraction_in_progress"
     _workflow_log(
         db, project, "extraction",
-        f"created extraction revision E{revision} with {len(req.items)} material rows ({req.method})",
+        f"created and approved extraction revision E{revision} with {len(req.items)} material rows ({req.method})"
+        + (
+            "; previous quotation, drawing and release records require review"
+            if downstream_exists else ""),
         who=req.created_by)
     db.commit(); db.refresh(extraction)
     return _technical_workflow_payload(db, project)
 
 
-@app.post("/api/extractions/{extraction_id}/approve")
-def approve_extraction(extraction_id: int, req: schemas.ExtractionApprovalIn,
-                       db: Session = Depends(get_db)):
-    extraction = db.get(models.TechnicalExtraction, extraction_id)
-    if extraction is None:
-        raise HTTPException(404, "Extraction not found")
-    if not extraction.items:
-        raise HTTPException(409, "Cannot approve an empty extraction")
-    siblings = [
-        row for row in extraction.project.extractions or [extraction]
-        if row.design_id == extraction.design_id]
-    latest_revision = max(row.revision for row in siblings)
-    if extraction.revision != latest_revision:
-        raise HTTPException(
-            409,
-            f"Only the latest extraction E{latest_revision} can be approved. "
-            f"E{extraction.revision} remains historical.")
-    if extraction.status == "approved":
-        return _technical_workflow_payload(db, extraction.project)
-    if extraction.status == "superseded":
-        raise HTTPException(409, "A superseded extraction cannot be approved again")
-    project = extraction.project
-    # Scoped to this item's own chain only — approving item A's extraction
-    # must never supersede a sibling item's extraction/drawing/release in the
-    # same multi-item project.
-    sibling_extraction_ids = {row.id for row in siblings}
-    downstream_exists = bool(
-        any(task.design_id == extraction.design_id
-            for task in project.drawing_tasks or [])
-        or any(release.design_id == extraction.design_id
-               for release in project.production_releases or [])
-        or any(sibling_extraction_ids.intersection(_quote_extraction_ids(quote))
-               for quote in project.quotes or []))
-    for other in extraction.project.extractions or []:
-        if (other.id != extraction.id and other.design_id == extraction.design_id
-                and other.status == "approved"):
-            other.status = "superseded"
-    for task in project.drawing_tasks or []:
-        if task.design_id == extraction.design_id and task.extraction_id != extraction.id:
-            task.status = "stale_extraction"
-    for release in project.production_releases or []:
-        if release.design_id == extraction.design_id and release.status == "current":
-            release.status = "superseded"
-    extraction.status = "approved"
-    extraction.approved_by = req.approved_by.strip()
-    extraction.approved_at = datetime.utcnow()
-    project.workflow_status = "extraction_ready"
-    project.released_at = None
-    _workflow_log(
-        db, project, "extraction",
-        f"approved extraction revision E{extraction.revision} for quotation"
-        + (
-            "; previous quotation, drawing and release records require review"
-            if downstream_exists else ""),
-        who=req.approved_by)
-    db.commit()
-    return _technical_workflow_payload(db, project)
-
-
-@app.post("/api/projects/{project_id}/extractions/from-design")
-def generate_extraction_from_design(
-        project_id: int, req: schemas.GeneratedExtractionIn,
-        db: Session = Depends(get_db)):
-    project = _get_project(db, project_id)
-    items = project.items or []
-    if req.design_id is not None:
-        record = db.get(models.DesignRecord, req.design_id)
-        if record is None or record.project_id != project.id:
-            raise HTTPException(400, "Design does not belong to this project")
-    elif len(items) > 1:
-        raise HTTPException(
-            409,
-            "This project has more than one item — select which item to "
-            "generate materials for")
-    else:
-        record = next(iter(sorted(
-            items, key=lambda row: row.created_at, reverse=True)), None)
-    if record is None:
-        raise HTTPException(409, "Save a configurator item in this project first")
+def _generate_extraction_for_record(
+        db: Session, project: models.Project, record: models.DesignRecord,
+        extraction_design_id: int | None, created_by: str, notes: str = "",
+        reset_workflow_status: bool = True,
+) -> tuple[models.TechnicalExtraction | None, bool]:
+    """Build and approve a material take-off generated from one saved
+    project item's design. `record` is the item to read the design/geometry
+    from; `extraction_design_id` is the chain key the extraction is filed
+    under (usually `record.id`, but `None` for the legacy ungrouped chain —
+    see `_qc_item_scopes`). Returns `(extraction, downstream_exists)`;
+    `extraction` is `None` if the design produced no extractable rows.
+    """
     design_schema = schemas.DesignIn(**json.loads(record.design_json))
     design = design_schema.engine_dict()
-    result = calc_any_quote(design)
+    result = calc_any_quote(design, _materials_by_code(db))
     qty = max(1, int(design.get("qty") or 1))
     rows = []
     if result.get("material_rows"):
@@ -1457,32 +3324,64 @@ def generate_extraction_from_design(
             "source": "generated",
         })
     if not rows:
-        raise HTTPException(409, "This configurator item produced no extraction rows")
+        return None, False
     revision_number = max(
         [row.revision for row in (project.extractions or [])
-         if row.design_id == req.design_id] or [0]) + 1
+         if row.design_id == extraction_design_id] or [0]) + 1
     extraction = models.TechnicalExtraction(
         project_id=project.id,
-        design_id=req.design_id,
+        design_id=extraction_design_id,
         revision=revision_number,
         method="generated",
         recipe_status="provisional",
         status="draft",
-        notes=req.notes.strip() or (
-            f"Generated from configurator item {record.ref or record.name}. "
-            "Technical review required."),
-        created_by=req.created_by.strip(),
+        notes=notes.strip() or (
+            f"Generated from configurator item {record.ref or record.name}."),
+        created_by=created_by.strip(),
     )
     db.add(extraction); db.flush()
     for item in rows:
         db.add(models.ExtractionItem(
             extraction_id=extraction.id, **item))
+    db.flush()
+    downstream_exists = _finalize_extraction(
+        db, extraction, project, created_by.strip() or "System (auto)",
+        reset_workflow_status=reset_workflow_status)
     project.extraction_method = "generated"
-    project.workflow_status = "extraction_in_progress"
+    return extraction, downstream_exists
+
+
+@app.post("/api/projects/{project_id}/extractions/from-design")
+def generate_extraction_from_design(
+        project_id: int, req: schemas.GeneratedExtractionIn,
+        db: Session = Depends(get_db)):
+    project = _get_project(db, project_id)
+    items = project.items or []
+    if req.design_id is not None:
+        record = db.get(models.DesignRecord, req.design_id)
+        if record is None or record.project_id != project.id:
+            raise HTTPException(400, "Design does not belong to this project")
+    elif len(items) > 1:
+        raise HTTPException(
+            409,
+            "This project has more than one item — select which item to "
+            "generate materials for")
+    else:
+        record = next(iter(sorted(
+            items, key=lambda row: row.created_at, reverse=True)), None)
+    if record is None:
+        raise HTTPException(409, "Save a configurator item in this project first")
+    extraction, downstream_exists = _generate_extraction_for_record(
+        db, project, record, req.design_id, req.created_by, req.notes)
+    if extraction is None:
+        raise HTTPException(409, "This configurator item produced no extraction rows")
     _workflow_log(
         db, project, "extraction",
-        f"generated provisional extraction E{revision_number} from configurator item {record.ref or record.name}",
-        who=req.created_by)
+        f"generated and approved extraction E{extraction.revision} from configurator item {record.ref or record.name}"
+        + (
+            "; previous quotation, drawing and release records require review"
+            if downstream_exists else ""),
+        who=req.created_by or "System (auto)")
     db.commit()
     return _technical_workflow_payload(db, project)
 
@@ -1657,25 +3556,24 @@ def update_quote_from_extraction(
     return _technical_workflow_payload(db, quote.project)
 
 
-@app.post("/api/projects/{project_id}/drawing-tasks")
-def create_drawing_task(project_id: int, req: schemas.DrawingTaskIn,
-                        db: Session = Depends(get_db)):
-    project = _get_project(db, project_id)
-    if req.method not in DRAWING_METHODS:
-        raise HTTPException(400, "method must be configurator|autocad")
-    payment = _payment_authorization(db, project)
-    if not payment["authorized"]:
-        raise HTTPException(409, payment["reason"])
+def _resolve_drawing_chain(
+        db: Session, project: models.Project, design_id: int | None,
+        extraction_id: int | None, quote_id: int | None
+) -> tuple[models.TechnicalExtraction, models.Quote]:
+    """The one item's approved extraction + accepted quote a drawing task
+    (or a not-required declaration) must be opened against. Shared by
+    `create_drawing_task` and `mark_drawing_not_required`.
+    """
     extraction = None
-    if req.extraction_id is not None:
-        extraction = db.get(models.TechnicalExtraction, req.extraction_id)
+    if extraction_id is not None:
+        extraction = db.get(models.TechnicalExtraction, extraction_id)
         if extraction is None or extraction.project_id != project.id:
             raise HTTPException(400, "Extraction does not belong to this project")
         if extraction.status != "approved":
             raise HTTPException(409, "Approve the extraction before drawing handoff")
         current_extraction = _latest_approved_extraction(project, extraction.design_id)
     else:
-        current_extraction = _latest_approved_extraction(project, req.design_id)
+        current_extraction = _latest_approved_extraction(project, design_id)
         extraction = current_extraction
     if extraction is None:
         raise HTTPException(409, "Approve an extraction before drawing handoff")
@@ -1683,8 +3581,8 @@ def create_drawing_task(project_id: int, req: schemas.DrawingTaskIn,
         raise HTTPException(
             409, "Drawing must use the current approved extraction")
     quote = None
-    if req.quote_id is not None:
-        quote = db.get(models.Quote, req.quote_id)
+    if quote_id is not None:
+        quote = db.get(models.Quote, quote_id)
         if quote is None or quote.project_id != project.id:
             raise HTTPException(400, "Quotation does not belong to this project")
     else:
@@ -1698,6 +3596,20 @@ def create_drawing_task(project_id: int, req: schemas.DrawingTaskIn,
             or quote.status not in ("Accepted", "Approved")):
         raise HTTPException(
             409, "Drawing must use the current accepted quotation and extraction")
+    return extraction, quote
+
+
+@app.post("/api/projects/{project_id}/drawing-tasks")
+def create_drawing_task(project_id: int, req: schemas.DrawingTaskIn,
+                        db: Session = Depends(get_db)):
+    project = _get_project(db, project_id)
+    if req.method not in DRAWING_METHODS:
+        raise HTTPException(400, "method must be configurator|autocad")
+    if project.released_to_technical_at is None:
+        raise HTTPException(
+            409, "Accounts must release this project to Technical first")
+    extraction, quote = _resolve_drawing_chain(
+        db, project, req.design_id, req.extraction_id, req.quote_id)
     task = models.DrawingTask(
         project_id=project.id,
         design_id=extraction.design_id,
@@ -1718,6 +3630,65 @@ def create_drawing_task(project_id: int, req: schemas.DrawingTaskIn,
         + (f" for {req.assigned_to.strip()}" if req.assigned_to.strip() else ""),
         who=req.created_by)
     db.commit(); db.refresh(task)
+    return _technical_workflow_payload(db, project)
+
+
+@app.post("/api/projects/{project_id}/drawing-tasks/not-required")
+def mark_drawing_not_required(project_id: int, req: schemas.DrawingNotRequiredIn,
+                              db: Session = Depends(get_db)):
+    project = _get_project(db, project_id)
+    if project.released_to_technical_at is None:
+        raise HTTPException(
+            409, "Accounts must release this project to Technical first")
+    reason = req.reason.strip()
+    if not reason:
+        raise HTTPException(400, "Explain why no drawing is required")
+    extraction, quote = _resolve_drawing_chain(
+        db, project, req.design_id, req.extraction_id, None)
+    record = next((
+        item for item in (project.items or []) if item.id == extraction.design_id
+    ), None) if extraction.design_id is not None else None
+    label = (record.ref or record.name) if record else "the ungrouped item"
+    task = models.DrawingTask(
+        project_id=project.id,
+        design_id=extraction.design_id,
+        extraction_id=extraction.id,
+        quote_id=quote.id,
+        method="not_required",
+        status="not_required",
+        brief=reason,
+        created_by=req.created_by.strip(),
+    )
+    db.add(task)
+    _workflow_log(
+        db, project, "drawing",
+        f"{req.created_by.strip() or 'Technical Team'} marked {label} — "
+        f"drawing not required: {reason}",
+        who=req.created_by)
+    db.commit(); db.refresh(task)
+    return _technical_workflow_payload(db, project)
+
+
+@app.post("/api/projects/{project_id}/submit-to-qc")
+def submit_project_to_qc(project_id: int, req: schemas.SubmitToQcIn,
+                         db: Session = Depends(get_db)):
+    project = _get_project(db, project_id)
+    if project.released_to_technical_at is None:
+        raise HTTPException(
+            409, "Accounts must release this project to Technical first")
+    readiness = _qc_readiness(project)
+    if not readiness["ready"]:
+        raise HTTPException(
+            409, "Not ready for QC: " + ", ".join(readiness["not_ready_items"]))
+    project.released_to_qc_at = datetime.utcnow()
+    project.released_to_qc_by = req.submitted_by.strip()
+    _workflow_log(
+        db, project, "drawing",
+        f"{req.submitted_by.strip() or 'Technical Team'} submitted the "
+        "project to QC"
+        + (f" — {req.notes.strip()}" if req.notes.strip() else ""),
+        who=req.submitted_by)
+    db.commit()
     return _technical_workflow_payload(db, project)
 
 
@@ -1757,30 +3728,19 @@ def create_drawing_revision(task_id: int, req: schemas.DrawingRevisionIn,
     return _technical_workflow_payload(db, task.project)
 
 
-@app.post("/api/projects/{project_id}/drawing-tasks/use-existing-design")
-def approve_existing_configurator_design(
-        project_id: int,
-        req: schemas.ExistingDesignApprovalIn,
-        db: Session = Depends(get_db)):
-    """Approve a saved configurator design when no redraw is required."""
-    project = _get_project(db, project_id)
-    if not project.items:
-        raise HTTPException(
-            409, "Save at least one configurator design item before confirming it")
-    target_record = None
-    if req.design_id is not None:
-        target_record = db.get(models.DesignRecord, req.design_id)
-        if target_record is None or target_record.project_id != project.id:
-            raise HTTPException(400, "Design does not belong to this project")
-    elif len(project.items) > 1:
-        raise HTTPException(
-            409,
-            "This project has more than one item — select which item's "
-            "design is being confirmed")
-    payment = _payment_authorization(db, project)
-    if not payment["authorized"]:
-        raise HTTPException(409, payment["reason"])
-    extraction = _latest_approved_extraction(project, req.design_id)
+def _auto_confirm_existing_design(
+        db: Session, project: models.Project, design_id: int | None,
+        approved_by: str, notes: str = "") -> models.DrawingRevision:
+    """Core of "confirm the saved configurator design as final" — approves
+    an immutable R1 snapshot of it as the drawing, with no redraw required.
+    Shared by the manual Technical Workflow action and QC's auto-release for
+    any item that reaches QC with no drawing pack yet. Does not commit;
+    callers own the transaction. Raises if real drawing work is already in
+    progress — this must never paper over that.
+    """
+    target_record = (
+        db.get(models.DesignRecord, design_id) if design_id is not None else None)
+    extraction = _latest_approved_extraction(project, design_id)
     if extraction is None:
         raise HTTPException(409, "Approve an extraction before confirming the drawing")
     quote = _current_commercial_quote(project, extraction)
@@ -1797,7 +3757,7 @@ def approve_existing_configurator_design(
         and row.quote_id == quote.id
     ), None)
     if task and any(row.status == "approved" for row in task.revisions or []):
-        return _technical_workflow_payload(db, project)
+        return next(row for row in task.revisions if row.status == "approved")
     if task and task.revisions:
         raise HTTPException(
             409,
@@ -1806,14 +3766,14 @@ def approve_existing_configurator_design(
     if task is None:
         task = models.DrawingTask(
             project_id=project.id,
-            design_id=req.design_id,
+            design_id=design_id,
             extraction_id=extraction.id,
             quote_id=quote.id,
             method="configurator",
             status="assigned",
-            assigned_to=req.approved_by.strip(),
+            assigned_to=approved_by.strip(),
             brief="Existing saved configurator design accepted without redraw.",
-            created_by=req.approved_by.strip(),
+            created_by=approved_by.strip(),
         )
         db.add(task)
         db.flush()
@@ -1822,9 +3782,9 @@ def approve_existing_configurator_design(
         drawing_task_id=task.id,
         revision=1,
         status="approved",
-        notes=req.notes.strip(),
-        submitted_by=req.approved_by.strip(),
-        approved_by=req.approved_by.strip(),
+        notes=notes.strip(),
+        submitted_by=approved_by.strip(),
+        approved_by=approved_by.strip(),
         approved_at=datetime.utcnow(),
     )
     db.add(revision)
@@ -1864,13 +3824,13 @@ def approve_existing_configurator_design(
     ))
 
     for other_task in project.drawing_tasks or []:
-        if other_task.design_id != req.design_id:
+        if other_task.design_id != design_id:
             continue
         for other in other_task.revisions or []:
             if other.id != revision.id and other.status == "approved":
                 other.status = "superseded"
     for release in project.production_releases or []:
-        if release.design_id == req.design_id and release.status == "current":
+        if release.design_id == design_id and release.status == "current":
             release.status = "superseded"
     task.status = "approved"
     project.drawing_method = "configurator"
@@ -1883,9 +3843,61 @@ def approve_existing_configurator_design(
            if target_record is not None
            else f"({len(project.items)} saved item"
                 f"{'s' if len(project.items) != 1 else ''})"),
-        who=req.approved_by)
+        who=approved_by)
+    return revision
+
+
+@app.post("/api/projects/{project_id}/drawing-tasks/use-existing-design")
+def approve_existing_configurator_design(
+        project_id: int,
+        req: schemas.ExistingDesignApprovalIn,
+        db: Session = Depends(get_db)):
+    """Approve a saved configurator design when no redraw is required."""
+    project = _get_project(db, project_id)
+    if not project.items:
+        raise HTTPException(
+            409, "Save at least one configurator design item before confirming it")
+    if req.design_id is not None:
+        target_record = db.get(models.DesignRecord, req.design_id)
+        if target_record is None or target_record.project_id != project.id:
+            raise HTTPException(400, "Design does not belong to this project")
+    elif len(project.items) > 1:
+        raise HTTPException(
+            409,
+            "This project has more than one item — select which item's "
+            "design is being confirmed")
+    if project.released_to_technical_at is None:
+        raise HTTPException(
+            409, "Accounts must release this project to Technical first")
+    _auto_confirm_existing_design(db, project, req.design_id, req.approved_by, req.notes)
     db.commit()
     return _technical_workflow_payload(db, project)
+
+
+def _finalize_drawing_revision(
+        db: Session, revision: models.DrawingRevision, approved_by: str) -> None:
+    """Drawing has no separate manual approval anymore — this runs the
+    moment a revision's required files are complete (right away for the
+    "use existing design" snapshot path, or on the upload that completes the
+    client-overview + factory-breakdown pair for a custom revision). Does
+    what the old `approve_drawing_revision` endpoint used to do: supersede
+    any prior approved revision on the same task and mark stale any
+    production release still pointed at an older revision.
+    """
+    for other in revision.task.revisions or []:
+        if other.id != revision.id and other.status == "approved":
+            other.status = "superseded"
+    for release in revision.task.project.production_releases or []:
+        if (release.design_id == revision.task.design_id
+                and release.status == "current"
+                and release.drawing_revision_id != revision.id):
+            release.status = "superseded"
+    revision.status = "approved"
+    revision.approved_by = approved_by
+    revision.approved_at = datetime.utcnow()
+    revision.task.status = "approved"
+    revision.task.project.workflow_status = "drawing_approved"
+    revision.task.project.released_at = None
 
 
 @app.put("/api/drawing-revisions/{revision_id}/files/{kind}")
@@ -1927,6 +3939,15 @@ async def upload_drawing_file(revision_id: int, kind: str, request: Request,
         db, revision.task.project, "drawing",
         f"uploaded {kind.replace('_', ' ')} file {safe_name} to R{revision.revision}",
         who=revision.submitted_by or "Technical Team")
+    db.flush()
+    kinds = {row.kind for row in revision.files or []}
+    if kinds:
+        approved_by = revision.submitted_by or "System (auto)"
+        _finalize_drawing_revision(db, revision, approved_by)
+        _workflow_log(
+            db, revision.task.project, "approval",
+            f"approved drawing revision R{revision.revision}",
+            who=approved_by)
     db.commit(); db.refresh(file)
     return _file_payload(file)
 
@@ -1944,95 +3965,16 @@ def download_drawing_file(file_id: int, db: Session = Depends(get_db)):
         filename=file.filename)
 
 
-@app.post("/api/drawing-revisions/{revision_id}/approve")
-def approve_drawing_revision(revision_id: int, req: schemas.DrawingApprovalIn,
-                             db: Session = Depends(get_db)):
-    revision = db.get(models.DrawingRevision, revision_id)
-    if revision is None:
-        raise HTTPException(404, "Drawing revision not found")
-    latest_revision = max(
-        row.revision for row in revision.task.revisions or [revision])
-    if revision.revision != latest_revision:
-        raise HTTPException(
-            409,
-            f"Only the latest drawing R{latest_revision} can be approved. "
-            f"R{revision.revision} remains historical.")
-    if revision.status == "approved":
-        return _technical_workflow_payload(db, revision.task.project)
-    if revision.status == "superseded":
-        raise HTTPException(409, "A superseded drawing cannot be approved again")
-    current_extraction = _latest_approved_extraction(
-        revision.task.project, revision.task.design_id)
-    current_quote = _current_commercial_quote(
-        revision.task.project, current_extraction)
-    if (current_extraction is None
-            or revision.task.extraction_id != current_extraction.id
-            or current_quote is None
-            or revision.task.quote_id != current_quote.id):
-        raise HTTPException(
-            409,
-            "Drawing approval blocked: its extraction or quotation basis is stale")
-    kinds = {file.kind for file in revision.files or []}
-    native_snapshot = "configurator_snapshot" in kinds
-    if (not native_snapshot
-            and not {"client_overview", "factory_breakdown"}.issubset(kinds)):
-        raise HTTPException(
-            409, "Upload both client overview and factory breakdown files before approval")
-    for other in revision.task.revisions or []:
-        if other.id != revision.id and other.status == "approved":
-            other.status = "superseded"
-    for release in revision.task.project.production_releases or []:
-        if (release.design_id == revision.task.design_id
-                and release.status == "current"
-                and release.drawing_revision_id != revision.id):
-            release.status = "superseded"
-    revision.status = "approved"
-    revision.approved_by = req.approved_by.strip()
-    revision.approved_at = datetime.utcnow()
-    revision.task.status = "approved"
-    revision.task.project.workflow_status = "drawing_approved"
-    revision.task.project.released_at = None
-    _workflow_log(
-        db, revision.task.project, "approval",
-        f"approved drawing revision R{revision.revision}",
-        who=req.approved_by)
-    db.commit()
-    return _technical_workflow_payload(db, revision.task.project)
-
-
-@app.post("/api/projects/{project_id}/production-releases")
-def release_project_to_factory(project_id: int,
-                               req: schemas.ProductionReleaseIn,
-                               db: Session = Depends(get_db)):
-    project = _get_project(db, project_id)
-    revision = db.get(models.DrawingRevision, req.drawing_revision_id)
-    if revision is None or revision.task.project_id != project.id:
-        raise HTTPException(400, "Drawing revision does not belong to this project")
-    if revision.status != "approved":
-        raise HTTPException(409, "Only an approved drawing revision can be released")
-    current_extraction = _latest_approved_extraction(project, revision.task.design_id)
-    current_quote = _current_commercial_quote(project, current_extraction)
-    if current_extraction is None:
-        raise HTTPException(409, "An approved extraction is required for release")
-    if (revision.task.extraction_id != current_extraction.id
-            or current_quote is None
-            or revision.task.quote_id != current_quote.id):
-        raise HTTPException(
-            409,
-            "Factory release blocked: drawing, quotation and approved "
-            "extraction are not on the same revision chain")
-    existing_release = next((
-        row for row in (project.production_releases or [])
-        if row.drawing_revision_id == revision.id), None)
-    if existing_release:
-        return _technical_workflow_payload(db, project)
-    kinds = {file.kind for file in revision.files or []}
-    if not {"factory_breakdown", "configurator_snapshot"}.intersection(kinds):
-        raise HTTPException(
-            409, "Factory breakdown or approved configurator snapshot is required")
-    payment = _payment_authorization(db, project)
-    if not payment["authorized"]:
-        raise HTTPException(409, payment["reason"])
+def _create_production_release(
+        db: Session, project: models.Project, revision: models.DrawingRevision,
+        extraction: models.TechnicalExtraction, quote: models.Quote,
+        released_by: str, notes: str = "") -> models.ProductionRelease:
+    """Create the current factory-release record for one item's approved
+    drawing revision, superseding any prior release for the same item. Does
+    not commit; caller owns the transaction. Caller must already know a new
+    release is actually needed (no existing current release on this exact
+    revision) — this always creates one.
+    """
     item_releases = [
         row for row in project.production_releases or []
         if row.design_id == revision.task.design_id]
@@ -2050,35 +3992,70 @@ def release_project_to_factory(project_id: int,
     release = models.ProductionRelease(
         project_id=project.id,
         design_id=revision.task.design_id,
-        release_number=(
-            f"{project.project_number}-FP-{release_index:02d}"),
+        release_number=f"{project.project_number}-FP-{release_index:02d}",
         status="current",
-        extraction_id=current_extraction.id,
-        extraction_revision=current_extraction.revision,
-        quote_id=current_quote.id,
-        quotation_number=current_quote.quote_number,
+        extraction_id=extraction.id,
+        extraction_revision=extraction.revision,
+        quote_id=quote.id,
+        quotation_number=quote.quote_number,
         drawing_revision_id=revision.id,
         drawing_revision_number=revision.revision,
         file_manifest=json.dumps(manifest),
-        released_by=req.released_by.strip(),
-        notes=req.notes.strip(),
+        released_by=released_by.strip(),
+        notes=notes.strip(),
     )
     db.add(release)
     project.workflow_status = "released_to_factory"
     project.released_at = datetime.utcnow()
-    for job in project.jobs or []:
+    job = db.get(models.Job, quote.job_id) if quote.job_id else None
+    if job is not None:
         lc.log(
             db, "stage",
             f"factory release issued from approved drawing R{revision.revision}",
-            job_id=job.id, who=req.released_by)
-    _workflow_log(
-        db, project, "release",
-        f"released {release.release_number}: extraction "
-        f"E{current_extraction.revision}, quotation "
-        f"{current_quote.quote_number}, drawing R{revision.revision}",
-        who=req.released_by)
-    db.commit()
-    return _technical_workflow_payload(db, project)
+            job_id=job.id, who=released_by)
+    return release
+
+
+def _release_project_to_factory(
+        db: Session, project: models.Project,
+        released_by: str, notes: str = "") -> list[models.ProductionRelease]:
+    """Release every project item's current approved factory pack. Called
+    the moment pre-production QC approves — QC approval is the only gate on
+    reaching the factory floor. An item with no drawing yet is auto-confirmed
+    from its saved configurator design (see `_auto_confirm_existing_design`);
+    `_preproduction_qc_payload`'s issues already guarantee every item is
+    releasable by the time this runs, so nothing here should fail.
+    """
+    releases = []
+    for design_id, record in _qc_item_scopes(project):
+        extraction = _latest_approved_extraction(project, design_id)
+        quote = _current_commercial_quote(project, extraction)
+        drawing = _current_approved_drawing(project, design_id, extraction, quote)
+        if drawing is None:
+            if record is None:
+                continue  # legacy ungrouped scope, no drawing yet — no real item to auto-confirm against
+            drawing = _auto_confirm_existing_design(
+                db, project, design_id, released_by,
+                "Auto-confirmed on pre-production QC approval.")
+            db.flush()
+            extraction = _latest_approved_extraction(project, design_id)
+            quote = _current_commercial_quote(project, extraction)
+        already_current = any(
+            row.status == "current" and row.drawing_revision_id == drawing.id
+            for row in project.production_releases or [])
+        if already_current:
+            continue
+        releases.append(_create_production_release(
+            db, project, drawing, extraction, quote, released_by, notes))
+    return releases
+
+
+@app.get("/api/projects/{project_id}/quote-summary")
+def project_quote_summary_json(project_id: int, db: Session = Depends(get_db)):
+    project = db.get(models.Project, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    return _project_quote_payload(project)
 
 
 @app.get("/api/projects/{project_id}/quote-summary/pdf")
@@ -2101,6 +4078,44 @@ def project_material_boq(project_id: int, db: Session = Depends(get_db)):
                          f"project-material-boq-{project.project_number}.pdf")
 
 
+@app.get("/api/projects/{project_id}/cutting-list/pdf")
+def project_cutting_list(project_id: int, db: Session = Depends(get_db)):
+    project = db.get(models.Project, project_id)
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    payload = _project_quote_payload(project)
+    counters = {"Window": 0, "Door": 0, "Item": 0}
+    item_packs = []
+    demand = []
+    for item in payload["items"]:
+        design = item.get("design") or {}
+        result = item.get("result")
+        if not result:
+            continue
+        name = str(item.get("name") or design.get("name") or "").lower()
+        kind = "Door" if "door" in name else "Window" if "window" in name else "Item"
+        counters[kind] += 1
+        label = f"{kind} {counters[kind]}"
+        design = {**design, "name": item.get("name") or design.get("name"),
+                  "ref": item.get("ref") or design.get("ref"),
+                  "item_label": label}
+        pieces = extract_pieces_any(design)
+        if not pieces:
+            continue
+        qty = int(result.get("qty") or design.get("qty") or 1)
+        demand.extend([
+            {**piece, "qty": piece["qty"] * qty, "bundle": label}
+            for piece in pieces
+        ])
+        item_packs.append({"label": label, "design": design, "result": result})
+    if not item_packs:
+        raise HTTPException(409, "This project has no frame or curtain-wall items with a cutting schedule")
+    return _pdf_response(
+        project_cutting_list_pdf(payload, item_packs, optimize(demand)),
+        f"project-cutting-list-{project.project_number}.pdf",
+    )
+
+
 @app.get("/api/materials")
 def list_materials(db: Session = Depends(get_db)):
     return [{"id": m.id, "code": m.code, "name": m.name, "category": m.category,
@@ -2108,6 +4123,65 @@ def list_materials(db: Session = Depends(get_db)):
              "reorder_level": m.reorder_level}
             for m in db.scalars(select(models.Material)
                                 .order_by(models.Material.category, models.Material.code))]
+
+
+@app.patch("/api/materials/{material_id}")
+def update_material(material_id: int, req: schemas.MaterialUpdateIn,
+                    db: Session = Depends(get_db)):
+    """Correct a catalogue value. Prices and units are what the quote, BOM and
+    cutting list read, so an edit here reaches every document."""
+    mat = db.get(models.Material, material_id)
+    if mat is None:
+        raise HTTPException(404, "Material not found")
+    changes = []
+    if req.name is not None and req.name.strip():
+        mat.name = req.name.strip()
+    if req.category is not None and req.category.strip():
+        mat.category = req.category.strip()
+    if req.unit is not None and req.unit.strip() and req.unit.strip() != mat.unit:
+        changes.append(f"unit {mat.unit} → {req.unit.strip()}")
+        mat.unit = req.unit.strip()
+    if req.unit_price is not None:
+        if req.unit_price < 0:
+            raise HTTPException(400, "Unit price cannot be negative")
+        if round(req.unit_price, 2) != round(mat.unit_price, 2):
+            changes.append(f"price {mat.unit_price} → {round(req.unit_price, 2)}")
+        mat.unit_price = round(req.unit_price, 2)
+    if req.reorder_level is not None:
+        if req.reorder_level < 0:
+            raise HTTPException(400, "Reorder level cannot be negative")
+        mat.reorder_level = round(req.reorder_level, 2)
+    if changes:
+        lc.log(db, "stock", f"{mat.code} updated: {'; '.join(changes)}",
+               who=req.who or "Inventory")
+    db.commit()
+    return {"id": mat.id, "code": mat.code, "name": mat.name,
+            "category": mat.category, "unit": mat.unit,
+            "unit_price": mat.unit_price, "stock": mat.stock,
+            "reorder_level": mat.reorder_level}
+
+
+@app.post("/api/materials")
+def create_material(req: schemas.MaterialCreateIn, db: Session = Depends(get_db)):
+    """Add a material the workbooks never listed — a new accessory, a joint
+    member, an ECO-line profile."""
+    code = req.code.strip().upper()
+    if not code:
+        raise HTTPException(400, "A material code is required")
+    if db.scalar(select(models.Material).where(models.Material.code == code)):
+        raise HTTPException(409, f"{code} already exists")
+    mat = models.Material(
+        code=code, name=req.name.strip() or code, category=req.category.strip() or "Accessory",
+        unit=req.unit.strip() or "pcs", unit_price=round(max(0.0, req.unit_price), 2),
+        stock=round(max(0.0, req.stock), 2), reorder_level=round(max(0.0, req.reorder_level), 2))
+    db.add(mat)
+    lc.log(db, "stock", f"{code} added to the material catalogue ({mat.name})",
+           who=req.who or "Inventory")
+    db.commit()
+    db.refresh(mat)
+    return {"id": mat.id, "code": mat.code, "name": mat.name, "category": mat.category,
+            "unit": mat.unit, "unit_price": mat.unit_price, "stock": mat.stock,
+            "reorder_level": mat.reorder_level}
 
 
 @app.post("/api/materials/{material_id}/receive")
@@ -2165,7 +4239,16 @@ def _job_summary_with_project_totals(db: Session, j: models.Job) -> dict:
         "deposit_percent": round(_project_deposit_percent(j.project), 2),
         "project_number": j.project.project_number,
         "project_name": j.project.name,
+        "project_id": j.project.id,
         "job_count": len(project_jobs),
+        "released_to_qc_at": (
+            j.project.released_to_qc_at.isoformat()
+            if j.project.released_to_qc_at else None),
+        "released_to_qc_by": j.project.released_to_qc_by,
+        "released_to_technical_at": (
+            j.project.released_to_technical_at.isoformat()
+            if j.project.released_to_technical_at else None),
+        "released_to_technical_by": j.project.released_to_technical_by,
     }
 
 
@@ -2266,6 +4349,7 @@ def job_detail(job_number: str, db: Session = Depends(get_db)):
                        "inspector": q.inspector, "at": q.created_at.isoformat(),
                        "checklist": json.loads(q.checklist or "[]")} for q in qcs],
         "design": design_payload,
+        "design_id": rec.id if rec else None,
         "design_ref": rec.ref if rec else "",
         "share_token": share_token(rec.id) if rec else None,
         "quote_number": quote.quote_number if quote else None,
@@ -2300,17 +4384,9 @@ def add_payment(job_number: str, p: schemas.PaymentIn, db: Session = Depends(get
     j = _get_job(db, job_number)
     if p.amount <= 0:
         raise HTTPException(400, "Amount must be positive")
-    if j.project:
-        # Billed against the project's one combined contract, not this job's
-        # own individually-priced value — see _payment_authorization.
-        project_paid = sum(lc.paid_amount(db, job) for job in (j.project.jobs or []))
-        remaining = max(_project_contract_value(j.project) - project_paid, 0)
-    else:
-        remaining = max(float(j.value or 0) - lc.paid_amount(db, j), 0)
-    if p.amount > remaining + 0.01:
-        raise HTTPException(
-            400,
-            f"Payment exceeds the outstanding balance of GHS {remaining:,.2f}")
+    # No cap against the outstanding balance — Accounts decides whether an
+    # amount (full settlement, a partial, or one that overshoots) is correct
+    # to record; the system doesn't second-guess it.
     db.add(models.Payment(job_id=j.id, kind=p.kind, method=p.method,
                           amount=p.amount, ref=p.ref))
     lc.log(db, "payment",
@@ -2328,8 +4404,76 @@ def add_payment(job_number: str, p: schemas.PaymentIn, db: Session = Depends(get
                 db, j.project, "payment",
                 "required payment confirmed — detailed drawing authorized",
                 who=p.who)
+        _mark_lead_won_on_payment(db, j.project)
     db.commit()
     return _job_summary_with_project_totals(db, j)
+
+
+@app.post("/api/projects/{project_id}/release-to-technical")
+def release_project_to_technical(project_id: int, req: schemas.ReleaseToTechnicalIn,
+                                 db: Session = Depends(get_db)):
+    """Accounts confirms payment and hands the project to Technical for
+    drawing work. Deliberately not gated on the 80% deposit threshold
+    (`_payment_authorization`) — that figure stays visible as a reference,
+    but Evans's own framing ("if the payment received deserves to be
+    approved") hands the release judgment to a person, not a fixed
+    percentage. Accounts is the sole payment-based gate in the pipeline;
+    Technical decides separately when the project is ready for QC
+    (`submit_project_to_qc`)."""
+    project = _get_project(db, project_id)
+    paid = sum(lc.paid_amount(db, job) for job in (project.jobs or []))
+    if paid <= 0:
+        raise HTTPException(409, "Record a payment before releasing to Technical")
+    project.released_to_technical_at = datetime.utcnow()
+    project.released_to_technical_by = req.released_by.strip()
+
+    # Some items reach payment through the quick quote-from-design path,
+    # which never runs Technical Workflow's own material extraction step —
+    # Technical would otherwise open a drawing task with nothing to draw
+    # from. Fill in a generated (provisional) extraction for any item that
+    # doesn't already have an approved one, without touching this project's
+    # Technical Workflow stepper (`reset_workflow_status=False`) since that
+    # stepper isn't how this path tracks progress.
+    generated_for = []
+    for design_id, record in _qc_item_scopes(project):
+        if record is None or _latest_approved_extraction(project, design_id) is not None:
+            continue
+        extraction, _ = _generate_extraction_for_record(
+            db, project, record, design_id, req.released_by,
+            "Auto-generated on release to Technical so drawing work can begin.",
+            reset_workflow_status=False)
+        if extraction is not None:
+            generated_for.append(record.ref or record.name)
+            # The quick "Save & Create Job" path creates its quote straight
+            # from the pricing engine with no extraction_id at all — nothing
+            # downstream (drawing tasks, factory release) can find "the
+            # quote that goes with this extraction" without this link.
+            existing_quote = next((
+                q for q in sorted(
+                    project.quotes or [], key=lambda row: row.created_at,
+                    reverse=True)
+                if q.design_id == design_id
+                and q.status in ("Accepted", "Approved")
+                and q.extraction_id is None
+            ), None)
+            if existing_quote is not None:
+                existing_quote.extraction_id = extraction.id
+
+    _workflow_log(
+        db, project, "accounts_release",
+        "Accounts confirmed payment and released the project to Technical"
+        + (f" — {req.notes.strip()}" if req.notes.strip() else ""),
+        who=req.released_by)
+    if generated_for:
+        _workflow_log(
+            db, project, "extraction",
+            "Auto-generated a material extraction for "
+            f"{len(generated_for)} item(s) with none yet: "
+            f"{', '.join(generated_for)}",
+            who="System (auto)")
+    db.commit()
+    payment = _payment_authorization(db, project)
+    return _project_workspace_payload(db, project, payment)
 
 
 @app.post("/api/jobs/{job_number}/qc")
@@ -2375,14 +4519,9 @@ def delivery_note(job_number: str, db: Session = Depends(get_db)):
     return _pdf_response(pdf, f"{j.dn_number}.pdf")
 
 
-@app.post("/api/quotes/{quote_number}/status")
-def quote_status(quote_number: str, req: schemas.QuoteStatusIn, db: Session = Depends(get_db)):
-    quote = db.scalar(select(models.Quote).where(models.Quote.quote_number == quote_number))
-    if quote is None:
-        raise HTTPException(404, "Quote not found")
-    if req.status not in ("Sent", "Accepted", "Declined"):
-        raise HTTPException(400, "status must be Sent|Accepted|Declined")
-    if req.status == "Accepted" and quote.project:
+def _apply_quote_status(
+        db: Session, quote: models.Quote, status: str, who: str) -> dict:
+    if status == "Accepted" and quote.project and quote.design_id is None:
         approved_extraction = _latest_approved_extraction(quote.project)
         if (approved_extraction is not None
                 and quote.extraction_id != approved_extraction.id):
@@ -2391,21 +4530,21 @@ def quote_status(quote_number: str, req: schemas.QuoteStatusIn, db: Session = De
                 f"Quotation acceptance blocked: this quotation is not based "
                 f"on approved extraction E{approved_extraction.revision}.")
 
-    quote.status = req.status
+    quote.status = status
     result = {"quote_number": quote.quote_number, "status": quote.status}
 
-    if req.status == "Sent":
+    if status == "Sent":
         lc.log(db, "quote", f"sent quote {quote.quote_number} to "
-               f"{quote.client_name} via WhatsApp", who=req.who)
+               f"{quote.client_name} via WhatsApp", who=who)
         if quote.project:
             quote.project.workflow_status = "quote_sent"
             _workflow_log(
                 db, quote.project, "quote",
-                f"sent quotation {quote.quote_number} to client", who=req.who)
-    elif req.status == "Declined":
+                f"sent quotation {quote.quote_number} to client", who=who)
+    elif status == "Declined":
         lc.log(db, "quote", f"{quote.client_name} declined quote {quote.quote_number}",
-               who=req.who)
-    elif req.status == "Accepted":
+               who=who)
+    elif status == "Accepted":
         if quote.job_id is None:
             client = db.scalar(select(models.Client)
                                .where(models.Client.name == quote.client_name))
@@ -2420,17 +4559,19 @@ def quote_status(quote_number: str, req: schemas.QuoteStatusIn, db: Session = De
                              deposit_percent=quote.deposit_percent or 80)
             db.add(job); db.flush()
             quote.job_id = job.id
+            if quote.design:
+                quote.design.job_id = job.id
             if quote.project:
                 quote.project.status = "accepted"
                 quote.project.workflow_status = "awaiting_payment"
                 _workflow_log(
-                    db, quote.project, "quote",
-                    f"client accepted {quote.quote_number}; awaiting configured payment",
-                    who=req.who)
+                db, quote.project, "quote",
+                f"client accepted {quote.quote_number}; awaiting configured payment",
+                    who=who)
             result["job_number"] = job.job_number
             lc.log(db, "quote", f"{quote.client_name} accepted {quote.quote_number} — "
                    f"job {job.job_number} opened (GHS {quote.total:,.0f}), awaiting {job.deposit_percent:.0f}% deposit",
-                   job_id=job.id, who=req.who)
+                   job_id=job.id, who=who)
         else:
             job = db.get(models.Job, quote.job_id)
             result["job_number"] = job.job_number if job else None
@@ -2440,6 +4581,17 @@ def quote_status(quote_number: str, req: schemas.QuoteStatusIn, db: Session = De
                 "drawing_authorized"
                 if _payment_authorization(db, quote.project)["authorized"]
                 else "awaiting_payment")
+    return result
+
+
+@app.post("/api/quotes/{quote_number}/status")
+def quote_status(quote_number: str, req: schemas.QuoteStatusIn, db: Session = Depends(get_db)):
+    quote = db.scalar(select(models.Quote).where(models.Quote.quote_number == quote_number))
+    if quote is None:
+        raise HTTPException(404, "Quote not found")
+    if req.status not in ("Sent", "Accepted", "Declined"):
+        raise HTTPException(400, "status must be Sent|Accepted|Declined")
+    result = _apply_quote_status(db, quote, req.status, req.who)
     db.commit()
     return result
 
@@ -2528,7 +4680,7 @@ def quotation_pdf(quote_number: str, db: Session = Depends(get_db)):
         try:
             design = schemas.DesignIn(
                 **json.loads(quote.design.design_json)).engine_dict()
-            result = calc_any_quote(design)
+            result = calc_any_quote(design, _materials_by_code(db))
         except Exception:
             design = None
             result = None
@@ -2629,10 +4781,76 @@ def _persist_design_quote(db: Session, client_name: str, design: schemas.DesignI
     return quote
 
 
+def _next_quote_number(db: Session) -> str:
+    number = (db.scalar(select(func.count(models.Quote.id))) or 0) + 143
+    while True:
+        candidate = f"SOF-Q-{datetime.now():%Y}-{number:04d}"
+        exists = db.scalar(select(models.Quote.id).where(
+            models.Quote.quote_number == candidate))
+        if not exists:
+            return candidate
+        number += 1
+
+
+def _sync_design_draft_quote(
+        db: Session, project: models.Project, record: models.DesignRecord,
+        design: schemas.DesignIn, effective_total: float) -> models.Quote:
+    """Keep one current draft quote aligned with the saved design measurements.
+
+    A sent/accepted quote remains immutable evidence. Editing that design later
+    starts a new Draft instead of rewriting what the client already received.
+    """
+    quote = db.scalar(select(models.Quote).where(
+        models.Quote.project_id == project.id,
+        models.Quote.design_id == record.id,
+        models.Quote.status == "Draft",
+    ).order_by(models.Quote.created_at.desc()))
+    created = quote is None
+    first = design.cells[0] if design.cells else schemas.DesignCell()
+    if quote is None:
+        quote = models.Quote(
+            quote_number=_next_quote_number(db),
+            project_id=project.id,
+            design_id=record.id,
+            client_name=(project.client.name if project.client else None)
+            or record.client_name or "Walk-in Client",
+            product=design.name,
+            status="Draft",
+        )
+        db.add(quote)
+    quote.client_name = (
+        project.client.name if project.client else record.client_name)
+    quote.product = design.name
+    quote.width_mm = design.width
+    quote.height_mm = design.height
+    quote.panels = design.cols * design.rows
+    quote.opening = first.opening
+    quote.glass = first.glass
+    quote.total = effective_total
+    quote.pricing_mode = design.pricingMode if design.pricingMode in ("auto", "manual") else "auto"
+    quote.deposit_percent = design.depositPercent
+    if created:
+        project.status = "quoted"
+        project.workflow_status = "quote_in_preparation"
+        lead = db.scalar(select(models.Lead).where(
+            models.Lead.project_id == project.id))
+        if lead:
+            lead.stage = "quoted"
+            lead.lost_reason = ""
+            lead.closed_at = None
+            lead.quoted_at = lead.quoted_at or datetime.utcnow()
+            lead.updated_at = datetime.utcnow()
+        _workflow_log(
+            db, project, "quote",
+            f"automatic draft {quote.quote_number} generated from {record.ref or record.name}",
+            who="System")
+    return quote
+
+
 @app.post("/api/quotes/design")
-def price_design(req: schemas.DesignQuoteIn):
+def price_design(req: schemas.DesignQuoteIn, db: Session = Depends(get_db)):
     """Live pricing for a configurator design (no persistence)."""
-    return calc_any_quote(req.design.engine_dict())
+    return calc_any_quote(req.design.engine_dict(), _materials_by_code(db))
 
 
 @app.post("/api/quotes/design/pdf")
@@ -2648,7 +4866,7 @@ def design_quote_pdf(req: schemas.DesignQuoteIn, db: Session = Depends(get_db)):
             f"This project has approved extraction E{approved_extraction.revision}. "
             "Prepare its quotation from the Technical Workflow so the revision "
             "chain remains traceable.")
-    result = calc_any_quote(req.design.engine_dict())
+    result = calc_any_quote(req.design.engine_dict(), _materials_by_code(db))
     if result.get("floor_status") == "BELOW FLOOR":
         raise HTTPException(422, "Client net is below the internal cost floor. Reduce the discount or confirm the project BOQ floor before issuing the quote.")
     quote = _persist_design_quote(db, req.client_name, req.design, result, "Sent", req.project_id)
@@ -2672,7 +4890,7 @@ def design_quote_pdf(req: schemas.DesignQuoteIn, db: Session = Depends(get_db)):
 @app.post("/api/jobs/from-design")
 def create_job_from_design(req: schemas.DesignQuoteIn, db: Session = Depends(get_db)):
     """Save & Create Job: persist client + accepted quote + job in one step."""
-    result = calc_any_quote(req.design.engine_dict())
+    result = calc_any_quote(req.design.engine_dict(), _materials_by_code(db))
     if result.get("floor_status") == "BELOW FLOOR":
         raise HTTPException(422, "Cannot accept a quote below the internal cost floor. Review discount and confirmed project BOQ first.")
     project = db.get(models.Project, req.project_id) if req.project_id else None
@@ -2742,34 +4960,51 @@ def design_report(kind: str, req: schemas.DesignQuoteIn,
     """Design documents. Any category: summary | elevation | quotation |
     price-breakdown | internal-boq. Frame/curtain wall: cutting-list | work-order.
     Frameless: glass-order | hardware-list | work-order | installation."""
-    d = req.design.engine_dict()
-    result = calc_any_quote(d)
-    project = db.get(models.Project, req.project_id) if req.project_id else None
-    approved_extraction = _latest_approved_extraction(project)
+    record = db.get(models.DesignRecord, req.design_id) if req.design_id else None
+    if req.design_id and record is None:
+        raise HTTPException(404, "Design item not found")
+    if record and req.project_id and record.project_id != req.project_id:
+        raise HTTPException(409, "The selected design item does not belong to this project")
+    project_id = req.project_id or (record.project_id if record else None)
+    project = db.get(models.Project, project_id) if project_id else None
+    if project_id and project is None:
+        raise HTTPException(404, "Project not found")
+
+    d = (
+        schemas.DesignIn(**json.loads(record.design_json)).engine_dict()
+        if record else req.design.engine_dict())
+    client_name = req.client_name or (
+        record.client_name if record else "") or (
+        project.client.name if project and project.client else "")
+    result = calc_any_quote(d, _materials_by_code(db))
+    approved_extraction = _latest_approved_extraction(
+        project, record.id if record else None)
     commercial_quote = (
         _current_commercial_quote(project, approved_extraction)
         if project and approved_extraction else None)
     result = _result_with_approved_extraction(
         result, approved_extraction,
         _quote_snapshot(commercial_quote) if commercial_quote else None)
+    bundle = d.get("ref") or (record.ref if record else None) or d.get("name") or "Project item"
+    d["item_label"] = bundle
     pieces = extract_pieces_any(d)
     qty = d.get("qty") or 1
-    demand = [{**p, "qty": p["qty"] * qty} for p in pieces]
+    demand = [{**p, "qty": p["qty"] * qty, "bundle": bundle} for p in pieces]
     plan = optimize(demand)
     ref = (d.get("ref") or d["name"]).replace(" ", "-")
 
     if kind == "summary":
-        return _pdf_response(project_summary_pdf(d, result, req.client_name),
+        return _pdf_response(project_summary_pdf(d, result, client_name),
                              f"project-summary-{ref}.pdf")
     if kind == "elevation":
         return _pdf_response(elevation_pdf(d, result), f"elevation-{ref}.pdf")
     if kind == "price-breakdown":
-        return _pdf_response(price_breakdown_pdf(d, result, req.client_name),
+        return _pdf_response(price_breakdown_pdf(d, result, client_name),
                              f"price-breakdown-{ref}.pdf")
     if kind == "quotation":
         # document copy for the saved project — numbered by design ref, NOT
         # persisted (quotes are issued from the configurator, which persists)
-        pdf = quote_pdf(d.get("ref") or "DRAFT", req.client_name, d["name"],
+        pdf = quote_pdf(d.get("ref") or "DRAFT", client_name, d["name"],
                         d["width"], d["height"], result, design=d)
         return _pdf_response(pdf, f"quotation-{ref}.pdf")
 
@@ -2834,11 +5069,100 @@ def get_shared_design(token: str, db: Session = Depends(get_db)):
             "area": result["area"], "currency": "GHS"}
 
 
+def project_share_token(project_id: int) -> str:
+    """Same stateless HMAC pattern as `share_token`, but signs a distinct
+    payload (`project:<id>`) so a design token can never be replayed as a
+    project token or vice versa."""
+    sig = hmac.new(
+        SHARE_SECRET, f"project:{project_id}".encode(), hashlib.sha256
+    ).hexdigest()[:12]
+    return f"{project_id}-{sig}"
+
+
+def _shared_project(token: str, db: Session) -> models.Project:
+    pid, _, sig = token.partition("-")
+    if not pid.isdigit() or not hmac.compare_digest(project_share_token(int(pid)), token):
+        raise HTTPException(404, "Invalid share link")
+    project = db.get(models.Project, int(pid))
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    return project
+
+
+@app.get("/api/share/project/{token}")
+def get_shared_project_quote(token: str, db: Session = Depends(get_db)):
+    """Public, read-only view of a project's consolidated client quote —
+    what the client opens from the WhatsApp link to review and approve.
+    Same client-facing figures as the quotation PDF; no internal costs,
+    extraction or procurement detail."""
+    project = _shared_project(token, db)
+    totals = _project_client_quote_totals(project)
+    quotes = _current_quote_workspace_quotes(project)
+    fully_quoted = bool(project.items) and len(quotes) == len(project.items)
+    status = (
+        "accepted" if fully_quoted and all(
+            quote.status in ("Accepted", "Approved") for quote in quotes)
+        else "declined" if any(quote.status == "Declined" for quote in quotes)
+        else "pending")
+    items = []
+    for item in sorted(project.items or [], key=lambda row: row.created_at):
+        try:
+            raw_design = json.loads(item.design_json)
+            manual_price = float(raw_design.get("manualSellingPrice", 0) or 0)
+            if raw_design.get("pricingMode") == "manual" and manual_price > 0:
+                total = manual_price
+            else:
+                design = schemas.DesignIn(**raw_design).engine_dict()
+                result = calc_any_quote(design)
+                total = float(
+                    result.get("client_grand_total", result.get("grand_total", 0)) or 0)
+        except Exception:
+            total = float(item.total or 0)
+        items.append({
+            "ref": item.ref, "name": item.name, "qty": item.qty,
+            "location": item.location, "total": round(total, 2),
+        })
+    return {
+        "project_number": project.project_number,
+        "name": project.name,
+        "client_name": project.client.name if project.client else "",
+        "items": items,
+        "client_subtotal": totals["client_subtotal"],
+        "discount_amount": totals["discount_amount"],
+        "getf_nhis": totals["getf_nhis"],
+        "vat": totals["vat"],
+        "grand_total": totals["client_grand_total"],
+        "deposit_percent": totals["deposit_percent"],
+        "status": status,
+        "currency": "GHS",
+    }
+
+
+@app.post("/api/share/project/{token}/accept")
+def accept_shared_project_quote(
+        token: str, req: schemas.PublicQuoteAcceptIn,
+        db: Session = Depends(get_db)):
+    """Client self-approval from the public share link. Deliberately
+    accept-only — Sent/Declined stay staff actions — and the actor is always
+    tagged distinguishably in the audit trail so a self-service acceptance
+    can never be confused with staff recording it on the client's behalf."""
+    project = _shared_project(token, db)
+    confirmed_by = req.confirmed_by.strip()
+    who = (
+        f"Client (self-service): {confirmed_by}" if confirmed_by
+        else "Client (self-service)")
+    return _process_quote_workspace_status(db, project, "Accepted", who)
+
+
 @app.post("/api/designs")
 def save_design(req: schemas.DesignQuoteIn, db: Session = Depends(get_db)):
     """Save a design so it can be reopened / reused (EvA's saved templates)."""
     d = req.design.engine_dict()
-    result = calc_any_quote(d)
+    result = calc_any_quote(d, _materials_by_code(db))
+    effective_total = (
+        req.design.manualSellingPrice
+        if req.design.pricingMode == "manual" and req.design.manualSellingPrice > 0
+        else result["grand_total"])
     project = db.get(models.Project, req.project_id) if req.project_id else None
     if req.project_id and project is None:
         raise HTTPException(404, "Project not found")
@@ -2849,27 +5173,43 @@ def save_design(req: schemas.DesignQuoteIn, db: Session = Depends(get_db)):
             models.DesignRecord.project_id == project.id,
             models.DesignRecord.ref == req.design.ref,
         ).order_by(models.DesignRecord.created_at.desc()))
+    if rec is None and project is not None and project.status == "accepted":
+        raise HTTPException(
+            409,
+            "This project's quotation has already been accepted and its item "
+            "list is locked. Start a new project for additional items.")
     if rec is None:
         rec = models.DesignRecord(
             ref=req.design.ref, name=req.design.name, client_name=client_name,
             qty=req.design.qty, location=req.design.location,
-            total=result["grand_total"], design_json=req.design.model_dump_json(),
+            total=effective_total, design_json=req.design.model_dump_json(),
             project_id=project.id if project else None,
         )
         db.add(rec)
+        db.flush()
     else:
         rec.name = req.design.name
         rec.client_name = client_name
         rec.qty = req.design.qty
         rec.location = req.design.location
-        rec.total = result["grand_total"]
+        rec.total = effective_total
         rec.design_json = req.design.model_dump_json()
+    quote = None
+    if project:
+        quote = _sync_design_draft_quote(db, project, rec, req.design, effective_total)
+        if project.status == "draft":
+            project.status = "quoted"
+        if project.workflow_status in {
+                "measurement_received", "extraction_in_progress",
+                "extraction_ready", "quote_in_preparation"}:
+            project.workflow_status = "quote_in_preparation"
     db.commit(); db.refresh(rec)
-    if project and project.status == "draft":
-        project.status = "quoted"
-        db.commit()
+    if quote:
+        db.refresh(quote)
     return {"id": rec.id, "ref": rec.ref, "name": rec.name, "total": rec.total,
-            "project_id": rec.project_id, "share_token": share_token(rec.id)}
+            "project_id": rec.project_id, "share_token": share_token(rec.id),
+            "quote_number": quote.quote_number if quote else None,
+            "quote_status": quote.status if quote else None}
 
 
 @app.get("/api/designs")
@@ -3149,23 +5489,7 @@ def dashboard(db: Session = Depends(get_db)):
     ]
 
     def project_destination(project: models.Project) -> tuple[str, str]:
-        status = project.workflow_status or "measurement_received"
-        project_jobs = sorted(
-            [job for job in project.jobs or [] if job.stage != "done"],
-            key=lambda row: row.created_at, reverse=True)
-        if status == "released_to_factory" and project_jobs:
-            return (
-                f"/production/{project_jobs[0].job_number}",
-                "Open production")
-        if status in ("quote_in_preparation", "quote_sent"):
-            return (f"/quotations?project={project.id}", "Open quotation")
-        if status == "awaiting_payment" and project_jobs:
-            return (
-                f"/accounts?job={project_jobs[0].job_number}",
-                "Open accounts")
-        return (
-            f"/technical-workflow?project={project.id}",
-            "Open workflow")
+        return (f"/projects/{project.id}", "Open project")
 
     workflow_index = {key: index for index, key in enumerate(WORKFLOW_STATUSES)}
     current_projects = []

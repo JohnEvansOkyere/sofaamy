@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { PageHead, Stat, Badge, Progress } from '../components/ui.jsx'
 import { listProductionJobs } from '../lib/api.js'
+import { useLiveRefresh } from '../lib/live.js'
 import { dateShort, GHS0 } from '../lib/whatsapp.js'
 import { IconFactory, IconLayers, IconCheck, IconTruck } from '../components/icons.jsx'
 import '../styles/production.css'
@@ -28,6 +29,7 @@ export default function Production() {
 
   const refresh = () => listProductionJobs().then(js => { setJobs(js); setLive(true) }).catch(() => {})
   useEffect(() => { refresh() }, [])
+  useLiveRefresh(refresh)
 
   const factoryJobs = jobs
   const active = factoryJobs.filter(j => j.stage !== 'done')

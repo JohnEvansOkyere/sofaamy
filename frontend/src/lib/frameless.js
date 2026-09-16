@@ -162,10 +162,12 @@ export function calcFramelessQuote(d) {
   const glassCost = area * bd.glass.price
   const hardwareCost = bd.hardware.reduce((s, h) => s + h.qty * h.price, 0)
   const processing = bd.panels.length * 55        // holes/cutouts/polish per panel — PLACEHOLDER rate
-  const labourCost = area * RATES.labourPerM2
   const installCost = area * RATES.installPerM2
 
-  const subtotal = glassCost + hardwareCost + processing + labourCost + installCost
+  // Labour is not priced per item — it's billed once for the whole
+  // project (mirrors backend calc_frameless_quote), so it stays out of
+  // this item's own subtotal/margin/cost floor.
+  const subtotal = glassCost + hardwareCost + processing + installCost
   const margin = subtotal * (RATES.marginPercent / 100)
   const total = subtotal + margin
 
@@ -177,7 +179,6 @@ export function calcFramelessQuote(d) {
       { key:`Glass — ${bd.glass.label}`, detail:`${area.toFixed(2)} m² · ${bd.panels.length} panel(s) · ${bd.totalKg} kg`, amount:glassCost },
       { key:'Hardware & fittings', detail:bd.hardware.map(h => `${h.qty}× ${h.code}`).join(' · ') || '—', amount:hardwareCost },
       { key:'Processing — holes, cutouts, polish', detail:`${bd.panels.length} panel(s)`, amount:processing },
-      { key:'Fabrication labour', detail:`${area.toFixed(2)} m² × ₵${RATES.labourPerM2}/m²`, amount:labourCost },
       { key:'Installation', detail:`${area.toFixed(2)} m² × ₵${RATES.installPerM2}/m²`, amount:installCost },
     ],
     subtotal:+subtotal.toFixed(2), margin:+margin.toFixed(2),

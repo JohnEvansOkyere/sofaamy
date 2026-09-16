@@ -1,5 +1,5 @@
 """Production & material report PDFs — cutting list, factory work order,
-BOQ. Sofaamy-branded, GHS amounts ("GHS" text — cedi glyph not in the
+BOQ. Fabra-branded, GHS amounts ("GHS" text — cedi glyph not in the
 built-in fonts).
 """
 from datetime import datetime
@@ -10,6 +10,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
+from reportlab.graphics.shapes import Drawing, Line, Polygon, String
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from .pricing import (FRAME_GLASS, GLASS, GLASS_LABELS, HARDWARE, PROFILE_LABELS,
@@ -50,8 +51,8 @@ def _footer(canvas, doc):
     canvas.line(16 * mm, 14 * mm, A4[0] - 16 * mm, 14 * mm)
     canvas.setFillColor(MUTED)
     canvas.setFont("Helvetica", 7.5)
-    canvas.drawString(16 * mm, 10 * mm, "Sofaamy Co. Ltd · Glass & Aluminium Fabrication · Accra, Ghana")
-    canvas.drawRightString(A4[0] - 16 * mm, 10 * mm, f"Powered by Veloxa · page {doc.page}")
+    canvas.drawString(16 * mm, 10 * mm, "Fabra · Fabrication operations for Africa")
+    canvas.drawRightString(A4[0] - 16 * mm, 10 * mm, f"Powered by Fabra · page {doc.page}")
     canvas.restoreState()
 
 
@@ -90,6 +91,114 @@ def _mm_adjustment(value):
 
 def _piece_position(piece):
     return f"{piece['position']} — {piece['note']}" if piece.get("note") else piece["position"]
+
+
+def _member_label(piece):
+    """Real catalogue part name + code when the piece resolved one via
+    FRAME_RECIPES; the working-geometry label otherwise (mapping pending)."""
+    name = piece.get("part_name")
+    code = piece.get("code")
+    if name and code:
+        return f"{name} ({code})"
+    if name:
+        return name
+    return PROFILE_LABELS.get(piece.get("profile"), piece.get("profile", "—"))
+
+
+def _cut_angles(cuts: str) -> tuple[str, str]:
+    parts = str(cuts or "—").replace(" ", "").split("/", 1)
+    return (parts[0], parts[1]) if len(parts) == 2 else (parts[0], parts[0])
+
+
+def _member_diagram(piece: dict) -> Drawing:
+    """Small factory-readable member diagram tied to the schedule values."""
+    width, height = 66 * mm, 18 * mm
+    drawing = Drawing(width, height)
+    left_angle, right_angle = _cut_angles(piece.get("cuts", "—"))
+    x0, x1 = 7 * mm, width - 7 * mm
+    y0, y1 = 6 * mm, 12 * mm
+    bevel = 4 * mm
+    left_bottom = x0 + bevel if left_angle.startswith("45") else x0
+    right_bottom = x1 - bevel if right_angle.startswith("45") else x1
+    drawing.add(Polygon(
+        [x0, y1, x1, y1, right_bottom, y0, left_bottom, y0],
+        fillColor=colors.HexColor("#e7eef5"), strokeColor=NAVY,
+        strokeWidth=0.8))
+    dimension_y = 2.5 * mm
+    drawing.add(Line(x0, dimension_y, x1, dimension_y,
+                     strokeColor=MUTED, strokeWidth=0.5))
+    drawing.add(Line(x0, dimension_y - 1.2 * mm, x0,
+                     dimension_y + 1.2 * mm, strokeColor=MUTED, strokeWidth=0.5))
+    drawing.add(Line(x1, dimension_y - 1.2 * mm, x1,
+                     dimension_y + 1.2 * mm, strokeColor=MUTED, strokeWidth=0.5))
+    drawing.add(String(width / 2, dimension_y + 0.3 * mm,
+                       f"{piece['length_mm']:,} mm", textAnchor="middle",
+                       fontName="Helvetica-Bold", fontSize=6.5, fillColor=NAVY))
+    drawing.add(String(x0, 14.2 * mm, left_angle, textAnchor="middle",
+                       fontName="Helvetica", fontSize=5.8, fillColor=MUTED))
+    drawing.add(String(x1, 14.2 * mm, right_angle, textAnchor="middle",
+                       fontName="Helvetica", fontSize=5.8, fillColor=MUTED))
+    return drawing
+
+
+def _member_diagram_table(profiles: list[dict], qty: int, bundle: str) -> Table:
+    rows = [["Bundle", "Member / position", "Dimensioned member", "Ends", "Qty"]]
+    for piece in profiles:
+        rows.append([
+            _cell(bundle),
+            _cell(f"{_piece_position(piece)}\n{_member_label(piece)}"),
+            _member_diagram(piece),
+            _cell(piece.get("cuts", "—")),
+            _cell(str(piece.get("qty", 1) * qty)),
+        ])
+    table = Table(rows, colWidths=[25 * mm, 48 * mm, 70 * mm, 22 * mm, 13 * mm],
+                  repeatRows=1)
+    table.setStyle(BASE_STYLE)
+    table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 1), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 5),
+    ]))
+    return table
+
+
+def _nesting_plan_flow(plan: dict, heading: str = "Stock-bar nesting plan") -> list:
+    flow = [Paragraph(heading, H2)]
+    for group in plan["groups"]:
+        label = group.get("part_name") or PROFILE_LABELS.get(group["profile"], group["profile"])
+        if group.get("part_name"):
+            label = f"{label} ({group['profile']})"
+        flow.append(Paragraph(
+            f"{label} — stock {group['stock_mm']:,} mm · {len(group['bars'])} bar(s) · "
+            f"utilization {group['utilization']}% · waste {group['waste_mm'] / 1000:.2f} m", H2))
+        if group.get("oversized"):
+            flow.append(Paragraph(
+                f"WARNING: {len(group['oversized'])} cut(s) exceed the available "
+                f"{group['stock_mm']:,} mm stock length including kerf. Resolve the "
+                "profile/stock rule before releasing this list.", NOTE))
+        rows = [["Bar", "Bundle · member · length · ends", "Used", "Offcut"]]
+        for index, bar in enumerate(group["bars"], 1):
+            sequence = "<br/>".join(
+                escape(" · ".join(filter(None, [
+                    cut.get("bundle", ""),
+                    cut.get("position", cut.get("member", "cut")),
+                    f"{cut['length_mm']:,} mm",
+                    cut.get("cuts", "—"),
+                ])))
+                for cut in bar["cuts"])
+            rows.append([
+                _cell(index), Paragraph(sequence or "—", CELL),
+                _cell(f"{bar['used_mm']:,} mm"),
+                _cell(f"{bar['waste_mm']:,} mm"),
+            ])
+        table = Table(rows, colWidths=[13 * mm, 117 * mm, 24 * mm, 24 * mm])
+        table.setStyle(BASE_STYLE)
+        flow.append(table)
+    flow.append(Paragraph(
+        f"Totals: {plan['total_bars']} stock bar(s) · overall utilization "
+        f"{plan['overall_utilization']}% · kerf {plan['kerf_mm']} mm per cut. "
+        "Every cut remains labelled to its project bundle even when items share a stock bar.", NOTE))
+    return flow
 
 
 def _trialco_formula_table(result):
@@ -286,8 +395,16 @@ def project_material_boq_pdf(project: dict) -> bytes:
             t = Table(rows, colWidths=[43 * mm, 29 * mm, 18 * mm, 22 * mm, 29 * mm, 31 * mm], repeatRows=1)
             t.setStyle(BASE_STYLE)
             flow.append(t)
+            approved_revision = result.get("approved_extraction_revision")
             flow.append(Paragraph(
-                "Coded material recipe available for this item. Quantities are the item/project totals produced by its system engine.", NOTE))
+                (
+                    f"Source of truth: approved extraction E{approved_revision} for "
+                    "this item. Quantities are kept separate here and combined by "
+                    "matching material code and unit in the purchase list."
+                    if approved_revision is not None else
+                    "Coded material recipe available for this item. Quantities are "
+                    "the item/project totals produced by its system engine."
+                ), NOTE))
             exact_material_total += item_material_total
         else:
             source_profiles = result.get("profile_catalog") or []
@@ -354,13 +471,31 @@ def cutting_list_pdf(design: dict, result: dict, demand: list[dict], plan: dict)
     bd = any_breakdown(design)
     qty = result["qty"]
     flow = []
+    bundle = design.get("item_label") or design.get("ref") or design.get("name") or "Project item"
+
+    flow.append(Table([
+        [_cell("FACTORY BUNDLE", H2), _cell(bundle, H2)],
+        [_cell("Opening / product"), _cell(design.get("name") or "—")],
+        [_cell("Overall size"), _cell(f"{design.get('width', 0):,} × {design.get('height', 0):,} mm · Qty {qty}")],
+    ], colWidths=[44 * mm, 134 * mm], style=TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#fff3cf")),
+        ("GRID", (0, 0), (-1, -1), 0.6, LINE),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ])))
+
+    if bd.get("profiles"):
+        flow.append(Paragraph("Dimensioned member diagrams — cut and bundle by this item", H2))
+        flow.append(_member_diagram_table(bd["profiles"], qty, bundle))
 
     formula_table = _trialco_formula_table(result)
     if formula_table:
         flow.append(Paragraph("Trialco bay formula summary — PER BAY", H2))
         flow.append(formula_table)
         flow.append(Paragraph(
-            "This is the working Trialco recipe used below. Quantities and final profile cut rules must be checked against Sofaamy's approved calculation before factory release.", NOTE))
+            "This is the working Trialco recipe used below. Quantities and final profile cut rules must be checked against your approved calculation before factory release.", NOTE))
         material_table = _trialco_material_table(result)
         if material_table:
             flow.append(Paragraph("Trialco internal material cost list — PROJECT TOTALS", H2))
@@ -371,7 +506,7 @@ def cutting_list_pdf(design: dict, result: dict, demand: list[dict], plan: dict)
     flow.append(Paragraph("Profile breakdown — every piece, with deductions and cut angles (all units)", H2))
     rows = [["Position", "Profile", "Input (mm)", "Adj. (mm)", "Cut (mm)", "Cuts", "Qty"]] + [
         [_cell(_piece_position(p)),
-         _cell(PROFILE_LABELS.get(p["profile"], p["profile"])),
+         _cell(_member_label(p)),
          _cell(f"{p.get('source_mm', p['length_mm']):,}"),
          _cell(_mm_adjustment(p.get('adjustment_mm', 0))),
          _cell(f"{p['length_mm']:,}"), _cell(p["cuts"]), _cell(str(p["qty"] * qty))]
@@ -401,33 +536,65 @@ def cutting_list_pdf(design: dict, result: dict, demand: list[dict], plan: dict)
     flow.append(Paragraph(
         "This schedule expands the design into individual fabrication pieces. Each profile row shows "
         "input size + adjustment = cut length; double openings are expanded into separate leaf rows. "
-        "The current deductions are working rules and the exact Sofaamy source-profile role mapping "
+        "The current deductions are working rules and the exact source-profile role mapping "
         "still requires supervisor confirmation before factory release.", NOTE))
 
     flow.append(PageBreak())
-    flow.append(Paragraph("Stock-bar nesting plan", H2))
-    for g in plan["groups"]:
-        label = PROFILE_LABELS.get(g["profile"], g["profile"])
-        flow.append(Paragraph(
-            f"{label} — stock {g['stock_mm']:,} mm · {len(g['bars'])} bar(s) · "
-            f"utilization {g['utilization']}% · waste {g['waste_mm'] / 1000:.2f} m", H2))
-        if g.get("oversized"):
-            flow.append(Paragraph(
-                f"WARNING: {len(g['oversized'])} cut(s) exceed the available {g['stock_mm']:,} mm stock length "
-                "including kerf. Resolve the profile/stock rule before releasing this list.", NOTE))
-        rows = [["Bar", "Cut sequence (mm)", "Used (mm)", "Waste (mm)"]]
-        for i, b in enumerate(g["bars"], 1):
-            seq = "  +  ".join(f"{c.get('position', c.get('member', 'cut'))}: {c['length_mm']:,}" for c in b["cuts"])
-            rows.append([_cell(str(i)), _cell(seq), _cell(f"{b['used_mm']:,}"), _cell(f"{b['waste_mm']:,}")])
-        t = Table(rows, colWidths=[12 * mm, 106 * mm, 30 * mm, 30 * mm])
-        t.setStyle(BASE_STYLE)
-        flow.append(t)
-
-    flow.append(Paragraph(
-        f"Totals: {plan['total_bars']} stock bar(s) · overall utilization "
-        f"{plan['overall_utilization']}% · kerf {plan['kerf_mm']} mm per cut "
-        f"(kerf and stock lengths to be confirmed with Sofaamy).", NOTE))
+    flow.extend(_nesting_plan_flow(plan))
     return _build("CUTTING LIST", _meta_line(design, result), flow)
+
+
+def project_cutting_list_pdf(project: dict, item_packs: list[dict], plan: dict) -> bytes:
+    """One bundle-safe cutting pack for all fabricable items in a project."""
+    flow = [Paragraph(
+        "Factory issue: cut pieces may share optimized stock bars, but every line "
+        "must remain marked with its Window/Door bundle until assembly.", NOTE)]
+
+    for index, pack in enumerate(item_packs):
+        if index:
+            flow.append(PageBreak())
+        design = pack["design"]
+        result = pack["result"]
+        breakdown = any_breakdown(design)
+        label = pack["label"]
+        revision = result.get("approved_extraction_revision")
+        flow.append(Paragraph(f"{label} — {design.get('name') or 'Project item'}", H1))
+        flow.append(Paragraph(
+            f"Bundle ref: <b>{design.get('ref') or '—'}</b> · "
+            f"{design.get('width', 0):,} × {design.get('height', 0):,} mm · "
+            f"Qty {result.get('qty', 1)} · "
+            f"Extraction {'E' + str(revision) if revision else 'working design quantities'}",
+            SUB))
+        if breakdown.get("profiles"):
+            flow.append(_member_diagram_table(
+                breakdown["profiles"], result.get("qty", 1), label))
+        else:
+            flow.append(Paragraph(
+                "No aluminium profile cuts are generated for this item category; use its "
+                "glass/hardware factory documents.", NOTE))
+        if breakdown.get("glass"):
+            rows = [["Bundle / section", "Glass", "Cut W × H", "Qty"]]
+            rows.extend([
+                [_cell(f"{label} · {glass['section']}"),
+                 _cell(GLASS_LABELS.get(glass.get("glass"), glass.get("glass", "—"))),
+                 _cell(f"{glass['w_mm']:,} × {glass['h_mm']:,} mm"),
+                 _cell(str(glass.get("qty", 1) * result.get("qty", 1)))]
+                for glass in breakdown["glass"]
+            ])
+            table = Table(rows, colWidths=[58 * mm, 44 * mm, 48 * mm, 28 * mm],
+                          repeatRows=1)
+            table.setStyle(BASE_STYLE)
+            flow.append(Paragraph("Bundle glass sizes", H2))
+            flow.append(table)
+
+    flow.append(PageBreak())
+    flow.extend(_nesting_plan_flow(plan, "Combined project stock-bar nesting"))
+    return _build(
+        "PROJECT CUTTING & BUNDLE PACK",
+        f"{project.get('project_number') or 'Project'} · {project.get('name') or '—'} · "
+        f"{len(item_packs)} fabricable item bundle(s) · {datetime.now():%d %b %Y}",
+        flow,
+    )
 
 
 # ── 2. FACTORY WORK ORDER ────────────────────────────────────
@@ -468,7 +635,7 @@ def work_order_pdf(design: dict, result: dict, pieces_per_unit: list[dict]) -> b
     flow.append(Paragraph("Cut pieces — PER UNIT (with deductions and cut angles)", H2))
     rows = [["Position", "Profile", "Input (mm)", "Adj. (mm)", "Cut (mm)", "Cuts", "Qty"]] + [
         [_cell(_piece_position(p)),
-         _cell(PROFILE_LABELS.get(p["profile"], p["profile"])),
+         _cell(_member_label(p)),
          _cell(f"{p.get('source_mm', p['length_mm']):,}"),
          _cell(_mm_adjustment(p.get('adjustment_mm', 0))),
          _cell(f"{p['length_mm']:,}"), _cell(p["cuts"]), _cell(str(p["qty"]))]
@@ -601,6 +768,20 @@ def boq_pdf(design: dict, result: dict, demand: list[dict], plan: dict) -> bytes
         flow.append(_cost_floor_table(result))
         return _build("INTERNAL TRIALCO MATERIAL COST SHEET", _meta_line(design, result), flow)
 
+    # Every other recipe-mapped system (KS-50, Italian, FDT windows/doors)
+    # now takes off real catalogue codes and bar/accessory/glass prices via
+    # FRAME_RECIPES (pricing.py). Render that take-off instead of the
+    # placeholder "working cut groups" estimate below, which only remains
+    # for systems with no recipe at all.
+    if result.get("material_rows"):
+        flow.append(Paragraph("Material take-off — PROJECT TOTALS (catalogue codes & bar prices)", H2))
+        flow.append(_approved_extraction_table(result["material_rows"]))
+        flow.append(Paragraph(
+            "Quantities and codes come from the system's working recipe (FRAME_RECIPES); provisional "
+            "rows are flagged until your technical team confirms them. Prices use live Inventory where set, "
+            "otherwise the supplied workbook rate.", NOTE))
+        return _build("INTERNAL BILL OF QUANTITIES", _meta_line(design, result), flow)
+
     source_profiles = result.get("profile_catalog") or []
     if source_profiles:
         flow.append(Paragraph("Selected Frame system — source profile catalogue", H2))
@@ -611,7 +792,7 @@ def boq_pdf(design: dict, result: dict, demand: list[dict], plan: dict) -> bytes
         t.setStyle(BASE_STYLE)
         flow.append(t)
         flow.append(Paragraph(
-            "These are the exact catalogue references from Sofaamy's selected system. "
+            "These are the exact catalogue references from the selected system. "
             "The working geometry cut groups below are not yet mapped to these profiles and require supervisor confirmation.", NOTE))
 
     # profiles: metres from demand, bars from the cut plan
@@ -1003,8 +1184,8 @@ def hardware_list_pdf(design: dict, result: dict) -> bytes:
     flow.append(t)
 
     flow.append(Paragraph(
-        "Part numbers and unit prices from Sofaamy's hardware list (SmartGlazier job SGP/4462-26A). "
-        "Items marked PLACEHOLDER pending Sofaamy's full hardware catalog.", NOTE))
+        "Part numbers and unit prices from the working hardware list (SmartGlazier job SGP/4462-26A). "
+        "Items marked PLACEHOLDER pending a complete hardware catalog.", NOTE))
     return _build("HARDWARE LIST", _meta_line(design, result), flow)
 
 
@@ -1365,7 +1546,7 @@ def delivery_note_pdf(job: dict, design: dict | None, site: str) -> bytes:
         "agreed deposit and balance terms.", NOTE))
 
     flow.append(Spacer(0, 14 * mm))
-    rows = [["Delivered by (Sofaamy)", "Received by (Client)"],
+    rows = [["Delivered by (Fabra)", "Received by (Client)"],
             ["\n\nName: ____________________\n\nSignature: _______________\n\nDate: ____________",
              "\n\nName: ____________________\n\nSignature: _______________\n\nDate: ____________"]]
     t = Table(rows, colWidths=[83 * mm, 83 * mm])

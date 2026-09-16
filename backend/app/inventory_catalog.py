@@ -90,10 +90,12 @@ def _system_materials() -> list[tuple[str, str, str, str, float, float, float]]:
         )
 
     # Every profile and accessory exposed by the frame system catalogue.
+    # Unit is plain "bar" — matching both pricing engines' take-off rows —
+    # so procurement's unit check matches instead of flagging every
+    # generated extraction row as a false unit_mismatch.
     for profiles in FRAME_SOURCE_PROFILES.values():
         for name, code, stock_mm, listed_price in profiles:
-            add(code, name.title(), "Profile", f"{stock_mm / 1000:g}m bar",
-                listed_price)
+            add(code, name.title(), "Profile", "bar", listed_price)
     for accessories in FRAME_SOURCE_ACCESSORIES.values():
         for item in accessories:
             add(item["code"], item["name"].title(), "Accessory", "pcs",

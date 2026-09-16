@@ -85,6 +85,10 @@ class DesignIn(BaseModel):
     qty: int = 1
     location: str = ""
     system: str = "standard"
+    # FRAME_RECIPES variant choices (pricing.py) — which real catalogue part
+    # a system's frame-with/without-cover or fixed-outer choice resolves to.
+    frameCover: str = ""
+    fixedOuter: str = ""
     finishType: str = "powder"
     width: int
     height: int
@@ -126,6 +130,19 @@ class DesignIn(BaseModel):
     discountPercent: float = 0
     getfNhisPercent: float = 5
     vatPercent: float = 15
+    # Ad-hoc commercial cost lines added on the pricing review screen (e.g.
+    # transport, packing) — flat GHS amounts, not derived from geometry.
+    # Each dict: {description, amount}.
+    extraLines: list[dict] = []
+    # "auto" (default): the quote total tracks the system-computed price on
+    # every save. "manual": a team member has set the selling price directly
+    # and it stops being recalculated until switched back to auto.
+    pricingMode: str = "auto"
+    manualSellingPrice: float = 0
+    # Per-material-row price overrides on the Pricing tab's Material List,
+    # keyed by the row's catalogue code. Empty = every row prices from the
+    # catalogue/inventory as usual.
+    materialPriceOverrides: dict[str, float] = {}
     # Client visualiser presentation preferences. These are saved with the
     # design so a shared project opens with the same wall/finish viewpoint.
     wallColor: str = "#ded8cc"
@@ -170,6 +187,8 @@ class DesignIn(BaseModel):
         d["discount_percent"] = d.pop("discountPercent")
         d["getf_nhis_percent"] = d.pop("getfNhisPercent")
         d["vat_percent"] = d.pop("vatPercent")
+        d["extra_lines"] = d.pop("extraLines")
+        d["material_price_overrides"] = d.pop("materialPriceOverrides")
         d["wall_color"] = d.pop("wallColor")
         d["floor_color"] = d.pop("floorColor")
         d["custom_frame_color"] = d.pop("customFrameColor")
@@ -195,6 +214,7 @@ class DesignIn(BaseModel):
 class DesignQuoteIn(BaseModel):
     client_name: str = ""
     project_id: int | None = None
+    design_id: int | None = None
     design: DesignIn
 
 
@@ -206,12 +226,41 @@ class PaymentIn(BaseModel):
     who: str = "Esi Quaye"      # accounts user (until auth lands)
 
 
+class ReleaseToTechnicalIn(BaseModel):
+    released_by: str = "Accounts Team"
+    notes: str = ""
+
+
+class DrawingNotRequiredIn(BaseModel):
+    design_id: int | None = None
+    extraction_id: int | None = None
+    reason: str
+    created_by: str = "Technical Team"
+
+
+class SubmitToQcIn(BaseModel):
+    submitted_by: str = "Technical Team"
+    notes: str = ""
+
+
 class QcIn(BaseModel):
     result: str                 # pass|rework
     score: int = 100
     notes: str = ""
     checklist: list[dict] = []
     inspector: str = "Yaw Darko"
+
+
+class PreProductionQcIn(BaseModel):
+    """Project-wide QA/QC gate before any factory pack can be released."""
+    result: str                 # approved|hold
+    measurements_verified: bool = False
+    materials_verified: bool = False
+    quantities_verified: bool = False
+    drawings_verified: bool = False
+    procurement_verified: bool = False
+    notes: str = ""
+    inspector: str = "QA / QC"
 
 
 class DispatchIn(BaseModel):
@@ -237,6 +286,58 @@ class ClientIn(BaseModel):
     type: str = "company"
 
 
+class LeadIn(BaseModel):
+    name: str
+    contact_name: str = ""
+    phone: str = ""
+    email: str = ""
+    site: str = ""
+    city: str = ""
+    source: str = ""
+    project_type: str = ""
+    product_type: str = ""
+    customer_size: str = ""
+    sales_executive: str = ""
+    estimated_value: float = 0.0
+    stage: str = "enquiry"
+    note: str = ""
+    expected_close: str = ""
+    client_id: int | None = None
+
+
+class LeadUpdate(BaseModel):
+    name: str | None = None
+    contact_name: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    site: str | None = None
+    city: str | None = None
+    source: str | None = None
+    project_type: str | None = None
+    product_type: str | None = None
+    customer_size: str | None = None
+    sales_executive: str | None = None
+    estimated_value: float | None = None
+    stage: str | None = None
+    lost_reason: str | None = None
+    note: str | None = None
+    expected_close: str | None = None
+
+
+class QuoteWorkspaceIn(BaseModel):
+    lead_id: int
+
+
+class QuoteWorkspaceStatusIn(BaseModel):
+    status: str
+    who: str = "Kwame Mensah"
+    lost_reason: str = ""
+
+
+class PublicQuoteAcceptIn(BaseModel):
+    confirmed_by: str = ""
+
+
 class ProjectIn(BaseModel):
     name: str
     client_name: str = ""
@@ -253,6 +354,56 @@ class ProjectWorkflowIn(BaseModel):
     extraction_method: str | None = None
     drawing_method: str | None = None
     drawing_release_percent: float | None = None
+    who: str = "Kwame Mensah"
+
+
+class ProjectManagementIn(BaseModel):
+    owner: str = ""
+    team: str = ""
+    planned_start: str = ""
+    due_date: str = ""
+    priority: str = "normal"
+    who: str = "Kwame Mensah"
+
+
+class BoardPositionIn(BaseModel):
+    stage: str
+    who: str = "Kwame Mensah"
+
+
+class ProjectTaskIn(BaseModel):
+    department: str
+    title: str
+    assignee: str = ""
+    due_date: str = ""
+    status: str = "todo"
+    notes: str = ""
+    who: str = "Kwame Mensah"
+
+
+class ProjectTaskUpdateIn(BaseModel):
+    status: str
+    assignee: str | None = None
+    due_date: str | None = None
+    notes: str | None = None
+    who: str = "Kwame Mensah"
+
+
+class SiteSurveyIn(BaseModel):
+    scheduled_for: str
+    assigned_to: str
+    units: int = 0
+    notes: str = ""
+    who: str = "Kwame Mensah"
+
+
+class SiteSurveyUpdateIn(BaseModel):
+    status: str | None = None
+    scheduled_for: str | None = None
+    assigned_to: str | None = None
+    units: int | None = None
+    notes: str | None = None
+    variance: str | None = None
     who: str = "Kwame Mensah"
 
 
@@ -277,10 +428,6 @@ class ExtractionIn(BaseModel):
     notes: str = ""
     created_by: str = "Technical Team"
     items: list[ExtractionItemIn] = []
-
-
-class ExtractionApprovalIn(BaseModel):
-    approved_by: str = "Technical Supervisor"
 
 
 class GeneratedExtractionIn(BaseModel):
@@ -354,10 +501,6 @@ class DrawingRevisionIn(BaseModel):
     submitted_by: str = "Technical Team"
 
 
-class DrawingApprovalIn(BaseModel):
-    approved_by: str = "Technical Supervisor"
-
-
 class ExistingDesignApprovalIn(BaseModel):
     # Which item this confirms. Omitted only on legacy single-item projects,
     # where it snapshots every saved item as before.
@@ -366,16 +509,30 @@ class ExistingDesignApprovalIn(BaseModel):
     notes: str = "Existing saved configurator design accepted without changes."
 
 
-class ProductionReleaseIn(BaseModel):
-    drawing_revision_id: int
-    released_by: str = "Technical Supervisor"
-    notes: str = ""
-
-
 class ReceiveStockIn(BaseModel):
     qty: float
     note: str = ""
     who: str = "Kojo Antwi"
+
+
+class MaterialUpdateIn(BaseModel):
+    name: str | None = None
+    category: str | None = None
+    unit: str | None = None
+    unit_price: float | None = None
+    reorder_level: float | None = None
+    who: str = "Inventory"
+
+
+class MaterialCreateIn(BaseModel):
+    code: str
+    name: str = ""
+    category: str = "Accessory"
+    unit: str = "pcs"
+    unit_price: float = 0.0
+    stock: float = 0.0
+    reorder_level: float = 0.0
+    who: str = "Inventory"
 
 
 class DemandPiece(BaseModel):

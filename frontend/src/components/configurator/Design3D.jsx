@@ -33,7 +33,7 @@ const CEILING = 2900
 
 const WALL_PRESETS = [
   { label:'Warm plaster', value:'#ded8cc' },
-  { label:'Sofaamy blue', value:'#b9d4e5' },
+  { label:'Fabra blue', value:'#b9d4e5' },
   { label:'Modern grey', value:'#b7bec5' },
   { label:'White render', value:'#f1f0eb' },
   { label:'Terracotta', value:'#c98567' },

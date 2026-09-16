@@ -102,7 +102,7 @@ export function trialcoBreakdown(design) {
       net:{ wMm:rounded(d.netW), hMm:rounded(d.netH), qty:TRIALCO_FORMULAS.netQtyPerBay },
       interlock:{ lengthMm:rounded(d.interlockLength), qty:TRIALCO_FORMULAS.interlockQtyPerBay },
       glass:{ wMm:rounded(d.glassW), hMm:rounded(d.glassH), qty:TRIALCO_FORMULAS.glassQtyPerBay },
-      status:'Working Trialco formulas — confirm quantities and final profile cut rules with Sofaamy',
+      status:'Working Trialco formulas — confirm quantities and final profile cut rules with your technical team',
     },
   }
 }

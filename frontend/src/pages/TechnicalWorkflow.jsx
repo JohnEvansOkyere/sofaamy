@@ -3,13 +3,15 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { PageHead, Card, Badge } from '../components/ui.jsx'
 import {
   listProjects, getProjectWorkflow, updateProjectWorkflow,
-  createExtraction, generateExtractionFromDesign, approveExtraction,
+  createExtraction, generateExtractionFromDesign,
   downloadQuotationPdf, assignExtractionsToItem,
   createDrawingTask, approveExistingConfiguratorDesign,
   createDrawingRevision, uploadDrawingFile,
-  approveDrawingRevision, releaseProjectToFactory, drawingFileUrl,
+  submitProjectToQc,
+  drawingFileUrl,
 } from '../lib/api.js'
-import { timeAgo } from '../lib/whatsapp.js'
+import { GHS0, timeAgo } from '../lib/whatsapp.js'
+import { useLiveRefresh } from '../lib/live.js'
 import { FRAME_SYSTEMS } from '../lib/frameCatalog.js'
 import { IconCheck, IconDownload, IconFile, IconLayers, IconPlus } from '../components/icons.jsx'
 import '../styles/technical-workflow.css'
@@ -34,12 +36,6 @@ const FILE_KINDS = [
   ['material_list', 'Material list'],
   ['other', 'Other technical file'],
 ]
-
-const METHOD_NOTE = {
-  manual: 'Technical team enters the complete material take-off.',
-  generated: 'System creates the first material list; technical approval is still required.',
-  hybrid: 'System suggestions are reviewed and adjusted by technical.',
-}
 
 const PROCUREMENT_STATUS = {
   available: 'Available',
@@ -159,19 +155,17 @@ function ChainIntegrity({ workflow }) {
 }
 
 function ExtractionEditor({ project, designId, isUngrouped, seed, onSeedUsed, onSaved, busy, act }) {
-  const [method, setMethod] = useState(project.extraction_method || 'manual')
-  const [recipeStatus, setRecipeStatus] = useState(method === 'manual' ? 'manual' : 'provisional')
   const [notes, setNotes] = useState('')
+  const [showManualEntry, setShowManualEntry] = useState(false)
   const [items, setItems] = useState([{ ...EMPTY_ITEM }])
 
   useEffect(() => {
-    setMethod(project.extraction_method || 'manual')
-  }, [project.id, project.extraction_method])
+    setShowManualEntry(false)
+  }, [project.id, designId, isUngrouped])
 
   useEffect(() => {
     if (!seed) return
-    setMethod('hybrid')
-    setRecipeStatus('provisional')
+    setShowManualEntry(true)
     setNotes(`Edited from extraction E${seed.revision}.`)
     setItems(seed.items.map(item => ({
       code: item.code || '',
@@ -179,8 +173,8 @@ function ExtractionEditor({ project, designId, isUngrouped, seed, onSeedUsed, on
       category: item.category || 'Material',
       quantity: item.quantity,
       unit: item.unit || 'pcs',
-      unit_price: 0,
-      source: 'hybrid',
+      unit_price: item.unit_price || 0,
+      source: 'manual',
       notes: item.notes || '',
     })))
   }, [seed])
@@ -192,19 +186,20 @@ function ExtractionEditor({ project, designId, isUngrouped, seed, onSeedUsed, on
     const clean = items.filter(item => item.material.trim())
     const data = await createExtraction(project.id, {
       design_id: designId,
-      method,
-      recipe_status: method === 'manual' ? 'manual' : recipeStatus,
+      method: 'manual',
+      recipe_status: 'manual',
       notes,
       created_by: 'Technical Team',
       items: clean.map(item => ({
         ...item,
         quantity: Number(item.quantity),
-        unit_price: 0,
-        source: method,
+        unit_price: Number(item.unit_price) || 0,
+        source: 'manual',
       })),
     })
     setItems([{ ...EMPTY_ITEM }])
     setNotes('')
+    setShowManualEntry(false)
     onSeedUsed?.()
     onSaved(data)
   }, 'Extraction revision created')
@@ -212,31 +207,33 @@ function ExtractionEditor({ project, designId, isUngrouped, seed, onSeedUsed, on
   return (
     <div className="tw-editor">
       {seed && <div className="tw-edit-banner">
-        <div><b>Editing from E{seed.revision}</b><span>The original revision remains unchanged. Saving creates the next hybrid revision.</span></div>
+        <div><b>Editing from E{seed.revision}</b><span>The original revision remains unchanged. Saving creates the next revision, marked Manual.</span></div>
         <button onClick={() => {
           setItems([{ ...EMPTY_ITEM }]); setNotes('')
+          setShowManualEntry(false)
           onSeedUsed?.()
         }}>Cancel</button>
       </div>}
-      <div className="tw-form-grid">
-        <Field label="Extraction method">
-          <select value={method} onChange={e => {
-            setMethod(e.target.value)
-            setRecipeStatus(e.target.value === 'manual' ? 'manual' : 'provisional')
-          }}>
-            <option value="manual">Manual</option>
-            <option value="generated">System-generated</option>
-            <option value="hybrid">Hybrid</option>
-          </select>
-        </Field>
-        {method !== 'manual' && <Field label="Recipe confidence">
-          <select value={recipeStatus} onChange={e => setRecipeStatus(e.target.value)}>
-            <option value="provisional">Working / provisional</option>
-            <option value="approved">Approved recipe</option>
-          </select>
-        </Field>}
-      </div>
-      <p className="tw-help">{METHOD_NOTE[method]}</p>
+      {!isUngrouped && !seed && <div className="tw-generated-first">
+        <div>
+          <b>System-generated extraction</b>
+          <span>The saved design creates the material rows automatically and they're ready to use right away — QC verifies materials before factory release.</span>
+        </div>
+        <button className="btn btn-primary" disabled={busy} onClick={() => act(async () => {
+          const data = await generateExtractionFromDesign(project.id, {
+            design_id: designId, created_by: 'Technical Team',
+          })
+          onSaved(data)
+        }, 'Extraction generated from the configurator item')}>
+          Generate material list
+        </button>
+        <button className="tw-exception-toggle" onClick={() => setShowManualEntry(value => !value)}>
+          {showManualEntry ? 'Close manual entry' : 'Enter materials manually…'}
+        </button>
+      </div>}
+
+      {(isUngrouped || seed || showManualEntry) && <>
+      <p className="tw-help">Rows saved here are marked Manual, so anyone looking at this job can see it was set by a team member, not generated.</p>
       <div className="tw-extraction-rows">
         {items.map((item, index) => (
           <div className="tw-extraction-row" key={index}>
@@ -244,6 +241,7 @@ function ExtractionEditor({ project, designId, isUngrouped, seed, onSeedUsed, on
             <input className="tw-material" placeholder="Material / accessory" value={item.material} onChange={e => change(index, 'material', e.target.value)} />
             <input type="number" min="0.001" step="any" placeholder="Qty" value={item.quantity} onChange={e => change(index, 'quantity', e.target.value)} />
             <input placeholder="Unit" value={item.unit} onChange={e => change(index, 'unit', e.target.value)} />
+            <input type="number" min="0" step="any" placeholder="Unit price" value={item.unit_price} onChange={e => change(index, 'unit_price', e.target.value)} />
             <button className="tw-remove" title="Remove row" onClick={() => setItems(rows => rows.length === 1 ? [{ ...EMPTY_ITEM }] : rows.filter((_, i) => i !== index))}>×</button>
           </div>
         ))}
@@ -256,21 +254,13 @@ function ExtractionEditor({ project, designId, isUngrouped, seed, onSeedUsed, on
         <button className="btn btn-primary" disabled={busy || !items.some(item => item.material.trim())} onClick={save}>
           Save extraction revision
         </button>
-        {project.item_count > 0 && !isUngrouped && <button className="btn btn-ghost" disabled={busy}
-          onClick={() => act(async () => {
-            const data = await generateExtractionFromDesign(project.id, {
-              design_id: designId, created_by: 'Technical Team',
-            })
-            onSaved(data)
-          }, 'Provisional extraction generated from the configurator item')}>
-          Generate from configurator
-        </button>}
       </div>
+      </>}
     </div>
   )
 }
 
-function ExtractionHistory({ extractions, procurement, onEdit, onSaved, busy, act }) {
+function ExtractionHistory({ extractions, procurement, onEdit, busy }) {
   if (!extractions.length) {
     return <div className="tw-empty">No extraction revision yet. Create one manually or generate it from a saved configurator item.</div>
   }
@@ -317,24 +307,25 @@ function ExtractionHistory({ extractions, procurement, onEdit, onSaved, busy, ac
         <div className="tw-revision" key={extraction.id}>
           <div className="tw-revision-head">
             <div>
-              <b>E{extraction.revision} · {extraction.method}</b>
-              <span>{extraction.items.length} material rows</span>
+              <div className="flex gap-sm" style={{ alignItems:'center' }}>
+                <b>E{extraction.revision}</b>
+                <Badge tone={extraction.method === 'generated' ? 'blue' : 'purple'}>
+                  {extraction.method === 'generated' ? 'Auto' : 'Manual'}
+                </Badge>
+              </div>
+              <span>{extraction.items.length} material rows · by {extraction.created_by || 'Technical Team'}, {timeAgo(extraction.created_at)}</span>
             </div>
-            <div className="flex gap-sm">
-              <Badge tone={extraction.recipe_status === 'approved' ? 'green' : extraction.recipe_status === 'provisional' ? 'orange' : 'gray'}>
-                {extraction.recipe_status}
-              </Badge>
-              <Badge tone={extraction.status === 'approved' ? 'green' : extraction.status === 'superseded' ? 'gray' : 'orange'}>{extraction.status}</Badge>
-            </div>
+            <Badge tone={extraction.status === 'approved' ? 'green' : extraction.status === 'superseded' ? 'gray' : 'orange'}>{extraction.status}</Badge>
           </div>
           <div className="tbl-wrap">
             <table className="tbl tw-mini-table">
-              <thead><tr><th>Code</th><th>Material</th><th>Quantity</th></tr></thead>
+              <thead><tr><th>Code</th><th>Material</th><th>Quantity</th><th>Unit price</th></tr></thead>
               <tbody>{extraction.items.map(item => (
                 <tr key={item.id}>
                   <td className="t-mono">{item.code || '—'}</td>
                   <td>{item.material}</td>
                   <td>{item.quantity}{item.unit ? ` ${item.unit}` : ''}</td>
+                  <td className="t-mono">{GHS0(item.unit_price)}</td>
                 </tr>
               ))}</tbody>
             </table>
@@ -344,13 +335,6 @@ function ExtractionHistory({ extractions, procurement, onEdit, onSaved, busy, ac
             <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => onEdit(extraction)}>
               Duplicate & Edit
             </button>
-            {!['approved', 'superseded'].includes(extraction.status) && <button className="btn btn-primary btn-sm" disabled={busy}
-              onClick={() => act(async () => {
-                const data = await approveExtraction(extraction.id)
-                onSaved(data)
-              }, `Extraction E${extraction.revision} approved for quotation`)}>
-              <IconCheck /> Approve extraction
-            </button>}
           </div>
         </div>
       ))}
@@ -396,7 +380,7 @@ function QuotationHandoff({ workflow, busy, act }) {
         <Link className="btn btn-primary" to={`/quotations?project=${workflow.project.id}`}>
           Open quotation workbench →
         </Link>
-      </div> : <div className="tw-empty">Approve an extraction revision before handing it to the quotation team.</div>}
+      </div> : <div className="tw-empty">Generate an extraction revision before handing it to the quotation team.</div>}
 
       {!!workflow.quotations.length && <>
         <div className="divider" />
@@ -429,14 +413,19 @@ function QuotationHandoff({ workflow, busy, act }) {
   )
 }
 
+const AUTO_APPROVE_BRIEF = 'Existing saved configurator design accepted without redraw.'
+const AUTO_APPROVE_NOTES = 'Existing saved configurator design accepted without changes.'
+
 function DrawingArea({ workflow, designId, isUngrouped, extractions, drawingTasks, productionReleases, onSaved, busy, act }) {
   const project = workflow.project
   const [method, setMethod] = useState(project.drawing_method || 'configurator')
   const [assignedTo, setAssignedTo] = useState('Technical Team')
   const [brief, setBrief] = useState('')
   const [revisionNotes, setRevisionNotes] = useState('')
+  const [showNewDrawing, setShowNewDrawing] = useState(false)
   const approvedExtraction = extractions.find(row => row.status === 'approved')
   const latestTask = drawingTasks.find(task => task.basis_status === 'current')
+  const releasedToTechnical = !!workflow.qc_submission.released_to_technical_at
   const releasedRevisionIds = new Set(
     productionReleases
       .filter(release => release.status === 'current')
@@ -456,17 +445,19 @@ function DrawingArea({ workflow, designId, isUngrouped, extractions, drawingTask
     onSaved(data)
   }, `${method === 'autocad' ? 'AutoCAD' : 'Configurator'} drawing task opened`)
 
-  const acceptExistingDesign = () => {
-    if (!window.confirm(
-      'Confirm that the existing saved configurator design is final and no drawing changes are required?')) return
+  const approveAndSubmit = () => {
+    if (!window.confirm('Approve this drawing and submit to QC?')) return
     act(async () => {
-      const data = await approveExistingConfiguratorDesign(project.id, {
+      let data = await approveExistingConfiguratorDesign(project.id, {
         design_id: designId,
         approved_by: 'Technical Supervisor',
-        notes: 'Existing saved configurator design accepted without changes.',
+        notes: AUTO_APPROVE_NOTES,
       })
+      if (data.qc_submission.ready && !data.qc_submission.released_to_qc_at) {
+        data = await submitProjectToQc(project.id, { submitted_by: 'Technical Supervisor' })
+      }
       onSaved(data)
-    }, 'Existing configurator design confirmed — drawing complete')
+    }, 'Drawing approved')
   }
 
   const submitRevision = () => act(async () => {
@@ -479,15 +470,10 @@ function DrawingArea({ workflow, designId, isUngrouped, extractions, drawingTask
 
   return (
     <div>
-      <div className={`tw-gate ${workflow.payment_gate.authorized ? 'open' : ''}`}>
-        <div>
-          <b>{workflow.payment_gate.authorized ? 'Accounts confirmed — drawing authorized' : 'Commercial authorization pending'}</b>
-          <span>{workflow.payment_gate.authorized
-            ? 'The quotation team has confirmed the required client acceptance and payment gate.'
-            : 'The quotation desk must confirm client acceptance and the required payment before drawing starts.'}</span>
-        </div>
-        <Badge tone={workflow.payment_gate.authorized ? 'green' : 'orange'}>
-          {workflow.payment_gate.authorized ? 'Authorized' : 'Locked'}
+      <div className={`tw-gate ${releasedToTechnical ? 'open' : ''}`}>
+        <b>Technical release</b>
+        <Badge tone={releasedToTechnical ? 'green' : 'orange'}>
+          {releasedToTechnical ? 'Released' : 'Locked'}
         </Badge>
       </div>
 
@@ -498,45 +484,41 @@ function DrawingArea({ workflow, designId, isUngrouped, extractions, drawingTask
 
       {!latestTask && !isUngrouped && (
         <div className="tw-editor">
-          <div className="tw-existing-design">
-            <div>
-              <b>No drawing changes are required?</b>
-              <span>Confirm the original saved configurator design as the final drawing. This records an immutable approved snapshot and moves the project to Factory Release.</span>
+          <div className="tw-drawing-actions">
+            <button className="btn btn-gold btn-sm" disabled={busy || !releasedToTechnical
+              || !approvedExtraction || !project.item_count} onClick={approveAndSubmit}>
+              <IconCheck /> Approve & submit
+            </button>
+            <button className="btn btn-ghost btn-sm" disabled={busy || !releasedToTechnical || !approvedExtraction}
+              onClick={() => setShowNewDrawing(v => !v)}>
+              <IconPlus /> New drawing
+            </button>
+          </div>
+
+          {showNewDrawing && (
+            <div className="tw-new-drawing-form">
+              <div className="tw-method-choice">
+                <button className={method === 'configurator' ? 'on' : ''} onClick={() => setMethod('configurator')}>
+                  <IconLayers /> Configurator
+                </button>
+                <button className={method === 'autocad' ? 'on' : ''} onClick={() => setMethod('autocad')}>
+                  <IconFile /> AutoCAD
+                </button>
+              </div>
+              <div className="tw-form-grid">
+                <Field label="Assigned to">
+                  <input placeholder="Name" value={assignedTo} onChange={e => setAssignedTo(e.target.value)} />
+                </Field>
+                <Field label="Extraction">
+                  <input readOnly value={approvedExtraction ? `E${approvedExtraction.revision}` : '—'} />
+                </Field>
+              </div>
+              <textarea className="tw-notes" placeholder="Drawing brief (optional)" value={brief} onChange={e => setBrief(e.target.value)} />
+              <button className="btn btn-primary btn-sm" disabled={busy || !assignedTo.trim()} onClick={makeTask}>
+                <IconPlus /> {method === 'autocad' ? 'Create AutoCAD task' : 'Create drawing task'}
+              </button>
             </div>
-            <button className="btn btn-gold btn-sm" disabled={busy || !workflow.payment_gate.authorized
-              || !approvedExtraction || !project.item_count} onClick={acceptExistingDesign}>
-              <IconCheck /> Confirm existing design is final
-            </button>
-          </div>
-          {!project.item_count && <p className="tw-help">No saved configurator item is linked to this project yet.</p>}
-          <div className="tw-route-divider"><span>or prepare a new drawing</span></div>
-          <div className="tw-method-choice">
-            <button className={method === 'configurator' ? 'on' : ''} onClick={() => setMethod('configurator')}>
-              <IconLayers /><b>Use Configurator</b><span>Create or update the project drawing inside the platform.</span>
-            </button>
-            <button className={method === 'autocad' ? 'on' : ''} onClick={() => setMethod('autocad')}>
-              <IconFile /><b>Use AutoCAD</b><span>Prepare complex drawings externally and return the files here.</span>
-            </button>
-          </div>
-          <div className="tw-route-note">
-            <b>{method === 'autocad' ? 'AutoCAD is an external handoff' : 'Configurator revision path'}</b>
-            <span>{method === 'autocad'
-              ? 'Selecting AutoCAD does not launch the desktop application. Create the task, prepare the DWG/PDF externally, then return here to submit and upload the files.'
-              : 'Create the task, open this project in the Configurator, save the changes, then return here to submit the drawing for review.'}</span>
-          </div>
-          <div className="tw-form-grid">
-            <Field label="Assigned technical person">
-              <input placeholder="Name" value={assignedTo} onChange={e => setAssignedTo(e.target.value)} />
-            </Field>
-            <Field label="Approved extraction">
-              <input readOnly value={approvedExtraction ? `E${approvedExtraction.revision}` : 'No approved extraction'} />
-            </Field>
-          </div>
-          <textarea className="tw-notes" placeholder="Drawing brief: opening references, required outputs, site conditions and special details" value={brief} onChange={e => setBrief(e.target.value)} />
-          <button className="btn btn-primary" disabled={busy || !workflow.payment_gate.authorized || !approvedExtraction || !assignedTo.trim()} onClick={makeTask}>
-            {method === 'autocad' ? 'Create AutoCAD handoff' : 'Create Configurator revision task'}
-          </button>
-          {!approvedExtraction && <p className="tw-help">Approve an extraction revision before handing over the drawing.</p>}
+          )}
         </div>
       )}
 
@@ -544,60 +526,43 @@ function DrawingArea({ workflow, designId, isUngrouped, extractions, drawingTask
         <div className="tw-drawing-task" key={task.id}>
           <div className="tw-revision-head">
             <div>
-              <b>{task.method === 'autocad' ? 'AutoCAD drawing work' : 'Configurator drawing work'}</b>
-              <span>{task.assigned_to || 'Technical Team'} · {task.status === 'assigned' ? 'in progress' : task.status.replaceAll('_', ' ')}</span>
+              <b>{task.method === 'not_required' ? 'Drawing not required'
+                : task.method === 'autocad' ? 'AutoCAD drawing work' : 'Configurator drawing work'}</b>
+              <span>{task.assigned_to || task.created_by || 'Technical Team'} · {task.status === 'assigned' ? 'in progress' : task.status.replaceAll('_', ' ')}</span>
             </div>
             <div className="flex gap-sm wrap">
-              <Badge tone={task.status === 'approved' ? 'green' : task.basis_status === 'stale' ? 'red' : 'blue'}>
+              <Badge tone={task.status === 'approved' || task.status === 'not_required' ? 'green' : task.basis_status === 'stale' ? 'red' : 'blue'}>
                 {task.status === 'assigned' ? 'In progress' : task.status.replaceAll('_', ' ')}
               </Badge>
               {task.basis_status === 'stale' && <Badge tone="red">Stale E/Q basis</Badge>}
             </div>
           </div>
-          <p className="tw-chain-ref">
-            Extraction {task.extraction_id
-              ? `E${extractions.find(row => row.id === task.extraction_id)?.revision || '?'}`
-              : 'unlinked'} · Quotation {task.quote_number || 'unlinked'}
-          </p>
-          {task.brief && <p className="tw-revision-note">{task.brief}</p>}
-          {task.id === latestTask?.id && task.status !== 'approved' && <div className="tw-new-revision">
+          {task.brief && task.brief !== AUTO_APPROVE_BRIEF && <p className="tw-revision-note">{task.brief}</p>}
+          {task.id === latestTask?.id && task.status !== 'approved' && task.status !== 'not_required' && <div className="tw-new-revision">
             <div className="tw-drawing-next">
-              <div>
-                <b>{task.method === 'configurator'
-                  ? 'Next: prepare the project drawing'
-                  : 'Next: prepare the drawing in AutoCAD'}</b>
-                <span>{task.method === 'configurator'
-                  ? 'Open this project in the Configurator, update and save its design items, then return here to submit the drawing for review.'
-                  : 'Complete the DWG and PDF outputs, then return here to submit the drawing for review.'}</span>
-              </div>
               {task.method === 'configurator' && <Link className="btn btn-primary btn-sm"
                 to={`/configurator?project=${project.id}`}>
-                <IconLayers /> Open project in Configurator
+                <IconLayers /> Open in Configurator
               </Link>}
               {task.method === 'configurator' && !task.revisions.length && <button
-                className="btn btn-gold btn-sm" disabled={busy} onClick={acceptExistingDesign}>
-                <IconCheck /> No changes needed — approve existing design
+                className="btn btn-gold btn-sm" disabled={busy} onClick={approveAndSubmit}>
+                <IconCheck /> Approve & submit
               </button>}
             </div>
-            <label className="tw-revision-submit">
-              <span>When the drawing is ready</span>
-              <textarea className="tw-notes" placeholder="Describe the drawing completed and any changes made" value={revisionNotes} onChange={e => setRevisionNotes(e.target.value)} />
-            </label>
+            <textarea className="tw-notes" placeholder="Describe the drawing completed" value={revisionNotes} onChange={e => setRevisionNotes(e.target.value)} />
             <button className="btn btn-ghost btn-sm" disabled={busy || !revisionNotes.trim()} onClick={submitRevision}>
-              <IconPlus /> Submit drawing for review
+              <IconPlus /> Submit for review
             </button>
           </div>}
           {task.status === 'approved' && <div className="tw-drawing-complete">
-            <IconCheck />
-            <div>
-              <b>Drawing complete</b>
-              <span>The approved drawing is recorded. No further drawing work is required unless the project changes.</span>
-            </div>
+            <IconCheck /><b>Drawing complete</b>
+          </div>}
+          {task.status === 'not_required' && <div className="tw-drawing-complete">
+            <IconCheck /><b>No drawing required</b>
           </div>}
           {task.revisions.slice().reverse().map(revision => (
             <DrawingRevision key={revision.id} revision={revision} projectId={project.id}
               released={releasedRevisionIds.has(revision.id)}
-              basisCurrent={task.basis_status === 'current'}
               onSaved={onSaved} busy={busy} act={act} />
           ))}
         </div>
@@ -623,9 +588,8 @@ function DrawingArea({ workflow, designId, isUngrouped, extractions, drawingTask
   )
 }
 
-function DrawingRevision({ revision, projectId, released, basisCurrent, onSaved, busy, act }) {
+function DrawingRevision({ revision, projectId, released, onSaved, busy, act }) {
   const kinds = new Set(revision.files.map(file => file.kind))
-  const readyForApproval = kinds.has('client_overview') && kinds.has('factory_breakdown')
 
   const upload = (kind, file) => act(async () => {
     await uploadDrawingFile(revision.id, kind, file)
@@ -638,7 +602,7 @@ function DrawingRevision({ revision, projectId, released, basisCurrent, onSaved,
         <div><b>Drawing R{revision.revision}</b><span>{revision.submitted_by || 'Technical Team'} · {timeAgo(revision.created_at)}</span></div>
         <Badge tone={revision.status === 'approved' ? 'green' : revision.status === 'superseded' ? 'gray' : 'orange'}>{revision.status.replaceAll('_', ' ')}</Badge>
       </div>
-      {revision.notes && <p className="tw-revision-note">{revision.notes}</p>}
+      {revision.notes && revision.notes !== AUTO_APPROVE_NOTES && <p className="tw-revision-note">{revision.notes}</p>}
       <div className="tw-files">
         {revision.files.map(file => (
           <a key={file.id} href={drawingFileUrl(file.download_url)} className="tw-file">
@@ -656,24 +620,43 @@ function DrawingRevision({ revision, projectId, released, basisCurrent, onSaved,
             </label>
           ))}
         </div>
-        <button className="btn btn-primary btn-sm" disabled={busy || !readyForApproval}
-          onClick={() => act(async () => {
-            const data = await approveDrawingRevision(revision.id)
-            onSaved(data)
-          }, `Drawing R${revision.revision} approved`)}>
-          <IconCheck /> Approve technical revision
-        </button>
-        {!readyForApproval && <p className="tw-help">Client overview and factory breakdown files are required for approval.</p>}
       </>}
-      {revision.status === 'approved' && !released && basisCurrent && <button className="btn btn-gold btn-sm" disabled={busy}
-        onClick={() => act(async () => {
-          const data = await releaseProjectToFactory(projectId, revision.id)
-          onSaved(data)
-        }, `Drawing R${revision.revision} released to factory`)}>
-        Release approved pack to factory
-      </button>}
       {released && <Badge tone="green">Released to factory</Badge>}
     </div>
+  )
+}
+
+function QcSubmissionPanel({ workflow, onSaved, busy, act }) {
+  const qc = workflow.qc_submission
+
+  const submit = () => act(async () => {
+    const data = await submitProjectToQc(workflow.project.id, { submitted_by: 'Technical Supervisor' })
+    onSaved(data)
+  }, 'Project submitted to QC')
+
+  if (qc.released_to_qc_at) {
+    return (
+      <Card title="Submitted to QC">
+        <div className="tw-drawing-complete">
+          <IconCheck />
+          <div>
+            <b>Submitted by {qc.released_to_qc_by || 'Technical Team'}</b>
+            <span>QC now reviews this project for factory release.</span>
+          </div>
+        </div>
+      </Card>
+    )
+  }
+
+  return (
+    <Card title="Submit to QC">
+      {!qc.ready && !!qc.not_ready_items.length && (
+        <p className="tw-help">Still pending: {qc.not_ready_items.join(', ')}</p>
+      )}
+      <button className="btn btn-primary" disabled={busy || !qc.ready} onClick={submit}>
+        <IconCheck /> Submit project to QC
+      </button>
+    </Card>
   )
 }
 
@@ -765,13 +748,17 @@ export default function TechnicalWorkflow() {
     setSelectedId(current => current || rows[0]?.id || null)
   })
   useEffect(() => { refreshProjects().catch(error => setError(messageFrom(error))) }, [])
+  useLiveRefresh(async () => {
+    await refreshProjects()
+    if (selectedId) setWorkflow(await getProjectWorkflow(selectedId))
+  })
   useEffect(() => {
     if (!selectedId) return
     setWorkflow(null)
     setExtractionSeed(null)
     getProjectWorkflow(selectedId).then(data => {
       setWorkflow(data)
-      setActivePage(pageForStatus(data.project.workflow_status))
+      setActivePage(searchParams.get('page') || pageForStatus(data.project.workflow_status))
       setSettings({
         product_family: data.project.product_family,
         product_system: data.project.product_system,
@@ -902,18 +889,21 @@ export default function TechnicalWorkflow() {
                 onEdit={extraction => {
                   setExtractionSeed(extraction)
                   window.scrollTo({ top: 0, behavior: 'smooth' })
-                }} onSaved={setWorkflow} busy={busy} act={act} />
+                }} busy={busy} />
             </Card>}
 
             {activePage === 'commercial' && <Card title="Commercial gate" sub="Track the handoff only. Pricing, quote approval and payment work stay on the Quotations page.">
               <QuotationHandoff workflow={workflow} busy={busy} act={act} />
             </Card>}
 
-            {activePage === 'drawings' && <Card title="Drawing handoff and revisions" sub="Use the configurator where supported or AutoCAD where complexity requires it. Both return to the same approval path.">
+            {activePage === 'drawings' && <Card title="Drawing handoff and revisions">
               <DrawingArea workflow={workflow} designId={designIdForApi} isUngrouped={isUngrouped}
                 extractions={filteredExtractions} drawingTasks={filteredDrawingTasks}
                 productionReleases={filteredReleases} onSaved={setWorkflow} busy={busy} act={act} />
             </Card>}
+
+            {activePage === 'drawings' &&
+              <QcSubmissionPanel workflow={workflow} onSaved={setWorkflow} busy={busy} act={act} />}
 
             {activePage === 'activity' && <Card title="Project activity" sub="A traceable record of extraction, payment, drawings, approvals and factory release.">
               <div className="tw-events">

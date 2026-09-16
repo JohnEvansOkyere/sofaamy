@@ -1,5 +1,7 @@
 /* Operational UI — job drawer, WhatsApp composer, feeds */
 
+.modal.customer-detail-modal{width:min(640px,92vw)}
+
 /* ── job drawer ── */
 .drawer-back { position: fixed; inset: 0; background: rgba(12,25,40,.45); z-index: 180; animation: fadeIn .15s ease; }
 .drawer {
@@ -231,6 +233,8 @@
 .quote-lines .commercial-line { background:#fffdf7; }
 .quote-line-remove { width:26px; height:26px; border:0; border-radius:7px;
   background:var(--red-soft); color:var(--red); font-size:16px; cursor:pointer; }
+
+.row-clickable{cursor:pointer}
 .quote-commercial { display:grid; grid-template-columns:1fr minmax(300px, 390px);
   gap:20px; align-items:start; margin:16px 0 12px; }
 .quote-terms-grid { display:grid; grid-template-columns:repeat(2, minmax(120px, 1fr)); gap:9px; }
@@ -244,6 +248,15 @@
   border-radius:7px; font-size:10.5px; font-weight:700; text-align:center; }
 .quote-total-card .floor-ok { color:var(--green); background:var(--green-soft); }
 .quote-total-card .floor-bad { color:var(--red); background:var(--red-soft); }
+.pricing-mode-row { margin-bottom:2px; }
+.pricing-mode-toggle { border:0; background:none; color:var(--navy-600); font-size:11px;
+  font-weight:700; text-decoration:underline; cursor:pointer; padding:0; }
+.pricing-manual-price input { width:120px; padding:5px 7px; border:1px solid var(--line);
+  border-radius:6px; text-align:right; font:inherit; color:var(--navy-700); font-weight:700; }
+.material-price-input { width:90px; padding:4px 6px; border:1px solid var(--line);
+  border-radius:6px; text-align:right; font:inherit; font-size:inherit; color:inherit; }
+.material-price-reset { display:block; border:0; background:none; color:var(--navy-600);
+  font-size:10px; font-weight:700; text-decoration:underline; cursor:pointer; padding:2px 0 0; }
 .quote-notes { min-height:70px; resize:vertical; margin-bottom:10px; }
 .quote-gates { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-bottom:14px; }
 .quote-gates > div { display:flex; gap:9px; align-items:center; padding:10px;

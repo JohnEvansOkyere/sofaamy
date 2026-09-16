@@ -32,7 +32,7 @@ export default function Settings() {
           <div className="flex gap-sm wrap">
             {Object.values(GLASS).map(g => <span key={g.label} className="chip">{g.label} · ₵{g.price}</span>)}
           </div>
-          <p className="muted mt" style={{ fontSize:12 }}>Placeholder rates — replaced by Sofaamy's confirmed material list (see docs/CHECKLIST.md).</p>
+          <p className="muted mt" style={{ fontSize:12 }}>Placeholder rates — replace these with your confirmed material list before using them commercially.</p>
         </Card>
       </div>
 

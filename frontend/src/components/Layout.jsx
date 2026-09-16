@@ -6,34 +6,44 @@ import Topbar from './Topbar.jsx'
 const META = {
   '/':            ['Dashboard', 'Business overview'],
   '/configurator':['Design Configurator', 'Build · price · quote in real time'],
-  '/crm':         ['CRM & Leads', 'Opportunities and clients'],
+  '/leads':       ['Leads', 'Enquiries and their conversion'],
+  '/projects':    ['Projects', 'Every client job, its owner and its next step'],
   '/quotations':  ['Quotations', 'Estimates and quote pipeline'],
   '/surveys':     ['Surveys', 'Site measurement & verification'],
   '/technical-workflow':['Technical Workflow', 'Controlled project release chain'],
   '/accounts':    ['Accounts', 'Payments and customer balances'],
-  '/production':  ['Production Pipeline', 'Factory floor tracking'],
-  '/inventory':   ['Inventory & Stock', 'Materials and reorder alerts'],
-  '/dispatch':    ['Dispatch & Install', 'Delivery and installation tracking'],
-  '/quality':     ['Quality Control', 'QA checkpoints'],
+  '/production':  ['Production', 'Factory floor tracking'],
+  '/inventory':   ['Inventory', 'Materials and reorder alerts'],
+  '/dispatch':    ['Dispatch', 'Delivery and installation tracking'],
+  '/quality':     ['Quality', 'Release & final checks'],
   '/reports':     ['Documents & Reports', 'Operational documents and downloads'],
   '/insights':    ['Insights & KPIs', 'Commercial and operational performance'],
   '/settings':    ['Settings', 'Company & system configuration'],
 }
 
+// Focus pages hide the navigation entirely so the work surface owns the screen.
+// A project carries its own header bar (back, name, work areas, running total),
+// so the application chrome steps aside completely while you are inside one.
+const FOCUS = ['/configurator']
+const isProjectWorkspace = pathname => /^\/projects\/[^/]+$/.test(pathname)
+
 export default function Layout() {
   const { pathname } = useLocation()
-  const [title, subtitle] = META[pathname] || ['Sofaamy Cloud', '']
-  // the configurator needs every pixel for the drawing sheet:
-  // sidebar auto-minimizes (toggle re-expands it) and content goes full-width
-  const isCfg = pathname === '/configurator'
-  const [sbMin, setSbMin] = useState(isCfg)
-  useEffect(() => { setSbMin(isCfg) }, [isCfg])
+  const inProject = isProjectWorkspace(pathname)
+  const [title, subtitle] = inProject
+    ? ['Project Workspace', 'Complete project context and next action']
+    : META[pathname] || ['Fabra', '']
+  const isFocus = FOCUS.includes(pathname) || inProject
+  const [navHidden, setNavHidden] = useState(isFocus)
+  useEffect(() => { setNavHidden(isFocus) }, [isFocus])
   return (
     <div className="shell">
-      <Sidebar collapsed={sbMin} onToggle={() => setSbMin(v => !v)} />
+      <Sidebar hidden={navHidden} onToggle={() => setNavHidden(v => !v)} />
       <div className="main-col">
-        <Topbar title={title} subtitle={subtitle} />
-        <main className={`content${isCfg ? ' content-wide' : ''}`}><Outlet /></main>
+        {/* a project renders its own header bar, so the app topbar steps aside */}
+        {!inProject && <Topbar title={title} subtitle={subtitle}
+          navHidden={navHidden} onShowNav={() => setNavHidden(false)} />}
+        <main className={`content${isFocus ? ' content-wide' : ''}`}><Outlet /></main>
       </div>
     </div>
   )

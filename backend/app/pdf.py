@@ -1,4 +1,4 @@
-"""Sofaamy-branded quotation PDF (reportlab).
+"""Fabra-branded quotation PDF (reportlab).
 
 Amounts rendered as "GHS 1,234.56" — the cedi glyph (₵) is not in the
 built-in Helvetica fonts.
@@ -73,10 +73,10 @@ def quote_pdf(quote_number: str, client_name: str, design_name: str,
     c.rect(0, PAGE_H - 34 * mm, PAGE_W, 34 * mm, stroke=0, fill=1)
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 20)
-    c.drawString(M, PAGE_H - 16 * mm, "SOFAAMY CO. LTD")
+    c.drawString(M, PAGE_H - 16 * mm, "FABRA")
     c.setFont("Helvetica", 9)
     c.setFillColor(colors.HexColor("#b9c6d4"))
-    c.drawString(M, PAGE_H - 22 * mm, "Glass & Aluminium Fabrication · Accra, Ghana")
+    c.drawString(M, PAGE_H - 22 * mm, "Fabrication operations for Africa")
     c.setFillColor(GOLD)
     c.setFont("Helvetica-Bold", 13)
     c.drawRightString(PAGE_W - M, PAGE_H - 16 * mm, "QUOTATION")
@@ -184,6 +184,10 @@ def quote_pdf(quote_number: str, client_name: str, design_name: str,
                 c.drawString(M + 80 * mm, y, f"{line.get('quantity', 1):g}")
                 c.drawString(M + 98 * mm, y, str(line.get("unit") or "item")[:12])
                 c.drawRightString(M + 142 * mm, y, ghs(line.get("unit_price", 0)))
+            elif line.get("manual"):
+                c.drawString(M + 80 * mm, y, "1")
+                c.drawRightString(M + 104 * mm, y, "—")
+                c.drawRightString(M + 132 * mm, y, "—")
             else:
                 c.drawString(M + 45 * mm, y, f"{line.get('width_mm', 0)} × {line.get('height_mm', 0)}")
                 c.drawString(M + 80 * mm, y, str(line.get("qty", 1)))
@@ -281,8 +285,8 @@ def quote_pdf(quote_number: str, client_name: str, design_name: str,
     c.setStrokeColor(LINE); c.setLineWidth(0.5)
     c.line(M, 18 * mm, PAGE_W - M, 18 * mm)
     c.setFillColor(MUTED); c.setFont("Helvetica", 8)
-    c.drawString(M, 13 * mm, "Sofaamy Co. Ltd · Accra, Ghana")
-    c.drawRightString(PAGE_W - M, 13 * mm, "Powered by Veloxa")
+    c.drawString(M, 13 * mm, "Fabra · Fabrication operations for Africa")
+    c.drawRightString(PAGE_W - M, 13 * mm, "Powered by Fabra")
 
     c.showPage()
     c.save()
@@ -309,9 +313,9 @@ def project_quote_summary_pdf(project: dict) -> bytes:
         c.setFillColor(NAVY)
         c.rect(0, PAGE_H - 34 * mm, PAGE_W, 34 * mm, stroke=0, fill=1)
         c.setFillColor(colors.white); c.setFont("Helvetica-Bold", 20)
-        c.drawString(margin, PAGE_H - 16 * mm, "SOFAAMY CO. LTD")
+        c.drawString(margin, PAGE_H - 16 * mm, "FABRA")
         c.setFont("Helvetica", 9); c.setFillColor(colors.HexColor("#b9c6d4"))
-        c.drawString(margin, PAGE_H - 22 * mm, "Glass & Aluminium Fabrication · Accra, Ghana")
+        c.drawString(margin, PAGE_H - 22 * mm, "Fabrication operations for Africa")
         c.setFillColor(GOLD); c.setFont("Helvetica-Bold", 13)
         c.drawRightString(PAGE_W - margin, PAGE_H - 16 * mm, "PROJECT QUOTATION")
         c.setFillColor(colors.white); c.setFont("Helvetica", 10)
@@ -323,8 +327,8 @@ def project_quote_summary_pdf(project: dict) -> bytes:
         c.setStrokeColor(LINE); c.setLineWidth(.5)
         c.line(margin, 18 * mm, PAGE_W - margin, 18 * mm)
         c.setFillColor(MUTED); c.setFont("Helvetica", 8)
-        c.drawString(margin, 13 * mm, "Sofaamy Co. Ltd · Accra, Ghana")
-        c.drawRightString(PAGE_W - margin, 13 * mm, "Powered by Veloxa")
+        c.drawString(margin, 13 * mm, "Fabra · Fabrication operations for Africa")
+        c.drawRightString(PAGE_W - margin, 13 * mm, "Powered by Fabra")
 
     header()
     c.setFillColor(MUTED); c.setFont("Helvetica", 8.5)
@@ -369,8 +373,10 @@ def project_quote_summary_pdf(project: dict) -> bytes:
         y -= 4 * mm
 
     y -= 10 * mm
+    labour_with_margin = project.get("project_labour_with_margin", 0)
     totals = [
-        ("Subtotal", project.get("client_subtotal", 0)),
+        ("Items subtotal", project.get("client_subtotal", 0) - labour_with_margin),
+        (f"Labour ({project.get('project_labour_area', 0):g} m² project total)", labour_with_margin),
         (f"Discount ({project.get('effective_discount_percent', 0):g}%)", -project.get("discount_amount", 0)),
         (f"GETF + NHIS ({project.get('effective_getf_nhis_percent', 0):g}%)", project.get("getf_nhis", 0)),
         (f"VAT ({project.get('effective_vat_percent', 0):g}%)", project.get("vat", 0)),

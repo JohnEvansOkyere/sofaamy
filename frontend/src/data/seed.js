@@ -4,10 +4,10 @@
 // ============================================================
 
 export const COMPANY = {
-  name: 'Sofaamy Co. Ltd',
-  tagline: 'Glass & Aluminium Fabrication',
-  location: 'Accra, Ghana',
-  poweredBy: 'Veloxa Technology',
+  name: 'Fabra',
+  tagline: 'Fabrication operations for Africa',
+  location: 'Africa',
+  poweredBy: 'Fabra',
 }
 
 export const CURRENT_USER = { name:'Kwame Mensah', role:'Supervisor', initials:'KM' }

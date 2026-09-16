@@ -1,0 +1,71 @@
+.leads-notice{padding:11px 16px;border-radius:10px;font-weight:650;font-size:13px;margin-bottom:14px}
+.leads-notice.success{background:var(--green-soft);color:var(--green)}
+.leads-notice.error{background:var(--red-soft);color:var(--red)}
+
+.leads-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
+.leads-kpi{background:#fff;border:1px solid var(--line);border-left:3px solid var(--ink-3);
+  border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow-sm)}
+.leads-kpi b{display:block;font-size:26px;line-height:1.1;color:var(--ink);font-weight:800}
+.leads-kpi span{display:block;font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:800;margin:5px 0 3px}
+.leads-kpi small{font-size:13px;font-weight:700;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.leads-kpi.created{border-left-color:var(--navy-500)}
+.leads-kpi.quoted{border-left-color:var(--purple)}
+.leads-kpi.won{border-left-color:var(--green)}
+.leads-kpi.lost{border-left-color:var(--red)}
+
+/* the stage/reason pickers live in the hover-revealed action cell */
+.register-table .leads-stage,.register-table .leads-reason{
+  margin-left:6px;padding:5px 8px;border:1px solid var(--line);border-radius:7px;
+  background:#fff;font:inherit;font-size:12px;font-weight:700;color:var(--navy-600);cursor:pointer}
+
+/* full-page create-lead takeover — covers the whole viewport (sidebar included),
+   laid out as two columns (project | customer) so a short form never leaves a
+   large block of empty page below it */
+.leads-create-page{align-items:stretch;justify-content:stretch;padding:0;background:var(--surface)}
+.modal.leads-create-form{width:100%;max-width:none;height:100%;max-height:100vh;
+  margin:0;border-radius:0;box-shadow:none;background:var(--surface);
+  display:flex;flex-direction:column;padding:0;overflow-y:auto}
+
+.leads-create-head{display:flex;justify-content:space-between;align-items:flex-start;
+  flex-shrink:0;padding:28px 40px;border-bottom:1px solid var(--line);background:#fff}
+.leads-create-head h1{font-size:20px;font-weight:800;color:var(--ink);margin:0}
+.leads-create-head p{font-size:13px;color:var(--ink-3);margin:4px 0 0}
+.leads-create-actions{display:flex;gap:10px}
+
+.leads-create-columns{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:0;
+  max-width:1280px;margin:0 auto;width:100%}
+.leads-create-columns.leads-create-single{grid-template-columns:1fr;max-width:640px}
+.leads-create-col{padding:32px 40px 60px}
+.leads-create-col:first-child{border-right:1px solid var(--line-soft)}
+.leads-create-columns.leads-create-single .leads-create-col:first-child{border-right:0}
+.leads-create-col h2{font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--navy-600);font-weight:800;margin:0 0 20px}
+.leads-create-col fieldset{border:0;padding:0;margin:0 0 28px}
+.leads-create-col legend{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:800;padding:0 0 14px}
+.leads-create-col .modal-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+.leads-create-col label{margin-bottom:16px}
+.leads-create-col label:last-child{margin-bottom:0}
+.leads-create-col textarea{width:100%;font:inherit;padding:9px 11px;border:1px solid var(--line);
+  border-radius:var(--radius-sm);resize:vertical}
+.leads-assign-hint{font-size:12px;color:var(--ink-3);line-height:1.5;margin-top:-6px}
+
+.leads-customer-selected{display:flex;justify-content:space-between;align-items:center;
+  padding:14px 16px;border:1px solid var(--line);border-radius:var(--radius-sm);
+  background:var(--bg);margin-bottom:28px}
+.leads-customer-selected span{display:block;font-size:12.5px;color:var(--ink-3);margin-top:2px}
+.leads-customer-matches{display:flex;flex-direction:column;gap:6px;margin:-6px 0 16px}
+.leads-customer-matches button{display:flex;flex-direction:column;align-items:flex-start;
+  text-align:left;padding:9px 12px;border:1px solid var(--line);border-radius:var(--radius-sm);
+  background:#fff;font:inherit;cursor:pointer}
+.leads-customer-matches button:hover{background:var(--bg);border-color:#cfdbe6}
+.leads-customer-matches button span{font-size:12px;color:var(--ink-3);margin-top:1px}
+.leads-customer-empty{font-size:12.5px;color:var(--ink-3);margin:-6px 0 16px}
+
+@media (max-width:900px){
+  .leads-create-columns{grid-template-columns:1fr}
+  .leads-create-col:first-child{border-right:0;border-bottom:1px solid var(--line-soft)}
+}
+
+@media (max-width:1100px){.leads-kpis{grid-template-columns:repeat(2,1fr)}}

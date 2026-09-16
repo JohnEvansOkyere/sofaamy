@@ -84,13 +84,18 @@ export const FINISH_TYPES = {
   lamination:{ label:'Lamination' },
 }
 
+// Colours Sofaamy actually stocks per system are listed in the source
+// workbooks; `frameColoursForSystem` picks from these by system. The last
+// three are kept for designs saved before the catalogue was connected.
 export const FRAMES = {
-  mill:    { label:'Mill Finish',    color:'#aeb8c2' },
-  white:   { label:'White',          color:'#eef1f4' },
-  bronze:  { label:'Bronze',         color:'#7d5a1e' },
-  black:   { label:'Matte Black',    color:'#2b2f33' },
-  charcoal:{ label:'Charcoal Grey',  color:'#474d52' },
-  wood:    { label:'Wood Grain',     color:'#6b4a2b' },
+  white:     { label:'White',          color:'#eef1f4' },
+  grey:      { label:'Grey',           color:'#8b949c' },
+  black:     { label:'Black',          color:'#2b2f33' },
+  champagne: { label:'Champagne',      color:'#c9b998' },
+  mill:      { label:'Mill Finish',    color:'#aeb8c2', legacy:true },
+  bronze:    { label:'Bronze',         color:'#7d5a1e', legacy:true },
+  charcoal:  { label:'Charcoal Grey',  color:'#474d52', legacy:true },
+  wood:      { label:'Wood Grain',     color:'#6b4a2b', legacy:true },
 }
 
 // ── Aluminium profiles ──

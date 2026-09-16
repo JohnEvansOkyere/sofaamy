@@ -49,7 +49,7 @@ export default function GlassOrder({ design }) {
           </div>
 
           <div>
-            <div className="cfg-label" style={{ marginTop: 0 }}>Hardware — per unit (Sofaamy codes & GHS prices)</div>
+            <div className="cfg-label" style={{ marginTop: 0 }}>Hardware — per unit (catalogue codes & GHS prices)</div>
             <table className="cut-table">
               <thead><tr><th className="r">Qty</th><th>Code</th><th>Description</th><th className="r">Unit</th><th className="r">Amount</th></tr></thead>
               <tbody>
@@ -69,7 +69,7 @@ export default function GlassOrder({ design }) {
               </tbody>
             </table>
             <div className="cut-note">
-              Codes and unit prices lifted from Sofaamy's own SmartGlazier hardware list
+              Codes and unit prices from the current hardware catalogue
               (job SGP/4462-26A) — items marked PLACEHOLDER pending their full catalog.
             </div>
           </div>

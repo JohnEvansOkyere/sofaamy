@@ -18,16 +18,16 @@ export function quoteMessage({ client, product, quoteNumber, total, shareUrl, de
   return [
     `Hello ${firstName(client)}! 👋`,
     ``,
-    `Your quotation from *Sofaamy Co. Ltd* is ready:`,
+    `Your quotation from *Fabra* is ready:`,
     ``,
     `📋 *${product}*`,
     `Ref: ${quoteNumber}`,
     `Total: *${GHS0(total)}* (VAT excl.)`,
-    ...(shareUrl ? [``, `View your design in 2D & 3D here:`, shareUrl] : []),
+    ...(shareUrl ? [``, `Review and approve your quotation here:`, shareUrl] : []),
     ``,
     `Terms: ${depositPercent}% deposit before fabrication, balance before completion.`,
     ``,
-    `Thank you for choosing Sofaamy! 🙏`,
+    `Thank you for choosing Fabra! 🙏`,
   ].join('\n')
 }
 
@@ -39,7 +39,7 @@ export function stageMessage({ client, jobNumber, product, stageLabel, progress 
     `has moved to *${stageLabel}* — ${progress}% complete.`,
     ``,
     `We'll keep you posted at every stage.`,
-    `— Sofaamy Co. Ltd`,
+    `— Fabra`,
   ].join('\n')
 }
 
@@ -51,7 +51,7 @@ export function deliveryMessage({ client, jobNumber, product, dnNumber, driver, 
     `Delivery note: ${dnNumber}`,
     driver ? `Driver: ${driver}${vehicle ? ` · ${vehicle}` : ''}` : null,
     ``,
-    `— Sofaamy Co. Ltd`,
+    `— Fabra`,
   ].filter(l => l !== null).join('\n')
 }
 
@@ -59,7 +59,7 @@ export function greetingMessage({ client }) {
   return [
     `Hello ${firstName(client)}! 👋`,
     ``,
-    `This is *Sofaamy Co. Ltd* — glass & aluminium fabrication, Accra.`,
+    `This is *Fabra* — fabrication operations for Africa.`,
     `How can we help with your project today?`,
   ].join('\n')
 }

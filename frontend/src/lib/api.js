@@ -4,22 +4,26 @@
 // (Vercel routes /api/* to the backend service) and 127.0.0.1:8000 in dev
 // (run the backend with:  uvicorn app.main:app --reload)
 // ============================================================
+import { announceDataChange } from './live.js'
+
 const BASE = import.meta.env.VITE_API_URL ??
   (import.meta.env.PROD ? '' : 'http://127.0.0.1:8000')
 
-async function post(path, body) {
+async function post(path, body, notify = true) {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  if (notify) announceDataChange(path)
   return res
 }
 
 async function del(path) {
   const res = await fetch(`${BASE}${path}`, { method: 'DELETE' })
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  announceDataChange(path)
   return res.json()
 }
 
@@ -30,13 +34,25 @@ async function put(path, body) {
     body: JSON.stringify(body),
   })
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  announceDataChange(path)
+  return res
+}
+
+async function patch(path, body) {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  announceDataChange(path)
   return res
 }
 
 // Live pricing preview for a saved design's current commercial terms —
 // no persistence, used to show totals while editing before saving.
 export async function previewDesignPrice(clientName, design) {
-  const res = await post('/api/quotes/design', { client_name: clientName, project_id: design.projectId || null, design })
+  const res = await post('/api/quotes/design', { client_name: clientName, project_id: design.projectId || null, design }, false)
   return res.json()
 }
 
@@ -82,15 +98,25 @@ async function responseFile(res, fallbackName) {
 }
 
 // kind: 'cutting-list' | 'work-order' | 'boq' → downloads the PDF
-export async function downloadReport(kind, clientName, design) {
-  const res = await post(`/api/reports/${kind}`, { client_name: clientName, project_id: design.projectId || null, design })
+export async function downloadReport(kind, clientName, design, designId = null) {
+  const res = await post(`/api/reports/${kind}`, {
+    client_name: clientName,
+    project_id: design.projectId || null,
+    design_id: designId,
+    design,
+  }, false)
   return downloadBlob(res, `${kind}.pdf`)
 }
 
 // Generate a temporary browser URL for the in-app PDF viewer.
 // The caller owns the URL and must revoke it when the viewer closes.
-export async function previewReport(kind, clientName, design) {
-  const res = await post(`/api/reports/${kind}`, { client_name: clientName, project_id: design.projectId || null, design })
+export async function previewReport(kind, clientName, design, designId = null) {
+  const res = await post(`/api/reports/${kind}`, {
+    client_name: clientName,
+    project_id: design.projectId || null,
+    design_id: designId,
+    design,
+  }, false)
   return responseFile(res, `${kind}.pdf`)
 }
 
@@ -133,14 +159,60 @@ export const getProjectWorkflow = (projectId) =>
 export const updateProjectWorkflow = (projectId, data) =>
   post(`/api/projects/${projectId}/workflow`, data).then(r => r.json())
 
+export const listTeam = () => getJSON('/api/team')
+
+export const getProjectBoard = () => getJSON('/api/project-board')
+
+export const updateProjectManagement = (projectId, data) =>
+  put(`/api/projects/${projectId}/management`, data).then(r => r.json())
+
+export const updateProjectBoardPosition = (projectId, stage) =>
+  patch(`/api/projects/${projectId}/board-position`, { stage }).then(r => r.json())
+
+export const createProjectTask = (projectId, data) =>
+  post(`/api/projects/${projectId}/tasks`, data).then(r => r.json())
+
+export const updateProjectTask = (projectId, taskId, data) =>
+  put(`/api/projects/${projectId}/tasks/${taskId}`, data).then(r => r.json())
+
+export const listSurveys = () => getJSON('/api/surveys')
+
+export const listLeads = () => getJSON('/api/leads')
+
+export const createLead = (data) => post('/api/leads', data).then(r => r.json())
+
+export const updateLead = (leadId, data) =>
+  patch(`/api/leads/${leadId}`, data).then(r => r.json())
+
+export const convertLead = (leadId, project) =>
+  post(`/api/leads/${leadId}/convert`, project).then(r => r.json())
+
+export const listQuoteWorkspaces = () => getJSON('/api/quote-workspaces')
+
+export const createQuoteWorkspace = data =>
+  post('/api/quote-workspaces', data).then(r => r.json())
+
+export const setQuoteWorkspaceStatus = (projectId, status, lostReason = '') =>
+  post(`/api/quote-workspaces/${projectId}/status`, {
+    status, lost_reason:lostReason,
+  }).then(r => r.json())
+
+export const listPreProductionQc = () => getJSON('/api/preproduction-qc')
+
+export const recordPreProductionQc = (projectId, data) =>
+  post(`/api/projects/${projectId}/preproduction-qc`, data).then(r => r.json())
+
+export const createSurvey = (projectId, data) =>
+  post(`/api/projects/${projectId}/surveys`, data).then(r => r.json())
+
+export const updateSurvey = (projectId, surveyId, data) =>
+  put(`/api/projects/${projectId}/surveys/${surveyId}`, data).then(r => r.json())
+
 export const createExtraction = (projectId, data) =>
   post(`/api/projects/${projectId}/extractions`, data).then(r => r.json())
 
 export const generateExtractionFromDesign = (projectId, data = {}) =>
   post(`/api/projects/${projectId}/extractions/from-design`, data).then(r => r.json())
-
-export const approveExtraction = (extractionId, approvedBy = 'Technical Supervisor') =>
-  post(`/api/extractions/${extractionId}/approve`, { approved_by: approvedBy }).then(r => r.json())
 
 export const createQuoteFromExtraction = (projectId, data) =>
   post(`/api/projects/${projectId}/quotes/from-extraction`, data).then(r => r.json())
@@ -164,26 +236,43 @@ export const assignExtractionsToItem = (projectId, data) =>
 export const createDrawingRevision = (taskId, data) =>
   post(`/api/drawing-tasks/${taskId}/revisions`, data).then(r => r.json())
 
+export const markDrawingNotRequired = (projectId, data) =>
+  post(`/api/projects/${projectId}/drawing-tasks/not-required`, data).then(r => r.json())
+
+export const submitProjectToQc = (projectId, data = {}) =>
+  post(`/api/projects/${projectId}/submit-to-qc`, {
+    submitted_by: data.submitted_by || 'Technical Team',
+    notes: data.notes || '',
+  }).then(r => r.json())
+
+export const getDrawingsQueue = () => getJSON('/api/drawings/queue')
+
 export async function uploadDrawingFile(revisionId, kind, file) {
   const res = await fetch(
     `${BASE}/api/drawing-revisions/${revisionId}/files/${kind}?filename=${encodeURIComponent(file.name)}`,
     { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file },
   )
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  announceDataChange(`/api/drawing-revisions/${revisionId}/files/${kind}`)
   return res.json()
 }
 
-export const approveDrawingRevision = (revisionId, approvedBy = 'Technical Supervisor') =>
-  post(`/api/drawing-revisions/${revisionId}/approve`, { approved_by: approvedBy }).then(r => r.json())
 
-export const releaseProjectToFactory = (projectId, drawingRevisionId, data = {}) =>
-  post(`/api/projects/${projectId}/production-releases`, {
-    drawing_revision_id: drawingRevisionId,
-    released_by: data.released_by || 'Technical Supervisor',
+export const releaseProjectToTechnical = (projectId, data = {}) =>
+  post(`/api/projects/${projectId}/release-to-technical`, {
+    released_by: data.released_by || 'Accounts Team',
     notes: data.notes || '',
   }).then(r => r.json())
 
 export const drawingFileUrl = (downloadUrl) => `${BASE}${downloadUrl}`
+
+// Combined quote for every item in a project — same figures as the
+// downloadable PDF, for the on-screen Selling Price view.
+export async function getProjectQuoteSummary(projectId) {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/quote-summary`)
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}
 
 export async function downloadProjectQuoteSummary(projectId) {
   const res = await fetch(`${BASE}/api/projects/${projectId}/quote-summary/pdf`)
@@ -197,10 +286,34 @@ export async function downloadProjectMaterialBOQ(projectId) {
   return downloadBlob(res, `project-material-boq-${projectId}.pdf`)
 }
 
+export async function downloadProjectCuttingList(projectId) {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/cutting-list/pdf`)
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return downloadBlob(res, `project-cutting-list-${projectId}.pdf`)
+}
+
 // Public client view of a shared design (no auth — signed token)
 export async function getSharedDesign(token) {
   const res = await fetch(`${BASE}/api/share/${token}`)
   if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+// Public client view of a project's consolidated quote, and self-approval
+// (no auth — signed token)
+export async function getPublicProjectQuote(token) {
+  const res = await fetch(`${BASE}/api/share/project/${token}`)
+  if (!res.ok) throw new Error(`API ${res.status}`)
+  return res.json()
+}
+
+export async function acceptPublicProjectQuote(token, confirmedBy = '') {
+  const res = await fetch(`${BASE}/api/share/project/${token}/accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmed_by: confirmedBy }),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
   return res.json()
 }
 
@@ -218,6 +331,8 @@ export const getJob = (jobNumber) => getJSON(`/api/jobs/${jobNumber}`)
 export const getDashboard = () => getJSON('/api/dashboard')
 export const getActivity = () => getJSON('/api/activity')
 export const listClients = () => getJSON('/api/clients')
+
+export const getClient = (clientId) => getJSON(`/api/clients/${clientId}`)
 export const listMaterials = () => getJSON('/api/materials')
 export const listStockMoves = () => getJSON('/api/stock-moves')
 export const listQcChecks = () => getJSON('/api/qc-checks')
@@ -230,6 +345,8 @@ export const assignDispatch = (jn, data) => post(`/api/jobs/${jn}/dispatch`, dat
 export const setQuoteStatus = (qn, status) => post(`/api/quotes/${qn}/status`, { status }).then(r => r.json())
 export const addClient = (data) => post('/api/clients', data).then(r => r.json())
 export const receiveStock = (id, qty, note = '') => post(`/api/materials/${id}/receive`, { qty, note }).then(r => r.json())
+export const updateMaterial = (id, data) => patch(`/api/materials/${id}`, data).then(r => r.json())
+export const createMaterial = (data) => post('/api/materials', data).then(r => r.json())
 
 export async function downloadDeliveryNote(jobNumber) {
   const res = await fetch(`${BASE}/api/jobs/${jobNumber}/delivery-note`)
